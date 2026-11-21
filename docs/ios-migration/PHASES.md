@@ -38,20 +38,21 @@ semantics, sharing, motion or haptics. P4 (networking) is therefore **not** the 
 | Design tokens: radii, spacing | done | `Design/OpenCodeLayoutTokens.swift`; grid and radius scale are data, with a corner clamp; `LayoutTokenTests` |
 | `MotionRole` equivalents | done | `Motion/OpenCodeMotion.swift`: fourteen roles, per-phase curves, Reduce Motion collapse, pose and stagger helpers; `MotionTests` |
 | `AppLog` categories | done | `Logging/AppLog.swift` (`send`, `network`, `stream`, `voice`, `app`, `perf`) |
-| Log redaction | done | `LoggingTests` (addresses, emails, long tokens) |
+| Log privacy boundary | done | Public text is a `LogEvent` plus `LogField`s whose values are numbers and booleans only (`LogValue` has no string case), so a credential, address, path or message body cannot be published. Free-form text exists only as `LogPrivateField` and is emitted with private visibility, and no file outside `AppLog.swift` may log with public visibility (`LoggingTests`). |
 | Haptics vocabulary | done | `Haptics/HapticsClient.swift`: eleven named haptics, platform-neutral feedback table, injectable client whose test value is inert; `HapticsTests` |
-| Gate: path-indexed cancellation | done | `OpenCodeAppTests/StoreSemanticsTests.swift` (`CancellationIdentityTests`, `PresentedChildCancellationTests`) — cancellation is by identity, and a presented child's effects die with the path element |
+| Gate: path-indexed cancellation | done | `OpenCodeAppTests/StoreSemanticsTests.swift` (`PathIndexedCancellationTests`): one parent, two children, the same local cancellation id in both; stopping one child leaves its sibling ticking, then the sibling is cleaned up and the store finishes |
 | Gate: `ifLet` child-first ordering | done | `StoreSemanticsTests` (`ChildFirstIfLetTests`) — the parent observes the child's post-reduction state |
 | Gate: presented-child cancellation on dismissal | done | `StoreSemanticsTests` (`PresentedChildCancellationTests`) — dismissal and identity change both cancel; a clock advance after each receives nothing |
 | Gate: Keychain round-trip | done | `KeychainProbeTests` runs it in the app process (a hostless test bundle has no keychain entitlement); `KeychainFailureTests` covers denied/unavailable/missing outcomes without a real keychain |
 | Gate: every shared key's default | done | `SharedStoreTests` asserts each key's default, the registry's uniqueness and each key's storage routing |
-| Gate: redaction | done | as above |
+| Gate: log privacy | done | structured boundary above; `AppLog` exposes no API that publishes arbitrary text |
 
 The gate runs on the maintained TCA store (1.26.2, pinned). The compositions under test are this
-migration's own representative shapes — a parent with a child `ifLet`, a presented sheet, a worker with
-identified effects — not a re-test of TCA's suite. TCA's documented semantics are adopted rather than
-reproduced: child-before-parent reduction, navigation-scoped effect cancellation, and dismissal leaving
-the parent to clear the presented state.
+migration's own representative shapes — a parent with a child `ifLet`, a presented sheet, a parent with two
+independently scoped children, a worker with identified effects — not a re-test of TCA's suite. TCA's
+documented semantics are adopted rather than reproduced: child-before-parent reduction, navigation-scoped
+effect cancellation (including the same local id in two different paths staying independent), and dismissal
+leaving the parent to clear the presented state.
 
 ## The categories named in the handoff
 
@@ -59,8 +60,9 @@ the parent to clear the presented state.
   and five dependency clients are in place, all with inert test values. The sharing layer (Keychain, shared
   keys, defaults), the haptics client and the motion vocabulary are complete.
 - **Parity ledger.** `PARITY.md` marks only demonstrated behaviour as `done`. Store semantics are `done` for
-  the four migration gates; `ifLet` ordering, cancellation identity and presentation dismissal are tested
-  against representative compositions, not against a ported reducer tree, because no feature reducer exists yet.
+  the five migration gates; `ifLet` ordering, cancellation identity, path-indexed cancellation and presentation
+  dismissal are tested against representative compositions, not against a ported reducer tree, because no
+  feature reducer exists yet.
 - **Navigation.** The app currently switches between four launch states. The App → Home → Session store
   topology, `@Presents` children and page stack belong to P5–P7 and are not started.
 - **Platform decisions.** Implementation decisions D-1…D-20 are recorded. Plan questions still open: `P-2`
@@ -71,11 +73,14 @@ the parent to clear the presented state.
 - **Previews.** Preview support is enabled, two launch-state previews exist, and the dependency context under
   Xcode previews resolves inert values, so a preview cannot reach the network and cannot play a haptic.
 
-## Prerequisites before P4 (networking)
+## Roadmap after P3
 
-1. **PR for `ios-core` reviewed by the owner.** P4 branches from the updated `ios`, not from this task branch.
+P3 (core) is complete on `ios-core` and is the phase P4 follows. P4 (networking) starts only once P3 is
+merged into `ios`, and branches from the updated `ios` — never from `ios-core` or any other task branch.
+
+Prerequisites for P4:
+
+1. **`ios-core` merged into `ios` by the owner.** The merge is the hand-off; this branch stops here.
 2. Nothing blocks on the code side. Production identifiers (bundle id, App Group, Keychain service) must be
    settled before real credentials are stored, but they do not block fixtures or transport work.
 3. The haptics live path needs a physical device to observe; the vocabulary and the seam are verified without one.
-
-P4 (networking) starts only after the P3 gate is green, or after the owner explicitly reorders the phases.

@@ -34,7 +34,7 @@ Baselines:
 
 | Behaviour | Android source | Recovered iOS source | New path | Status |
 | --- | --- | --- | --- | --- |
-| Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 (exact) | done — sibling order, effect order, cancellation identity, child-first `ifLet` and presentation dismissal tested on representative compositions (`OpenCodeAppTests/StoreSemanticsTests.swift`) |
+| Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 (exact) | done — sibling order, effect order, cancellation identity, child-first `ifLet`, presentation dismissal and path-indexed cancellation tested on representative compositions (`OpenCodeAppTests/StoreSemanticsTests.swift`) |
 | Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `ios/OpenCodeKit/Sources/OpenCodeCore/{Dependencies,Transport,Haptics}` (probe, date, id, haptics, HTTP transport) | done — five keys, every test value inert, guarded by `DependencyIsolationTests` |
 | Shared keys and storage | `core/.../sharing/{Shared,SharedKeys}.kt` | `Core/SharedKeys.swift`, `Keychain.swift` | `.../Storage/{KeyValueStorage,SharedKeys}.swift` | done — four foundation keys, defaults, storage routing, round-trip and failure propagation tested |
 | Keychain | `core/.../sharing/LiveSharedBytes.kt` | `Core/Keychain.swift` | `.../Storage/{KeyValueStorage,KeychainStorage}.swift` | done — typed `value`/`missing`/`failure` outcomes, failure mapping unit-tested, round-trip verified in the app process |
@@ -97,7 +97,7 @@ Recorded here so they are not mistaken for missing work.
 | Layout tokens (spacing, radius) | `.../LayoutTokenTests.swift` | done |
 | Motion vocabulary | `.../MotionTests.swift` | done |
 | Haptics | `.../HapticsTests.swift` | done |
-| Log redaction | `.../LoggingTests.swift` | done |
+| Log privacy boundary | `.../LoggingTests.swift` | done |
 | Shared keys and storage | `.../SharedStoreTests.swift`, `.../KeychainFailureTests.swift` | done |
 | Dependency isolation and transport boundary | `.../DependencyIsolationTests.swift`, `.../TransportBoundaryTests.swift`, `.../NetworkAndIsolationTests.swift` | done |
 | Store semantics | `OpenCodeAppTests/StoreSemanticsTests.swift` | done |

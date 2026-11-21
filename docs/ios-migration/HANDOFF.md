@@ -88,8 +88,9 @@ entitlement note that puts the round-trip in the UI tests.
 the owner reorders the phases. Branch Phase 4 from the updated `ios`, not from `ios-core`.
 
 What P3 added: spacing/radius tokens (`Design/OpenCodeLayoutTokens.swift`), the motion vocabulary and Reduce
-Motion policy (`Motion/OpenCodeMotion.swift`), the haptics client (`Haptics/HapticsClient.swift`), and the four
-store-semantics gates (`OpenCodeAppTests/StoreSemanticsTests.swift`).
+Motion policy (`Motion/OpenCodeMotion.swift`), the haptics client (`Haptics/HapticsClient.swift`), and the
+store-semantics gates (`OpenCodeAppTests/StoreSemanticsTests.swift`), including the path-indexed check with
+two children sharing one local cancellation id.
 
 Known unverified item: physical-device haptics. No device run was performed; the simulator has no Taptic
 Engine. Do not record that as passing.
@@ -97,8 +98,8 @@ Engine. Do not record that as passing.
 ## Phase-end checklist
 
 1. `scripts/verify.sh` passes.
-2. No credential, server address, pairing code, message text or file content can reach a log — the redaction test
-   covers it, and the Phase 3 additions log nothing at all.
+2. No credential, server address, pairing code, message text or file content can reach a log — public log text
+   carries only event names and numeric/boolean fields, free text is private, and the tests cover it.
 3. `STATUS.md`, `PARITY.md`, `DECISIONS.md`, `HANDOFF.md` updated with completed behaviour, paths and the base SHA.
 4. Screenshots, if any, are captured on a simulator with no personal data in frame and no machine identifiers in
    filenames.

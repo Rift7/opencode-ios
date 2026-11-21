@@ -223,5 +223,10 @@ not by translating the Kotlin store.
     store's default `childID = { it::class }`.
   - `.dismiss` on a non-ephemeral child leaves the state in place; the parent clears it, and clearing it is
     what cancels the child's work. The tests assert both the cleared state and the silence afterwards.
+  - cancellation ids are path-qualified: `_CancelID` carries the navigation path, so the same local id in two
+    child paths is two registrations. `PathIndexedCancellationTests` holds that with one parent, two children
+    of the same reducer and the local id `"ticker"` in both — cancelling one child leaves the sibling running.
+    Removing the child's `.cancel` makes the test fail with the stopped child's ticks, so the assertion is not
+    vacuous.
 - Rejected: reimplementing reducer composition or a custom `TestStore`, or replacing reducers with view models.
 

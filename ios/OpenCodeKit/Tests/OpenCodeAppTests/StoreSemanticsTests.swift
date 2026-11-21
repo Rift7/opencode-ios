@@ -346,3 +346,129 @@ struct PresentedChildCancellationTests {
     await store.finish()
   }
 }
+
+@Reducer
+private struct Ticker {
+  @ObservableState
+  struct State: Equatable {
+    var ticks = 0
+  }
+
+  enum Action: Equatable {
+    case start
+    case stop
+    case tick
+  }
+
+  @Dependency(\.continuousClock) private var clock
+
+  var body: some Reducer<State, Action> {
+    Reduce { state, action in
+      switch action {
+      case .start:
+        let clock = clock
+        return .run { send in
+          for await _ in clock.timer(interval: .seconds(1)) {
+            await send(.tick)
+          }
+        }
+        .cancellable(id: "ticker")
+
+      case .stop:
+        return .cancel(id: "ticker")
+
+      case .tick:
+        state.ticks += 1
+        return .none
+      }
+    }
+  }
+}
+
+@Reducer
+private struct ScopedPair {
+  @ObservableState
+  struct State: Equatable {
+    var primary: Ticker.State?
+    var secondary: Ticker.State?
+  }
+
+  enum Action: Equatable {
+    case openBoth
+    case closeSecondary
+    case primary(Ticker.Action)
+    case secondary(Ticker.Action)
+  }
+
+  var body: some Reducer<State, Action> {
+    Reduce { state, action in
+      switch action {
+      case .openBoth:
+        state.primary = Ticker.State()
+        state.secondary = Ticker.State()
+      case .closeSecondary:
+        state.secondary = nil
+      case .primary, .secondary:
+        break
+      }
+      return .none
+    }
+    .ifLet(\.primary, action: \.primary) {
+      Ticker()
+    }
+    .ifLet(\.secondary, action: \.secondary) {
+      Ticker()
+    }
+  }
+}
+
+@MainActor
+@Suite("Path-indexed cancellation")
+struct PathIndexedCancellationTests {
+  @Test("one local id in two child paths cancels only the child that is stopped")
+  func sameLocalIDStaysScopedToItsPath() async {
+    let clock = TestClock()
+    let store = TestStore(initialState: ScopedPair.State()) {
+      ScopedPair()
+    } withDependencies: {
+      $0.continuousClock = clock
+    }
+
+    await store.send(.openBoth) {
+      $0.primary = Ticker.State()
+      $0.secondary = Ticker.State()
+    }
+
+    await store.send(.primary(.start))
+    await clock.advance(by: .seconds(0.5))
+    await store.send(.secondary(.start))
+
+    await clock.advance(by: .seconds(0.5))
+    await store.receive(.primary(.tick)) {
+      $0.primary?.ticks = 1
+    }
+
+    await clock.advance(by: .seconds(0.5))
+    await store.receive(.secondary(.tick)) {
+      $0.secondary?.ticks = 1
+    }
+
+    await store.send(.primary(.stop))
+
+    await clock.advance(by: .seconds(1))
+    await store.receive(.secondary(.tick)) {
+      $0.secondary?.ticks = 2
+    }
+
+    await clock.advance(by: .seconds(1))
+    await store.receive(.secondary(.tick)) {
+      $0.secondary?.ticks = 3
+    }
+
+    await store.send(.closeSecondary) {
+      $0.secondary = nil
+    }
+    await clock.advance(by: .seconds(2))
+    await store.finish()
+  }
+}

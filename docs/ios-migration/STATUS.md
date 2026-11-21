@@ -67,8 +67,8 @@ iPhone 18 Pro Max on iOS 27.2, derived from installed devices (`OPENCODE_SIM_NAM
 | --- | --- | --- |
 | Toolchain | `ios/scripts/env.sh` | Xcode 27.2, Swift 6.4.2, SDK 27.2 |
 | Package build (host) | `swift build --package-path ios/OpenCodeKit` | succeeds |
-| Focused suites | `swift test --package-path ios/OpenCodeKit --filter <suite>` | layout, motion, haptics, dependencies, store semantics pass |
-| Package tests | `swift test --package-path ios/OpenCodeKit` | 61 core tests in 13 suites, 13 app tests in 6 suites; all pass |
+| Focused suites | `swift test --package-path ios/OpenCodeKit --filter <suite>` | layout, motion, haptics, dependencies, store semantics, path-indexed cancellation pass |
+| Package tests | `swift test --package-path ios/OpenCodeKit` | 61 core tests in 13 suites, 14 app tests in 7 suites; all pass |
 | App build | `xcodebuild … -skipMacroValidation build` | `BUILD SUCCEEDED` (compiles the UIKit haptics path) |
 | App unit tests | `xcodebuild … -only-testing:OpenCodeTests test` | 3 tests pass |
 | Launch smoke | `xcodebuild … -only-testing:OpenCodeUITests test` | 4 tests pass (disconnected, failed, loading, Keychain probe) |
@@ -78,6 +78,13 @@ Semantics proven by `StoreSemanticsTests`: sibling reducer order over one action
 ordering; cancellation by identity (one id cancels, another keeps running; restarting an id cancels the
 in-flight effect); child-before-parent `ifLet` reduction; presented-child effects cancelled on dismissal
 and on identity change, with a clock advance after each receiving nothing.
+
+The path-indexed acceptance check (`PathIndexedCancellationTests`) is one parent with two optional children
+of the same reducer, both using the local cancellation id `"ticker"` through TCA's `.cancellable`/`.cancel`.
+On a `TestClock` both start and both tick; stopping the primary child leaves the secondary ticking for two
+more intervals; the secondary is then dismissed and `store.finish()` confirms no effect is left in flight.
+The check was verified non-vacuous by temporarily removing the child's `.cancel`: the run then failed with
+the stopped child's ticks arriving, so the assertion is testing the cancellation rather than an idle timer.
 
 ## Not verified
 
