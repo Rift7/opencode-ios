@@ -11,6 +11,7 @@ public enum ServerCopy {
   public static let eventStreamOversizedFrame = "The event stream sent an oversized frame."
   public static let eventStreamEnded = "The event stream ended."
   public static let eventStreamServerFailure = "The event stream reported a server failure."
+  public static let eventStreamOverflow = "The event stream fell behind and reconnected." 
   public static let toolFailed = "Tool failed"
 
   public static func httpStatus(_ status: Int) -> String {
@@ -86,6 +87,8 @@ extension OpenCodeClientError {
       return ServerCopy.eventStreamServerFailure
     case .streamOversizedFrame:
       return ServerCopy.eventStreamOversizedFrame
+    case .streamOverflow:
+      return ServerCopy.eventStreamOverflow
     case .pairingExpired:
       return ServerCopy.pairingExpired
     case .pairingUnsupported:

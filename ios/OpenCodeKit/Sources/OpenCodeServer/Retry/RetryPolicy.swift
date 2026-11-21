@@ -34,7 +34,7 @@ extension OpenCodeClientError {
   public func retryVerdict(idempotency: RequestIdempotency) -> RetryVerdict {
     if isUnsupported { return .permanent }
     switch failure {
-    case .streamEnded, .streamServerFailure, .streamOversizedFrame:
+    case .streamEnded, .streamServerFailure, .streamOversizedFrame, .streamOverflow:
       // A new connection is the fix; the caller rehydrates from REST.
       return .transient(retryAfter: nil)
     default:

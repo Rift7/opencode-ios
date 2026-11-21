@@ -27,6 +27,7 @@ public enum LogEvent: String, Sendable, CaseIterable {
   case streamConnected = "stream.connected"
   case streamDisconnected = "stream.disconnected"
   case streamOverflow = "stream.overflow"
+  case streamResynchronized = "stream.resynchronized"
   case pairingDecoded = "pairing.decoded"
   case pairingRejected = "pairing.rejected"
   case pairingRedeemed = "pairing.redeemed"

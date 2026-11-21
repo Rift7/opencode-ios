@@ -262,9 +262,10 @@ buffered into a completed response and is never replaced by polling.
   pinned certificate to copy.
 - **Local-network permission** (`NSLocalNetworkUsageDescription`) is required from iOS 14 for a LAN server;
   it is declared, and the prompt itself is a device-only behaviour that no simulator test can pass.
-- `@unchecked Sendable` appears at four places only, each a `Mutex`-guarded class whose mutation must stay
-  synchronous: `BoundedChannel`, the URLSession redirect guard, the stream receiver and the stream-activity
-  holder. Each carries a one-line reason at the declaration; no `nonisolated(unsafe)` is used.
+- `@unchecked Sendable` appears at four places in the transport, each a `Mutex`-guarded class whose mutation
+  must stay synchronous: `BoundedChannel`, the URLSession redirect guard, the stream receiver and the
+  stream-activity holder. Each carries a one-line reason at the declaration; no `nonisolated(unsafe)` is
+  used. The test-only loopback server follows the same discipline (D-28).
 - Rejected: a `URLProtocol`-based fixture for redirect integration tests. A custom protocol synthesizes the
   redirect inside the protocol stack, so the session delegate is never consulted; the redirect decision is
   therefore tested as a pure rule, and the session wiring stays thin. `PROTOCOL_COVERAGE.md` says so.
@@ -302,3 +303,63 @@ success.
 `OpenCodeClient` is reachable as a dependency, but the app's launch states still use the inert probe from
 P2/P3. Wiring the client to the app is P5's change, so this phase cannot accidentally present a half-built
 connection flow.
+
+### D-26 Session ownership — one request session, one per stream
+`URLSessionTransport` owns two kinds of session, deliberately:
+
+- **Requests** share one lazily created `URLSession` for the transport's lifetime. It has no delegate,
+  is ephemeral (no cookies, no cache) and is never invalidated by a request; it lives until the
+  transport does. Creating a session per request was a defect in the first P4 revision: it made the
+  documented "one ephemeral session" untrue, paid TLS/connection-pool setup on every call and left
+  sockets to be reclaimed by `URLSession`'s own idle timeout.
+- **Streams** get one `URLSession` per connection, because the data delegate and its startup state
+  belong to that connection. The receiver takes ownership in `adopt(session:)` and invalidates it on
+  completion, cancellation, overflow or explicit close, so a dropped stream cannot keep a task or a
+  socket alive.
+
+Tests count session constructions through the injected configuration closure: two requests build one
+session, two streams build two. The lifecycle itself is exercised against the loopback fixture server
+or the test `URLProtocol`, not asserted from private state.
+
+Rejected: one session for streams too. A shared session with one delegate would have to route
+`didReceive` callbacks by task identity and keep per-connection startup state in a side table; the
+per-connection session is smaller and its invalidation is unambiguous.
+
+### D-27 Stream lifecycle — one state machine, explicit close, bounded reset
+Every way an SSE connection can end now runs through one lifecycle:
+
+- **Startup** (`StreamReceiver`) is a Mutex-guarded state machine. Cancellation before the receiver
+  exists, between adopting the session and registering the continuation, while awaiting headers, or
+  after the continuation is registered resumes the caller exactly once with `CancellationError` and
+  invalidates the session. A pre-cancelled `open` throws; it never waits on a continuation nobody will
+  resume.
+- **The connect deadline covers the whole open**, including response headers: `openWithDeadline` races
+  `transport.open` against the clock, closes a stream that arrives after the deadline, and fails with
+  `.transport(.timedOut)`. `nil` disables it for a caller that owns its own timeout. The watchdog now
+  only covers post-open silence (45 s, reset by heartbeats).
+- **Every exit closes the previous connection.** A 401 or other non-2xx closes the response before
+  throwing; a consumer that stops cancels the channel, which closes the response and the session; the
+  watchdog closes both; `EventConnection.close` is idempotent and cancels the read task, the watchdog
+  and the request; `EventStreamRunner` closes its connection with `defer` before any reconnect.
+- **Overflow is an explicit signal with bounded recovery.** `EventStreamOverflow` names its cause;
+  `EventStreamRunner.onResynchronize` is called once per overflow, before the reconnect, as the
+  documented point where a feature rehydrates from REST (the authority). Overflow uses its own
+  retry preset (1 s base, 15 s cap, no network wait) and is bounded: after five consecutive overflows
+  the runner ends the stream with the overflow instead of spinning. A `server.connected` resets the
+  count.
+- **Rejected**: treating overflow as a silent drop or as a permanent failure. A dropped delta makes
+  the projection wrong without telling anyone; a permanent failure would strand a consumer that can
+  recover by re-reading REST.
+
+### D-28 Loopback fixture server — real delegates, still isolated
+`LocalHTTPServer` (test support) is a loopback-only HTTP/1.1 server used to exercise the real
+`URLSession` redirect delegate and socket lifetimes: same-origin redirect, refused cross-origin
+redirect, pairing redirect refusal, withheld headers, rejected responses and consumer shutdown.
+
+- A custom `URLProtocol` cannot do this: it synthesizes a redirect inside the protocol stack, so the
+  session delegate never runs. That is why D-22's rule test stays, and these tests cover the wiring.
+- Nothing leaves the machine: the listener binds `127.0.0.1` on an ephemeral port, routes are
+  in-memory, and the suite can be skipped with `OPENCODE_SKIP_LOOPBACK_FIXTURES=1`.
+- The live-server check is separate again: it reads `OPENCODE_LIVE_SERVER` and
+  `OPENCODE_LIVE_PASSWORD` from the environment, is skipped when they are unset, and only performs
+  reads.

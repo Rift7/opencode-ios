@@ -21,13 +21,13 @@ Status vocabulary:
 
 | Behaviour | Audited source | Swift | Status |
 | --- | --- | --- | --- |
-| One HTTP client per server, one retry layer per request | `OpenCodeTransport.kt` (`f79a895e`, 2026-11-14), `live/LiveTransport.kt` | `OpenCodeCore/Transport/{HTTPTransport,URLSessionTransport}.swift` | implemented — one `URLSession` per live transport, ephemeral, no cookies or cache; every client call goes through `NetworkRetry` once |
+| One HTTP client per server, one retry layer per request | `OpenCodeTransport.kt` (`f79a895e`, 2026-11-14), `live/LiveTransport.kt` | `OpenCodeCore/Transport/{HTTPTransport,URLSessionTransport}.swift` | implemented — one shared request `URLSession` for the transport's lifetime and one per stream connection (D-26), ephemeral, no cookies or cache; every client call goes through `NetworkRetry` once |
 | `Accept: application/json`; `Content-Type` only with a body | `live/LiveTransport.kt` | `OpenCodeServer/Address/OpenCodeServer.swift` (`request(path:…)`) | implemented — caller supplies the header; JSON bodies are encoded by the caller |
 | Basic auth from the pairing token; username defaults to `opencode` | `OpenCodeServer.kt` | `OpenCodeServer.basicAuthorization`, `.wireHeaders` | implemented + tested |
 | `location[directory]` query, escaped as `location%5Bdirectory%5D` | `internal/Urls.kt` (`5fa3aab0`, 2026-10-24) | `OpenCodeServer.endpoint(path:query:)`, percent encoders | implemented + tested (path and query encoding, `/` kept, `[` `]` escaped) |
 | Timeouts: default 10 s; probe 3.5 s; pairing redeem 15 s; event read 90 s | `live/LiveTransport.kt`, `ServerLink.kt` | `HTTPRequest.timeout`, call sites | implemented for the routes above; per-route long timeouts listed below |
-| Redirect control per call | `withTimeout(followsRedirects)` | `HTTPRedirectPolicy`, `HTTPRedirectRule` | implemented (rule tested; session wiring not exercisable through the fixture `URLProtocol`) |
-| Credentials never leave their origin on a redirect | audited in code comments; no test | `HTTPRedirectRule`, `RedirectGuard` | implemented + rule tested (same-origin re-applies headers, cross-origin refuses, scheme change refuses) |
+| Redirect control per call | `withTimeout(followsRedirects)` | `HTTPRedirectPolicy`, `HTTPRedirectRule` | implemented — rule tested, and the real `URLSession` delegate tested against the loopback fixture server |
+| Credentials never leave their origin on a redirect | audited in code comments; no test | `HTTPRedirectRule`, `RedirectGuard` | implemented + tested twice: the pure rule, and a real cross-origin redirect that the target never sees |
 | Cleartext policy: private, overlay and local names only | `TransportSecurity.kt` (`f79a895e`) | `OpenCodeCore/Network/HostAddress.swift` (`TransportSecurity`) | implemented + tested (RFC 1918, CGNAT, link-local, ULA, `.local`, unqualified, `ts.net`/`netbird*`/`home.arpa`/`internal`) |
 | ATS, local-network permission | not an Android concept | `ios/OpenCode/Info.plist` | implemented: `NSAllowsLocalNetworking`, per-domain cleartext exceptions for the overlay names, `NSLocalNetworkUsageDescription`; no global ATS disable |
 | Five-attempt request policy, send/stream/wait presets, equal jitter, retry window, `Retry-After` cap | `retry/NetworkRetry.kt` (`f79a895e`) | `OpenCodeServer/Retry/{RetryPolicy,NetworkRetry}.swift` | implemented + tested (ceiling, window, attempts, offline wait, `Retry-After` seconds/date, cap) |
@@ -94,6 +94,18 @@ Notes that stay visible:
 - A 404 whose body has `{"_tag":"LocationNotFoundError"}` means the scoped folder is gone; it is not a
   generic 404 and is not retried.
 
+## Stream lifecycle
+
+| Behaviour | Audited source | Swift | Status |
+| --- | --- | --- | --- |
+| Startup cancellation before, during or after continuation registration | `live/LiveEvents.kt` (audited loop), no explicit iOS test | `StreamReceiver` state machine, `URLSessionTransport.open` | implemented + tested: pre-cancelled open, cancellation inside session creation, and cancellation while headers are pending (loopback) |
+| Connect deadline covers response headers | audited `EventStreamWatchdog` connect deadline | `EventStream.openWithDeadline` | implemented + tested: a server that accepts and withholds headers fails by the deadline, and its socket closes |
+| Rejected response closes the connection | implied by `use {}` in the audited stream | `EventStream.connect` (`response.close()`), `HTTPStream.close` | implemented + tested (401/503, loopback 401) |
+| Consumer shutdown closes the request | audited `awaitClose { call.cancel() }` | `EventConnection.close`, channel close handler | implemented + tested: a cancelled consumer and an explicit close both close the loopback socket |
+| Overflow is an explicit signal for REST resynchronization | audited `EventStreamOverflow` + reconnect loop | `EventStreamOverflow`, `EventStreamRunner.onResynchronize` | implemented + tested: overflow closes the connection, calls the callback once, reconnects, and resumes events |
+| Overflow recovery is bounded | audited stream-overflow policy (new policy in D-27) | `maximumConsecutiveOverflows`, `RetryPolicy.streamOverflow` | implemented + tested: three consecutive overflows with a limit of two end the stream |
+| Reconnect closes the previous connection first | audited loop's connection ownership | `EventStreamRunner` (defer close) | implemented + tested |
+
 ## Events
 
 `GET /api/event` is one `data:` line per event plus `: heartbeat` comments. The parser is general (CRLF, CR,
@@ -124,7 +136,8 @@ types skipped without decoding data, `_tag` frames fail the connection, EOF is a
 Batching (`EventBatcher`): adjacent deltas for one part coalesce; a non-content event flushes the batch it
 must follow; flush at 75 ms or 256 pending mutations; per-session order preserved. The downstream buffer is
 bounded at 128; falling behind ends the connection with `EventStreamOverflow` so the owner reconnects and
-rehydrates, rather than silently losing a delta.
+hydrates from REST, rather than silently losing a delta. `EventStreamRunner.onResynchronize` is that
+hand-off; recovery is bounded (D-27).
 
 Not adopted from `EventBatcher` (deliberate, recorded in `DECISIONS.md` D-23): the off-screen pressure
 shedding and the Markdown pre-projection hooks. Both exist to protect a transcript reducer that this phase

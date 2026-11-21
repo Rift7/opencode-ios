@@ -22,7 +22,7 @@ targets and tests; they were run as the phase baseline before any new file was a
 | 1 | Read-only reconstruction audit | complete (`docs/ios-migration/audit/`) |
 | 2 | `ios` branch, baseline, scaffold and gate | complete — `143d8f86` (PR #1) |
 | 3 | Core: store, dependencies, sharing, tokens, logging, haptics | complete — merged into `ios` as `d0fdf2f5` (PR #2) |
-| 4 | Server: transport, retry, models, SSE, pairing | **complete on `ios-networking`** — draft PR open, not merged |
+| 4 | Server: transport, retry, models, SSE, pairing | **complete on `ios-networking`**, review corrections applied; draft PR open |
 | 5 | App shell: launch, connection, pairing, reconnect | scaffold only; next |
 | 6 | Home, drawer, projects, Catch Up, What's New | not started |
 | 7 | Session, subagents, background work, request review | not started |
@@ -39,18 +39,20 @@ targets and tests; they were run as the phase baseline before any new file was a
 | Area | New path | Gate |
 | --- | --- | --- |
 | Host classification and cleartext policy | `OpenCodeKit/Sources/OpenCodeCore/Network/HostAddress.swift` | `OpenCodeServerTests/ServerAddressTests.swift` |
-| Injectable monotonic clock | `OpenCodeKit/Sources/OpenCodeCore/Dependencies/ClockClient.swift` | `OpenCodeCoreTests/DependencyIsolationTests.swift` (every key has a test value), retry tests |
+| Injectable monotonic clock | `OpenCodeKit/Sources/OpenCodeCore/Dependencies/ClockClient.swift` | `DependencyIsolationTests`, retry tests |
 | Bounded pull channel | `OpenCodeKit/Sources/OpenCodeCore/Concurrency/BoundedChannel.swift` | `OpenCodeCoreTests/BoundedChannelTests.swift` |
-| Request/response/stream seam, redirect rule | `OpenCodeKit/Sources/OpenCodeCore/Transport/{HTTPTransport,URLSessionTransport}.swift` | `OpenCodeServerTests/{TransportTests,RedirectRuleTests}.swift` |
+| Request/response/stream seam, redirect rule | `OpenCodeKit/Sources/OpenCodeCore/Transport/{HTTPTransport,URLSessionTransport}.swift` | `TransportTests`, `RedirectRuleTests`, `LocalFixtureServerTests` |
 | Server origin, saved server, endpoint encoding | `OpenCodeKit/Sources/OpenCodeServer/Address/{ServerOrigin,OpenCodeServer}.swift` | `ServerAddressTests` |
-| Pairing parse and candidates | `OpenCodeKit/Sources/OpenCodeServer/Pairing/PairingLink.swift` | `OpenCodeServerTests/PairingLinkTests.swift` |
-| Wire models | `OpenCodeKit/Sources/OpenCodeServer/Models/{JSONValue,ServerProject,OpenCodeSession,ServerShell,PromptBody}.swift` | client and event-suite decode tests |
-| Central retry policy | `OpenCodeKit/Sources/OpenCodeServer/Retry/{RetryPolicy,NetworkRetry}.swift` | `RetryTests.swift` |
+| Pairing parse and candidates | `OpenCodeKit/Sources/OpenCodeServer/Pairing/PairingLink.swift` | `PairingLinkTests`, loopback pairing redirect test |
+| Wire models | `OpenCodeKit/Sources/OpenCodeServer/Models/*.swift` | client and event-suite decode tests |
+| Central retry policy | `OpenCodeKit/Sources/OpenCodeServer/Retry/{RetryPolicy,NetworkRetry}.swift` | `RetryTests` |
 | Typed errors and copy | `OpenCodeKit/Sources/OpenCodeServer/Client/{OpenCodeClientError,ServerCopy}.swift` | client tests assert status, copy, log summary |
-| SSE parsing and batching | `OpenCodeKit/Sources/OpenCodeServer/Events/{SSEParser,EventBatcher,ServerEvent,ServerEventDecoder,EventStream}.swift` | `SSEParserTests`, `ServerEventDecoderTests`, `EventBatcherTests`, `EventStreamTests` |
+| SSE parsing, batching, connection lifecycle | `OpenCodeKit/Sources/OpenCodeServer/Events/*.swift` | `SSEParserTests`, `ServerEventDecoderTests`, `EventBatcherTests`, `EventStreamTests`, `LocalFixtureServerTests` |
 | Client dependency | `OpenCodeKit/Sources/OpenCodeServer/Client/OpenCodeClient.swift` | `OpenCodeClientTests` |
-| ATS and local-network declaration | `ios/OpenCode/Info.plist`, `ios/project.yml` | build; simulator cannot exercise the prompt |
-| Fixtures | `OpenCodeKit/Sources/OpenCodeTestSupport/NetworkGuard.swift` (chunks, redirects, recorded requests) | transport tests |
+| Loopback fixture server | `OpenCodeKit/Sources/OpenCodeTestSupport/LocalHTTPServer.swift` | `LocalFixtureServerTests` |
+| ATS and local-network declaration | `ios/OpenCode/Info.plist`, `ios/project.yml` | device run (below) |
+| DEBUG device probes | `ios/OpenCode/App/DeviceProbes.swift` | device run (below) |
+| Live read-only smoke (opt-in) | `OpenCodeKit/Tests/OpenCodeServerTests/LiveServerTests.swift` | run once against a local server (below) |
 
 Adopted values and their freshness (all against `dev = 7358160e`):
 
@@ -62,41 +64,61 @@ Adopted values and their freshness (all against `dev = 7358160e`):
 | Session page query, filters, envelopes | `server/.../live/LiveSessions.kt` | `8566441f`, 2026-11-17 | adopted |
 | Event set, decode rules, batching | `server/.../live/LiveEvents.kt`, `EventBatcher.kt` | `4c1e0054`, 2026-11-20 (events); `f79a895e` (batcher) | adopted; transcript pressure shedding deferred (D-23) |
 | `location[directory]` encoding | `server/.../internal/Urls.kt` | `5fa3aab0`, 2026-10-24 | adopted, byte-for-byte expectations in tests |
-| Models and optionality | `server/.../model/Models.kt`, `live/Payloads.kt` | `4c1e0054` (Models), same date | adopted for the modelled subset; the rest listed in `PROTOCOL_COVERAGE.md` |
+| Models and optionality | `server/.../model/Models.kt`, `live/Payloads.kt` | `4c1e0054` | adopted for the modelled subset; the rest listed in `PROTOCOL_COVERAGE.md` |
 
 No recovered iOS source file exists for these areas; every value above carries current `dev` behaviour and
 is labelled a native decision, not a port.
+
+## Review corrections (streaming)
+
+| Finding | Correction | Regression tests |
+| --- | --- | --- |
+| Overflow left recovery implicit and could repeat without bound | `EventStreamOverflow` names its cause; `EventStreamRunner.onResynchronize` is called once per overflow before reconnecting (the documented REST rehydration point); overflow uses `RetryPolicy.streamOverflow` and stops after `maximumConsecutiveOverflows` (5) | overflow-then-reconnect; bounded overflows end the stream; overflow closes the prior connection |
+| Startup could hang when cancellation raced continuation registration | `StreamReceiver` is a Mutex-guarded state machine; cancel before/during/after registration resumes the caller exactly once; pre-cancelled `open` throws | pre-cancelled open; cancellation inside session creation; cancellation while headers are pending |
+| The connect deadline did not cover response headers | `openWithDeadline` races the whole open (connect, request, headers) against the clock and closes a late stream | withheld headers fail by the deadline and the socket closes |
+| Rejected responses, consumer shutdown, overflow and reconnect could leave a connection or its tasks alive | `HTTPStream.close` and `EventConnection.close` are explicit, idempotent, and cancel the read, watchdog and session; rejected responses close before throwing; the runner closes with `defer` | 401/503 close; cancelled consumer closes the loopback socket; explicit close; close-before-reconnect |
+| "One ephemeral session" did not match per-request sessions | D-26: one shared request session for the transport's lifetime, one per stream connection, each invalidated on its own lifecycle | two requests build one session; two streams build two |
 
 ## Verified in this phase
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path OpenCodeKit` | 205 tests pass: 125 server, 66 core, 14 app |
+| `swift test --package-path OpenCodeKit` | **222 tests pass**: 142 server, 66 core, 14 app (the live suite is skipped without environment variables) |
 | `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; `OpenCodeTests` Swift Testing suite passes (2 tests); 4 UI tests pass; package suites pass |
-| `plutil -p …/OpenCode.app/Info.plist` | `NSAllowsLocalNetworking`, the overlay exception domains and `NSLocalNetworkUsageDescription` are in the built app |
+| Loopback fixture suite (`LocalFixtureServerTests`) | same-origin redirect followed with credentials; cross-origin redirect refused and target untouched; pairing redirect refused (302, no auth header); withheld headers time out and close; 401 closes; cancelled consumer and explicit close stop the socket |
+| Device build (iPhone Air, physical) | `xcodebuild … -destination id=<device> -allowProvisioningUpdates DEVELOPMENT_TEAM=<team> -skipMacroValidation build` succeeded with the configured development identity |
+| Live read-only smoke, opt-in | `OPENCODE_LIVE_SERVER=… OPENCODE_LIVE_PASSWORD=… swift test --filter LiveServerTests` passed against `opencode serve 0.0.0-dev-202611170722` on loopback: session page, active IDs and `server.connected` over SSE |
 
-Targeted checks behind those totals: request construction and header application, 401/404 copy,
-retry-safety matrix, cancellation, fragmented SSE frames (byte-at-a-time and chunked), 16 MiB frame bound,
-unknown-event tolerance, overflow → `EventStreamOverflow`, reconnect after a dropped connection, one-401
-stop, malformed pairing rejection with reasons, redemption sending one unauthenticated GET per candidate
-with redirects refused, and credential isolation through the redirect rule.
+## Hardware observations (separate from automated results)
+
+Device: iPhone Air (`iPhone18,4`), iOS 27.2, debug build signed with the configured development identity.
+Probes are DEBUG-only launch arguments; they print one classification line and never log an address or
+credential.
+
+| Check | Observation |
+| --- | --- |
+| Local-network prompt, denied | The prompt appeared on first launch; after “Don't Allow”, the probe reported `localNetwork=unreachable reason=URLError -1009` and the Mac fixture saw no request. |
+| Local-network prompt, allowed | After reinstall the prompt appeared again; after “Allow”, the probe reported `localNetwork=reachable status=200` against the Mac's LAN fixture, a loopback-free private address. |
+| Foreground haptics | First run: all eleven calls returned, nothing felt (System Haptics was off). After enabling Settings › Sounds & Haptics › System Haptics and holding the phone, the second run played all eleven and the observer confirmed the taps, selection tick and the three notification patterns were felt and distinguishable. |
+
+These are observations on one device. They do not run in CI and no simulator can reproduce them.
 
 ## Not verified
 
-- **Device-only paths**: haptics, the local-network permission prompt, and any ATS behaviour for a cleartext
-  LAN server. The simulator build proves the plist keys ship; it does not prove the prompt or the LAN load.
-- **Live server**: no live smoke was run. The opt-in live check in `docs/parity/server.md` is not enabled in
-  this environment, and no server address or credential was configured.
-- **Redirect integration through URLSession**: the decision is unit-tested; the `URLProtocol` fixture cannot
-  synthesize a redirect that reaches the session delegate (D-22). The wiring compiles and is six lines; it is
-  not claimed as proven.
-- **`/api/info` `pid` numeric type** across older servers: decoded as `Int`, as the audited payload does; the
-  audit records the uncertainty.
-- **Visual comparison**: the original app is unavailable; October screenshots are evidence, not a target.
+- **Live server contract**: the installable `opencode serve` snapshot answers `/api/session`,
+  `/api/session/active` and `/api/event`, but serves its web shell for `/api/info` and `/api/project`, so
+  those two audited routes were not exercised live. `health` and `projects` remain covered by fixture tests
+  of the audited shapes only.
+- **iPhone/iPad visual comparison**: the original app is unavailable; October screenshots are evidence, not
+  a target.
+- **`/api/info` `pid` numeric type** across older servers: decoded as `Int`, as the audited payload does.
+- **Haptic feel on other devices**: one iPhone Air observation; the vocabulary is unchanged.
+- **Local-network denial classification**: `URLError -1009` is what this iOS version reports; a different
+  version may classify a denial differently, and the client maps it to the shared unreachable copy.
 
 ## Next
 
-1. P5 (`ios-shell`): wire `OpenCodeClient` into the launch states, pairing redemption and the reconnect loop;
-   add the live network-path observation the retry environment currently stubs.
+1. P5 (`ios-shell`): wire `OpenCodeClient` into the launch states, pairing redemption and the reconnect
+   loop, and add the network-path observation `RetryEnvironment` currently stubs.
 2. P6/P7 add the remaining route call sites; their models already exist where the event stream needs them.
 3. P8 adds the transcript consumer and, with it, the off-screen event pressure policy (D-23).

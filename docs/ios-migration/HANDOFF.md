@@ -23,8 +23,9 @@ The Android tree is not modified by this work.
   Head at Phase 4 start: `d0fdf2f5` (PR #2 merge).
 - `ios-foundation` — the scaffold. Squash-merged into `ios` as `143d8f86` (PR #1, closed).
 - `ios-core` — Phase 3 (tokens, motion, haptics, store gates). Merged into `ios` as `d0fdf2f5` (PR #2).
-- `ios-networking` — Phase 4: transport, retry, models, SSE, pairing, client seam. Draft PR into `ios`:
-  https://github.com/Rift7/opencode-ios/pull/3 (**open for review, not merged**).
+- `ios-networking` — Phase 4: transport, retry, models, SSE, pairing, client seam, plus the streaming
+  review corrections. Draft PR into `ios`: https://github.com/Rift7/opencode-ios/pull/3 (**open for
+  review, not merged**).
 - Later task branches from `ios` (`ios-shell`, `ios-home`, …) are pushed to the fork and opened as **draft**
   PRs into `ios`. Nothing is merged, released or distributed from here.
 
@@ -66,6 +67,8 @@ swift test --package-path ios/OpenCodeKit
 | --- | --- | --- |
 | Core logic (tokens, storage outcomes, logging, endpoint, network guard, isolation, transport boundary, haptics, motion, bounded channel) | `ios/OpenCodeKit/Tests/OpenCodeCoreTests` | `swift test` on the host |
 | Server (address, redirects, transport, retry, pairing, SSE, events, batching, stream, client) | `ios/OpenCodeKit/Tests/OpenCodeServerTests` | `swift test` on the host |
+| Loopback HTTP fixture (real URLSession delegates, socket lifetimes) | `ios/OpenCodeKit/Tests/OpenCodeServerTests/LocalFixtureServerTests.swift` | `swift test`; loopback only, opt-out env var |
+| Live read-only server | `ios/OpenCodeKit/Tests/OpenCodeServerTests/LiveServerTests.swift` | `swift test` with env vars; skipped by default |
 | App reducer, launch configuration, store semantics | `ios/OpenCodeKit/Tests/OpenCodeAppTests` | `swift test` on the host |
 | Platform checks (UserDefaults, endpoint encoding, launch mapping) | `ios/OpenCodeTests` | `xcodebuild test` on the simulator |
 | Launch smoke states | `ios/OpenCodeUITests` | `xcodebuild test` on the simulator |
@@ -73,6 +76,18 @@ swift test --package-path ios/OpenCodeKit
 
 The Xcode unit target is hostless and does not link TCA; see `TOOLCHAIN.md` for why, and for the keychain
 entitlement note that puts the round-trip in the UI tests.
+
+## Device and live checks (opt-in)
+
+| Check | How |
+| --- | --- |
+| Loopback fixture suite | runs by default; skip with `OPENCODE_SKIP_LOOPBACK_FIXTURES=1` |
+| Local-network prompt | install the debug app, launch with `-localNetworkProbeURL http://<mac-lan-ip>:<port>/api/info`, answer the prompt |
+| Haptics | launch with `-hapticProbe`; System Haptics must be on and the phone in hand |
+| Live server | set `OPENCODE_LIVE_SERVER` and `OPENCODE_LIVE_PASSWORD` for one test process only; unset afterwards |
+
+The device probes print `OPENCODE_PROBE …` lines with a classification only: no address, credential,
+message or file content.
 
 ## Test conventions
 
@@ -106,15 +121,30 @@ Useful entry points:
 | Change event handling | `OpenCodeServer/Events/ServerEventDecoder.swift` |
 | Test request construction | `OpenCodeServerTests/OpenCodeClientTests.swift` with `Fixtures.transport` |
 | Inspect a live URLSession path | `OpenCodeCore/Transport/URLSessionTransport.swift` + `NetworkGuard` fixtures |
+| Exercise real delegates and sockets | `OpenCodeTestSupport/LocalHTTPServer.swift`, `OpenCodeServerTests/LocalFixtureServerTests.swift` |
+| Device probes (permission, haptics) | `ios/OpenCode/App/DeviceProbes.swift` |
+| Live read-only server check | `OpenCodeServerTests/LiveServerTests.swift` |
+
+Session and stream ownership (D-26/D-27): one request session per transport, one per stream connection;
+every connection exit closes its tasks and session. The connect deadline covers response headers.
+
+Device work (one iPhone Air, debug build, configured development identity):
+
+- local-network prompt denied → `URLError -1009`, no request at the Mac fixture;
+- reinstalled, prompt allowed → `status=200` from the Mac's LAN fixture;
+- foreground haptics: first run nothing felt (System Haptics off), second run all eleven felt and
+  distinct after enabling it. Reported as one-device observations, not automated results.
+
+Live read-only smoke: `OPENCODE_LIVE_SERVER` + `OPENCODE_LIVE_PASSWORD` + `swift test --filter
+LiveServerTests` passed against `opencode serve 0.0.0-dev-202611170722` for `/api/session`,
+`/api/session/active` and `/api/event`. That snapshot serves its web shell for `/api/info` and
+`/api/project`, so those routes were not exercised live; the audited fixture shapes remain their gate.
 
 Known unverified items:
 
-- Physical-device haptics (P3) — no device run; the simulator has no Taptic Engine.
-- The local-network permission prompt and a real cleartext LAN load (P4) — the plist keys ship, the prompt
-  is device-only.
-- The URLSession redirect delegate is wired but not exercised through a fixture protocol (D-22); the rule it
-  calls is unit-tested.
-- No live server was contacted in this phase; live checks stay opt-in and unset.
+- `/api/info` and `/api/project` against a real V2 server (version mismatch above).
+- Haptic feel beyond the one device; the local-network denial classification on other iOS versions.
+- No live mutation was performed: the live suite is read-only by construction.
 
 ## Phase-end checklist
 

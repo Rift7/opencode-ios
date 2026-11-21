@@ -2,18 +2,53 @@ import Foundation
 import OpenCodeCore
 import Synchronization
 
+/// The event subscriber fell behind: the rest of this connection is incomplete.
+///
+/// This is the explicit signal to resynchronize from REST, which is authoritative. The connection is
+/// already closed when it arrives; a consumer must not try to reconstruct a transcript from what it
+/// saw before the overflow.
+public struct EventStreamOverflow: Error, Equatable, Sendable {
+  public enum Cause: Sendable, Equatable {
+    /// The bounded hand-off to the consumer was full, so a delta would have been lost.
+    case consumerFellBehind
+  }
+
+  public var cause: Cause
+
+  public init(cause: Cause = .consumerFellBehind) {
+    self.cause = cause
+  }
+}
+
+/// An open SSE connection: its events and the one way to close it.
+///
+/// `close` is idempotent. It cancels the read, the watchdog and the underlying request's session,
+/// and ends the event stream. A consumer that stops reading, throws, or is cancelled must call it
+/// (dropping the stream cancels it too); `EventStreamRunner` does so for every reconnect.
+public struct EventConnection: Sendable {
+  public var events: AsyncThrowingStream<ServerEvent, any Error>
+  public var close: @Sendable () -> Void
+
+  public init(events: AsyncThrowingStream<ServerEvent, any Error>, close: @escaping @Sendable () -> Void) {
+    self.events = events
+    self.close = close
+  }
+}
+
 /// One long-lived SSE connection to `/api/event`.
 ///
 /// The stream throws on disconnect (a typed client error, or `EventStreamOverflow` when the consumer
-/// fell 128 events behind); the caller owns the reconnect-and-rehydrate loop, and `EventStreamRunner`
-/// is that loop. REST remains authoritative: these events only invalidate and project.
+/// fell behind); the caller owns the reconnect-and-rehydrate loop, and `EventStreamRunner` is that
+/// loop. REST remains authoritative: these events only invalidate and project.
 public struct EventStream: Sendable {
   public var transport: HTTPTransport
   public var clock: ClockClient
   /// How many decoded events may wait for the consumer before the connection is failed.
   public var capacity: Int
-  /// A stream that has not opened by then is stranded on a dead route.
-  public var connectDeadline: Duration
+  /// The whole open — connect, request, and response headers — must finish by then. A server that
+  /// accepts the socket but withholds its headers is as useless as one that refuses the connection.
+  /// Nil disables the deadline (a caller that owns its own timeout).
+  public var connectDeadline: Duration?
   /// A stream silent this long (three missed 15 s heartbeats) is stranded.
   public var idleDeadline: Duration
   /// A caller that owns its own lifetime can opt out; the app uses the watchdog.
@@ -26,7 +61,7 @@ public struct EventStream: Sendable {
     transport: HTTPTransport,
     clock: ClockClient,
     capacity: Int = 128,
-    connectDeadline: Duration = EventStream.defaultConnectDeadline,
+    connectDeadline: Duration? = EventStream.defaultConnectDeadline,
     idleDeadline: Duration = EventStream.defaultIdleDeadline,
     enabledWatchdog: Bool = true
   ) {
@@ -38,9 +73,9 @@ public struct EventStream: Sendable {
     self.enabledWatchdog = enabledWatchdog
   }
 
-  /// Opens one connection. Throws when it cannot open; the returned stream ends with an error when
-  /// the connection drops.
-  public func connect(server: OpenCodeServer) async throws -> AsyncThrowingStream<ServerEvent, any Error> {
+  /// Opens one connection. Throws when it cannot open (including when the headers miss
+  /// `connectDeadline`); the returned connection ends with an error when the stream drops.
+  public func connect(server: OpenCodeServer) async throws -> EventConnection {
     guard let url = server.endpoint(path: "/api/event") else {
       throw OpenCodeClientError(.invalidURL)
     }
@@ -60,7 +95,12 @@ public struct EventStream: Sendable {
 
     let response: HTTPStream
     do {
-      response = try await transport.open(request)
+      response = try await Self.openWithDeadline(
+        transport: transport,
+        request: request,
+        deadline: connectDeadline,
+        clock: clock
+      )
     } catch is CancellationError {
       throw CancellationError()
     } catch let error as OpenCodeClientError {
@@ -69,10 +109,13 @@ public struct EventStream: Sendable {
       throw Self.clientError(for: error)
     }
 
+    // A rejected answer is a closed connection, not an open stream nobody reads.
     if response.status == 401 {
+      response.close()
       throw OpenCodeClientError(.status(401))
     }
     guard (200...299).contains(response.status) else {
+      response.close()
       throw OpenCodeClientError(.status(response.status), isLocationMissing: false)
     }
 
@@ -81,7 +124,10 @@ public struct EventStream: Sendable {
       clock: clock
     )
     let activity = StreamActivity(start: clock.now())
+    let lifecycle = ConnectionLifecycle()
     let clock = clock
+
+    lifecycle.onClose { response.close() }
 
     let readTask = Task {
       var parser = SSEParser()
@@ -106,37 +152,74 @@ public struct EventStream: Sendable {
         await batcher.fail(Self.clientError(for: error))
       }
     }
+    lifecycle.onClose { readTask.cancel() }
 
-    let connectDeadline = connectDeadline
-    let idleDeadline = idleDeadline
-    let watchdog: Task<Void, Never>? = enabledWatchdog ? Task {
-      do {
-        try await clock.sleep(connectDeadline)
+    if enabledWatchdog {
+      let idleDeadline = idleDeadline
+      let watchdog = Task {
         while !Task.isCancelled {
-          guard let last = activity.last else {
-            await batcher.fail(OpenCodeClientError(.transport(.timedOut)))
-            readTask.cancel()
-            return
-          }
-          let remaining = idleDeadline - (clock.now() - activity.start - last)
+          let elapsed = clock.now() - activity.start
+          let remaining = idleDeadline - (activity.last.map { elapsed - $0 } ?? elapsed)
           if remaining <= .zero {
             await batcher.fail(OpenCodeClientError(.transport(.timedOut)))
-            readTask.cancel()
+            lifecycle.close()
             return
           }
-          try await clock.sleep(remaining)
+          do {
+            try await clock.sleep(remaining)
+          } catch {
+            return
+          }
         }
-      } catch {
-        return
       }
-    } : nil
-
-    await batcher.setCloseHandler {
-      readTask.cancel()
-      watchdog?.cancel()
+      lifecycle.onClose { watchdog.cancel() }
     }
 
-    return await batcher.events
+    await batcher.setCloseHandler {
+      lifecycle.close()
+    }
+
+    let events = await batcher.events
+    return EventConnection(
+      events: events,
+      close: {
+        lifecycle.close()
+        Task { await batcher.cancel() }
+      }
+    )
+  }
+
+  /// `transport.open`, unless the whole open (including headers) misses `deadline`.
+  static func openWithDeadline(
+    transport: HTTPTransport,
+    request: HTTPRequest,
+    deadline: Duration?,
+    clock: ClockClient
+  ) async throws -> HTTPStream {
+    guard let deadline else {
+      return try await transport.open(request)
+    }
+    return try await withThrowingTaskGroup(of: HTTPStream.self) { group in
+      group.addTask {
+        let stream = try await transport.open(request)
+        // The deadline won between the response arriving and this task being cancelled: a stream
+        // nobody will read must not keep a session or socket alive.
+        if Task.isCancelled {
+          stream.close()
+          throw CancellationError()
+        }
+        return stream
+      }
+      group.addTask {
+        try await clock.sleep(deadline)
+        throw OpenCodeClientError(.transport(.timedOut))
+      }
+      defer { group.cancelAll() }
+      guard let first = try await group.next() else {
+        throw OpenCodeClientError(.transport(.timedOut))
+      }
+      return first
+    }
   }
 
   private static func deliver(_ frame: SSEFrame, to batcher: EventBatcher) async throws {
@@ -148,6 +231,7 @@ public struct EventStream: Sendable {
     if let error = error as? OpenCodeClientError { return error }
     if error is SSEError { return OpenCodeClientError(.streamOversizedFrame) }
     if error is ServerEventError { return OpenCodeClientError(.streamServerFailure) }
+    if error is EventStreamOverflow { return OpenCodeClientError(.streamOverflow) }
     if let failure = TransportFailure(error) { return OpenCodeClientError(.transport(failure)) }
     return OpenCodeClientError(.unreachable)
   }
@@ -171,42 +255,137 @@ private final class StreamActivity: Sendable {
   }
 }
 
-/// Reconnects an `EventStream`, hydrating between attempts. A single 401 ends the loop: the
-/// credentials are wrong, and retrying only hammers the server.
+/// Runs the close handlers exactly once, from whichever path gets there first.
+private final class ConnectionLifecycle: Sendable {
+  private struct State {
+    var closed = false
+    var handlers: [@Sendable () -> Void] = []
+  }
+
+  private let state = Mutex(State())
+
+  func onClose(_ handler: @escaping @Sendable () -> Void) {
+    let runNow = state.withLock { state -> Bool in
+      if state.closed { return true }
+      state.handlers.append(handler)
+      return false
+    }
+    if runNow { handler() }
+  }
+
+  var isClosed: Bool {
+    state.withLock { $0.closed }
+  }
+
+  func close() {
+    let handlers = state.withLock { state -> [@Sendable () -> Void] in
+      guard !state.closed else { return [] }
+      state.closed = true
+      let handlers = state.handlers
+      state.handlers.removeAll()
+      return handlers
+    }
+    for handler in handlers {
+      handler()
+    }
+  }
+}
+
+/// Reconnects an `EventStream`, resynchronizing from REST between attempts.
 ///
-/// Events cross a bounded channel, so a consumer that stalls fails the connection with
-/// `EventStreamOverflow` and rehydrates from REST rather than growing memory.
+/// A single 401 ends the loop: the credentials are wrong, and retrying only hammers the server.
+/// A consumer that falls behind ends its connection with `EventStreamOverflow`; the runner closes
+/// it, calls `onResynchronize` (where a feature reads authoritative REST state), and reconnects on
+/// the overflow schedule. Consecutive overflows are bounded: once the limit is passed the stream
+/// ends with the overflow instead of spinning.
 public struct EventStreamRunner: Sendable {
-  public var stream: EventStream
+  public var clock: ClockClient
+  /// Opens one connection. Split from `EventStream` so a test can script the exact failures a real
+  /// connection produces (overflow, rejected open, dropped socket).
+  public var connect: @Sendable (OpenCodeServer) async throws -> EventConnection
   public var policy: RetryPolicy
+  public var overflowPolicy: RetryPolicy
   public var environment: RetryEnvironment
   /// How many events may wait for the consumer across reconnects.
   public var capacity: Int
+  /// Called once per overflow, before the reconnect, and never after the stream ends. This is the
+  /// explicit REST-resynchronization signal: events are a projection, REST is authoritative.
+  public var onResynchronize: @Sendable (EventStreamOverflow) async -> Void
+  /// A connection that overflows this many times in a row is abandoned rather than retried forever.
+  public var maximumConsecutiveOverflows: Int
 
   public init(
     stream: EventStream,
     policy: RetryPolicy = .stream,
+    overflowPolicy: RetryPolicy = .streamOverflow,
     environment: RetryEnvironment = .live,
-    capacity: Int = 128
+    capacity: Int = 128,
+    maximumConsecutiveOverflows: Int = 5,
+    onResynchronize: @escaping @Sendable (EventStreamOverflow) async -> Void = { _ in }
   ) {
-    self.stream = stream
+    self.clock = stream.clock
+    self.connect = { server in try await stream.connect(server: server) }
     self.policy = policy
+    self.overflowPolicy = overflowPolicy
     self.environment = environment
     self.capacity = capacity
+    self.maximumConsecutiveOverflows = maximumConsecutiveOverflows
+    self.onResynchronize = onResynchronize
+  }
+
+  public init(
+    clock: ClockClient,
+    connect: @escaping @Sendable (OpenCodeServer) async throws -> EventConnection,
+    policy: RetryPolicy = .stream,
+    overflowPolicy: RetryPolicy = .streamOverflow,
+    environment: RetryEnvironment = .live,
+    capacity: Int = 128,
+    maximumConsecutiveOverflows: Int = 5,
+    onResynchronize: @escaping @Sendable (EventStreamOverflow) async -> Void = { _ in }
+  ) {
+    self.clock = clock
+    self.connect = connect
+    self.policy = policy
+    self.overflowPolicy = overflowPolicy
+    self.environment = environment
+    self.capacity = capacity
+    self.maximumConsecutiveOverflows = maximumConsecutiveOverflows
+    self.onResynchronize = onResynchronize
   }
 
   public func events(server: OpenCodeServer) -> AsyncThrowingStream<ServerEvent, any Error> {
     let channel = BoundedChannel<ServerEvent>(capacity: capacity)
     let log = AppLog(category: .stream)
+    let clock = clock
+    let connect = connect
+    let policy = policy
+    let overflowPolicy = overflowPolicy
+    let environment = environment
+    let onResynchronize = onResynchronize
+    let maximumConsecutiveOverflows = max(1, maximumConsecutiveOverflows)
+
     let task = Task {
-      var schedule = RetrySchedule(policy: policy, clock: stream.clock, environment: environment)
+      var schedule = RetrySchedule(policy: policy, clock: clock, environment: environment)
+      var overflowSchedule = RetrySchedule(
+        policy: overflowPolicy,
+        clock: clock,
+        environment: environment
+      )
+      var consecutiveOverflows = 0
+
       while !Task.isCancelled {
+        var connection: EventConnection?
+        defer { connection?.close() }
+
         do {
-          let connection = try await stream.connect(server: server)
+          let opened = try await connect(server)
+          connection = opened
           log.event(.streamConnected)
-          for try await event in connection {
+          for try await event in opened.events {
             if case .connected = event {
               schedule.reset()
+              overflowSchedule.reset()
+              consecutiveOverflows = 0
             }
             switch channel.push(event) {
             case .accepted:
@@ -225,10 +404,21 @@ public struct EventStreamRunner: Sendable {
           }
         } catch is CancellationError {
           return
-        } catch let error as EventStreamOverflow {
-          log.event(.streamOverflow)
-          guard try await waitForRetry(OpenCodeClientError(.unreachable), schedule: &schedule) else {
-            channel.fail(error)
+        } catch let overflow as EventStreamOverflow {
+          consecutiveOverflows += 1
+          log.event(
+            .streamOverflow,
+            [LogField("consecutive", .count(consecutiveOverflows))]
+          )
+          if consecutiveOverflows > maximumConsecutiveOverflows {
+            channel.fail(overflow)
+            return
+          }
+          await onResynchronize(overflow)
+          log.event(.streamResynchronized)
+          guard try await waitForRetry(OpenCodeClientError(.streamOverflow), schedule: &overflowSchedule)
+          else {
+            channel.fail(overflow)
             return
           }
         } catch let error as OpenCodeClientError {

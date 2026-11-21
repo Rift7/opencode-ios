@@ -1,12 +1,6 @@
 import Foundation
 import OpenCodeCore
 
-/// The event subscriber fell behind: the rest of this connection is incomplete. Reconnect and
-/// hydrate from REST.
-public struct EventStreamOverflow: Error, Equatable, Sendable {
-  public init() {}
-}
-
 /// Keeps high-frequency events out of reducers: adjacent deltas for one part coalesce and flush 75 ms
 /// after the first, at most 256 mutations per batch. A non-content event first flushes the deltas it
 /// must follow, so ordering is never lost.
@@ -99,6 +93,18 @@ public actor EventBatcher {
     flush()
     terminated = true
     channel.finish()
+  }
+
+  /// The connection is being torn down: stop flushing and end the consumer's stream now.
+  public func cancel() {
+    guard !terminated else { return }
+    flushTask?.cancel()
+    flushTask = nil
+    pending.removeAll()
+    pendingSessions.removeAll()
+    pendingCount = 0
+    terminated = true
+    channel.cancel()
   }
 
   /// Ends the stream after the queued events with `error`.

@@ -52,6 +52,13 @@ extension ClockClient {
     RecordingClock(startingAt: start)
   }
 
+  /// A clock whose waits never finish until cancelled. A test that must keep a deadline from firing
+  /// (a stream connect, say) uses it; the wait is cancelled when its scope ends.
+  public static let suspended = ClockClient(
+    now: { .zero },
+    sleep: { _ in try await Task.sleep(for: .seconds(3600)) }
+  )
+
   /// A clock that holds each wait until the test releases it.
   public static func gate() -> GatedClock {
     GatedClock()

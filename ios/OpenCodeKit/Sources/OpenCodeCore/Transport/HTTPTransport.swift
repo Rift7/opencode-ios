@@ -132,17 +132,22 @@ public struct HTTPStream: Sendable {
   /// Body chunks in arrival order. The producer never buffers more than the transport's bound; an
   /// overflow ends the stream with an error instead of dropping bytes.
   public var chunks: AsyncThrowingStream<Data, any Error>
+  /// Ends the body read and releases the underlying request. Idempotent and safe to call from any
+  /// context; a caller that stops reading must call it (or drop the stream, which cancels).
+  public var close: @Sendable () -> Void
 
   public init(
     status: Int,
     headers: [String: String],
     finalURL: URL,
-    chunks: AsyncThrowingStream<Data, any Error>
+    chunks: AsyncThrowingStream<Data, any Error>,
+    close: @escaping @Sendable () -> Void
   ) {
     self.status = status
     self.headers = headers
     self.finalURL = finalURL
     self.chunks = chunks
+    self.close = close
   }
 
   public func header(_ name: String) -> String? {

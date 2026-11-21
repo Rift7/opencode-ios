@@ -1,6 +1,7 @@
 import Foundation
 import OpenCodeCore
 import OpenCodeTestSupport
+import Synchronization
 import Testing
 
 /// Each test owns a unique host, because `NetworkGuard` answers every suite in the process and a
@@ -118,6 +119,80 @@ struct URLSessionTransportTests {
     #expect(recorded.headers["accept"] == "text/event-stream")
   }
 
+  @Test("requests share one session for the transport's lifetime")
+  func requestsShareOneSession() async throws {
+    let host = "shared-session.local"
+    NetworkGuard.register(host: host, fixture: .init(body: Data("[]".utf8)))
+    let sessions = SessionCounter()
+    let transport = URLSessionTransport(configuration: {
+      sessions.increment()
+      let configuration = URLSessionTransport.ephemeralConfiguration()
+      configuration.protocolClasses = [NetworkGuard.self]
+      return configuration
+    })
+    let url = try #require(URL(string: "https://\(host)/api/project"))
+
+    _ = try await transport.send(HTTPRequest(url: url))
+    _ = try await transport.send(HTTPRequest(url: url))
+
+    #expect(sessions.value == 1)
+  }
+
+  @Test("each stream owns its own session")
+  func eachStreamOwnsASession() async throws {
+    let host = "stream-sessions.local"
+    NetworkGuard.register(host: host, fixture: .init(body: Data(), chunks: [Data("a".utf8)]))
+    let sessions = SessionCounter()
+    let transport = URLSessionTransport(configuration: {
+      sessions.increment()
+      let configuration = URLSessionTransport.ephemeralConfiguration()
+      configuration.protocolClasses = [NetworkGuard.self]
+      return configuration
+    })
+    let url = try #require(URL(string: "https://\(host)/api/event"))
+
+    for _ in 0..<2 {
+      let stream = try await transport.open(HTTPRequest(url: url))
+      for try await _ in stream.chunks {}
+    }
+
+    #expect(sessions.value == 2)
+  }
+
+  @Test("an open cancelled before it starts throws cancellation")
+  func preCancelledOpen() async throws {
+    let host = "pre-cancelled.local"
+    NetworkGuard.register(host: host, fixture: .init(body: Data()))
+    let transport = transport()
+    let url = try #require(URL(string: "https://\(host)/api/event"))
+
+    let task = Task { () -> HTTPStream in
+      withUnsafeCurrentTask { $0?.cancel() }
+      return try await transport.open(HTTPRequest(url: url))
+    }
+    let result = await task.result
+    #expect(throws: CancellationError.self) { try result.get() }
+  }
+
+  @Test("an open cancelled during startup throws cancellation instead of hanging")
+  func cancelledDuringStartup() async throws {
+    let host = "startup-cancelled.local"
+    NetworkGuard.register(host: host, fixture: .init(body: Data()))
+    let transport = URLSessionTransport(configuration: {
+      // Cancels the calling task at the one point that is otherwise hard to hit: between
+      // checking cancellation and registering the startup continuation.
+      withUnsafeCurrentTask { $0?.cancel() }
+      let configuration = URLSessionTransport.ephemeralConfiguration()
+      configuration.protocolClasses = [NetworkGuard.self]
+      return configuration
+    })
+    let url = try #require(URL(string: "https://\(host)/api/event"))
+
+    let task = Task { try await transport.open(HTTPRequest(url: url)) }
+    let result = await task.result
+    #expect(throws: CancellationError.self) { try result.get() }
+  }
+
   @Test("a stream ends when the reader stops")
   func streamCancellationEndsTheRead() async throws {
     let host = "cancel-stream.local"
@@ -136,4 +211,14 @@ struct URLSessionTransportTests {
     }
     #expect(count == 1)
   }
+}
+
+
+/// Counts how many `URLSession` instances a transport configured.
+private final class SessionCounter: Sendable {
+  private let state = Mutex(0)
+
+  var value: Int { state.withLock { $0 } }
+
+  func increment() { state.withLock { $0 += 1 } }
 }

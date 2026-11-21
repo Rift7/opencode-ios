@@ -32,6 +32,8 @@ public struct OpenCodeClientError: Error, Equatable, Sendable {
     case streamServerFailure
     /// One SSE frame passed the 16 MiB bound.
     case streamOversizedFrame
+    /// The event consumer fell behind; the rest of the connection is incomplete.
+    case streamOverflow
     /// The pairing code was expired or already used (the connect route answered 401).
     case pairingExpired
     /// The server predates pairing links (the connect route answered 404).
