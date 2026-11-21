@@ -1,12 +1,36 @@
 import Foundation
 import Synchronization
 
-/// Byte storage keyed by a stable string. The live implementation is `UserDefaults`; secrets use
-/// Keychain in a later phase and never live here.
+/// Why a storage operation failed. Kept small and typed so a caller cannot mistake an access
+/// failure for an empty store.
+public enum StorageFailure: Error, Equatable, Sendable {
+  /// The backing store is not available right now (for example a locked keychain).
+  case unavailable
+  /// Access was refused: missing entitlement or failed authentication.
+  case denied
+  /// The value could not be represented for storage.
+  case encoding
+  /// Any other platform status. The number is a diagnostic, never user data.
+  case other(Int32)
+}
+
+public enum StorageRead: Equatable, Sendable {
+  case value(Data)
+  case missing
+  case failure(StorageFailure)
+}
+
+public enum StorageWrite: Equatable, Sendable {
+  case success
+  case failure(StorageFailure)
+}
+
+/// Byte storage keyed by a stable string. Every operation reports its outcome explicitly: a missing
+/// item and a failed read are different answers.
 public protocol KeyValueStorage: Sendable {
-  func data(forKey key: String) -> Data?
-  func setData(_ data: Data?, forKey key: String)
-  func removeValue(forKey key: String)
+  func read(_ key: String) -> StorageRead
+  func write(_ data: Data, for key: String) -> StorageWrite
+  func delete(_ key: String) -> StorageWrite
 }
 
 /// `UserDefaults`-backed storage. The suite name is supplied by the caller so the app and tests
@@ -25,20 +49,19 @@ public struct UserDefaultsStorage: KeyValueStorage {
     return .standard
   }
 
-  public func data(forKey key: String) -> Data? {
-    defaults.data(forKey: key)
+  public func read(_ key: String) -> StorageRead {
+    guard let data = defaults.data(forKey: key) else { return .missing }
+    return .value(data)
   }
 
-  public func setData(_ data: Data?, forKey key: String) {
-    if let data {
-      defaults.set(data, forKey: key)
-    } else {
-      defaults.removeObject(forKey: key)
-    }
+  public func write(_ data: Data, for key: String) -> StorageWrite {
+    defaults.set(data, forKey: key)
+    return .success
   }
 
-  public func removeValue(forKey key: String) {
+  public func delete(_ key: String) -> StorageWrite {
     defaults.removeObject(forKey: key)
+    return .success
   }
 }
 
@@ -50,16 +73,18 @@ public final class InMemoryStorage: KeyValueStorage, Sendable {
     self.values = Mutex(values)
   }
 
-  public func data(forKey key: String) -> Data? {
-    values.withLock { $0[key] }
+  public func read(_ key: String) -> StorageRead {
+    values.withLock { $0[key] }.map(StorageRead.value) ?? .missing
   }
 
-  public func setData(_ data: Data?, forKey key: String) {
+  public func write(_ data: Data, for key: String) -> StorageWrite {
     values.withLock { $0[key] = data }
+    return .success
   }
 
-  public func removeValue(forKey key: String) {
+  public func delete(_ key: String) -> StorageWrite {
     _ = values.withLock { $0.removeValue(forKey: key) }
+    return .success
   }
 
   public var allKeys: [String] {

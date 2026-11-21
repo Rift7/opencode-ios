@@ -1,5 +1,6 @@
 import Foundation
 import OpenCodeCore
+import OpenCodeTestSupport
 import Testing
 
 @Suite("Shared keys")
@@ -17,27 +18,27 @@ struct SharedStoreTests {
     )
   }
 
-  @Test("an unwritten key returns its declared default")
-  func defaultsApply() {
+  @Test("an unwritten key reads as missing, and the default is a caller decision")
+  func missingIsNotFailure() {
     let store = makeStore()
 
-    #expect(store.value(SharedKeys.returnKeySends) == false)
-    #expect(store.value(SharedKeys.sidebarShown) == true)
-    #expect(store.value(SharedKeys.lastViewedSession) == nil)
-    #expect(store.value(SharedKeys.pairedServers) == nil)
+    #expect(store.read(SharedKeys.returnKeySends).isMissing)
+    #expect(store.result(SharedKeys.returnKeySends) == .success(false))
+    #expect(store.read(SharedKeys.lastViewedSession).isMissing)
+    #expect(store.result(SharedKeys.lastViewedSession) == .success(nil))
   }
 
-  @Test("a written value survives and a reset restores the default")
-  func roundTripAndReset() {
+  @Test("a written value survives and a delete restores the missing state")
+  func roundTripAndDelete() {
     let store = makeStore()
 
-    store.set(true, for: SharedKeys.returnKeySends)
-    store.set("ses_fixture", for: SharedKeys.lastViewedSession)
-    #expect(store.value(SharedKeys.returnKeySends) == true)
-    #expect(store.value(SharedKeys.lastViewedSession) == "ses_fixture")
+    #expect(store.write(true, for: SharedKeys.returnKeySends) == .success)
+    #expect(store.write("ses_fixture", for: SharedKeys.lastViewedSession) == .success)
+    #expect(store.result(SharedKeys.returnKeySends) == .success(true))
+    #expect(store.result(SharedKeys.lastViewedSession) == .success("ses_fixture"))
 
-    store.reset(SharedKeys.returnKeySends)
-    #expect(store.value(SharedKeys.returnKeySends) == false)
+    #expect(store.delete(SharedKeys.returnKeySends) == .success)
+    #expect(store.read(SharedKeys.returnKeySends).isMissing)
   }
 
   @Test("keychain-backed values never touch user defaults")
@@ -47,19 +48,50 @@ struct SharedStoreTests {
     let store = SharedStore(defaults: defaults, keychain: keychain)
     let payload = Data("sealed".utf8)
 
-    store.set(payload, for: SharedKeys.pairedServers)
+    #expect(store.write(payload, for: SharedKeys.pairedServers) == .success)
 
-    #expect(store.value(SharedKeys.pairedServers) == payload)
-    #expect(keychain.data(forKey: SharedKeys.pairedServers.name) != nil)
-    #expect(defaults.data(forKey: SharedKeys.pairedServers.name) == nil)
+    #expect(store.result(SharedKeys.pairedServers) == .success(payload))
+    if case .value = keychain.read(SharedKeys.pairedServers.name) {
+      // stored
+    } else {
+      Issue.record("expected the keychain double to hold the value")
+    }
+    #expect(defaults.read(SharedKeys.pairedServers.name) == .missing)
   }
 
-  @Test("corrupt stored data falls back to the default")
-  func corruptDataFallsBack() {
+  @Test("corrupt stored data is undecodable, not a failure")
+  func corruptDataIsUndecodable() {
     let defaults = InMemoryStorage()
-    defaults.setData(Data("not json".utf8), forKey: SharedKeys.returnKeySends.name)
+    _ = defaults.write(Data("not json".utf8), for: SharedKeys.returnKeySends.name)
     let store = SharedStore(defaults: defaults, keychain: InMemoryStorage())
 
-    #expect(store.value(SharedKeys.returnKeySends) == false)
+    guard case .undecodable = store.read(SharedKeys.returnKeySends) else {
+      Issue.record("expected undecodable")
+      return
+    }
+    #expect(store.result(SharedKeys.returnKeySends) == .success(false))
+  }
+
+  @Test("a storage failure is never reported as a missing value")
+  func failureIsNotMissing() {
+    let store = SharedStore(
+      defaults: FailingStorage(failure: .unavailable),
+      keychain: FailingStorage(failure: .unavailable)
+    )
+
+    guard case .failure(.unavailable) = store.read(SharedKeys.sidebarShown) else {
+      Issue.record("expected unavailable")
+      return
+    }
+    #expect(store.result(SharedKeys.sidebarShown) == .failure(.unavailable))
+    #expect(store.write(true, for: SharedKeys.sidebarShown) == .failure(.unavailable))
+    #expect(store.delete(SharedKeys.sidebarShown) == .failure(.unavailable))
+  }
+}
+
+private extension SharedRead {
+  var isMissing: Bool {
+    if case .missing = self { return true }
+    return false
   }
 }

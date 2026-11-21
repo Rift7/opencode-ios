@@ -15,15 +15,17 @@ import OpenCodeCore
       let first = Data("probe".utf8)
       let second = Data("probe-updated".utf8)
 
-      let initiallyEmpty = storage.data(forKey: "probe") == nil
-      storage.setData(first, forKey: "probe")
-      let added = storage.data(forKey: "probe") == first
-      storage.setData(second, forKey: "probe")
-      let updated = storage.data(forKey: "probe") == second
-      storage.removeValue(forKey: "probe")
-      let cleared = storage.data(forKey: "probe") == nil
+      let initiallyMissing = storage.read("probe") == .missing
+      let wroteFirst = storage.write(first, for: "probe") == .success
+      let readFirst = storage.read("probe") == .value(first)
+      let wroteSecond = storage.write(second, for: "probe") == .success
+      let readSecond = storage.read("probe") == .value(second)
+      let deleted = storage.delete("probe") == .success
+      let cleared = storage.read("probe") == .missing
 
-      return initiallyEmpty && added && updated && cleared ? "passed" : "failed"
+      let passed = initiallyMissing && wroteFirst && readFirst && wroteSecond && readSecond
+        && deleted && cleared
+      return passed ? "passed" : "failed"
     }
   }
 #endif

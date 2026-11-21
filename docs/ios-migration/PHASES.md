@@ -32,7 +32,7 @@ semantics, sharing, motion or haptics. P4 (networking) is therefore **not** the 
 | Requirement (audit `PLAN.md` P3) | Status | Evidence or gap |
 | --- | --- | --- |
 | Dependency clients as `DependencyKey`s with inert test values | partial | `ConnectionProbe`, `DateClient`, `UuidClient` (`OpenCodeCore/Dependencies`), `HTTPTransport` (inert) |
-| `Shared` storage, including Keychain | done | `UserDefaultsStorage`, `InMemoryStorage`, `KeychainStorage(service:)`; `SharedStore` + `SharedKeys` |
+| `Shared` storage, including Keychain | done | `UserDefaultsStorage`, `InMemoryStorage`, `KeychainStorage(service:operations:)`; `SharedStore` + `SharedKeys`; every operation returns an explicit outcome |
 | Design tokens: colour | done | `Design/OpenCodeColorTokens.swift`; every token resolves and body/link text clears WCAG AA in both appearances |
 | Design tokens: type | done | `Design/OpenCodeTypeTokens.swift`; system font, system monospaced for code/logs |
 | Design tokens: radii, spacing | **missing** | no `OpenCodeRadius`/`OpenCodeSpacing` equivalent yet |
@@ -43,7 +43,7 @@ semantics, sharing, motion or haptics. P4 (networking) is therefore **not** the 
 | Gate: path-indexed cancellation | **missing** | no test; TCA linkage is not a test |
 | Gate: `ifLet` child-first ordering | **missing** | no test |
 | Gate: presented-child cancellation on dismissal | **missing** | no test |
-| Gate: Keychain round-trip | done | `KeychainProbeTests` runs it in the app process (a hostless test bundle has no keychain entitlement) |
+| Gate: Keychain round-trip | done | `KeychainProbeTests` runs it in the app process (a hostless test bundle has no keychain entitlement); `KeychainFailureTests` covers denied/unavailable/missing outcomes without a real keychain |
 | Gate: every shared key's default | done | `SharedStoreTests` asserts each of the four foundation keys and its default |
 | Gate: redaction | done | as above |
 

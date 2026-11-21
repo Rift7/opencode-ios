@@ -6,27 +6,27 @@ import Testing
 /// Platform checks for the pieces that only exist on the app's Apple SDK build.
 @Suite("Platform storage and endpoints")
 struct PlatformStorageTests {
-  @Test("user defaults storage round-trips bytes")
-  func userDefaultsRoundTrip() throws {
+  @Test("user defaults storage reports write, read and delete outcomes")
+  func userDefaultsOutcomes() throws {
     let suite = "opencode-migration-tests-\(UUID().uuidString)"
     defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
 
     let storage = UserDefaultsStorage(suiteName: suite)
-    storage.setData(Data("value".utf8), forKey: "key")
-    #expect(storage.data(forKey: "key") == Data("value".utf8))
-
-    storage.removeValue(forKey: "key")
-    #expect(storage.data(forKey: "key") == nil)
+    #expect(storage.read("key") == .missing)
+    #expect(storage.write(Data("value".utf8), for: "key") == .success)
+    #expect(storage.read("key") == .value(Data("value".utf8)))
+    #expect(storage.delete("key") == .success)
+    #expect(storage.read("key") == .missing)
   }
 
   @Test("in-memory storage keeps keys apart")
   func inMemoryStorage() {
     let storage = InMemoryStorage()
-    storage.setData(Data("a".utf8), forKey: "one")
-    storage.setData(Data("b".utf8), forKey: "two")
+    #expect(storage.write(Data("a".utf8), for: "one") == .success)
+    #expect(storage.write(Data("b".utf8), for: "two") == .success)
 
     #expect(storage.allKeys == ["one", "two"])
-    #expect(storage.data(forKey: "one") == Data("a".utf8))
+    #expect(storage.read("one") == .value(Data("a".utf8)))
   }
 
   @Test("the endpoint rejects credentials and keeps the directory query name")

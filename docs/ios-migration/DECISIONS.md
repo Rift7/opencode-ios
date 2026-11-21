@@ -153,6 +153,10 @@ service is touched.
   implementation. `SharedKeys` ships one keychain-backed key (`paired-servers`) to prove the path.
 - Production identifiers (bundle id, App Group, Keychain service) must be settled **before real user
   credentials are stored**. Until then the app is exercised with disposable services only.
+- Every storage operation returns an explicit outcome — `value`, `missing`, or `failure(.unavailable/.denied/
+  .encoding/.other)` — and writes/deletes report success only on success. A denied or unavailable keychain is
+  never reported as a missing credential; only a genuinely absent or undecodable value may fall back to the
+  key's default.
 - No Apple account setting, signing identity or entitlement is changed by this decision.
 
 ### D-16 iPad is out of scope

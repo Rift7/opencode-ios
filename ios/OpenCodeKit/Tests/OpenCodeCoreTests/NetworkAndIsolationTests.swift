@@ -15,10 +15,10 @@ struct TestIsolationTests {
       second.cleanUp()
     }
 
-    first.storage.setData(Data("first".utf8), forKey: "draft")
+    _ = first.storage.write(Data("first".utf8), for: "draft")
 
-    #expect(first.storage.data(forKey: "draft") == Data("first".utf8))
-    #expect(second.storage.data(forKey: "draft") == nil)
+    #expect(first.storage.read("draft") == .value(Data("first".utf8)))
+    #expect(second.storage.read("draft") == .missing)
     #expect(second.storage.allKeys.isEmpty)
     #expect(first.root != second.root)
     #expect(first.root.pathComponents.count < 12)

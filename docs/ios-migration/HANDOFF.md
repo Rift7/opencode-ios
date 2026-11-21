@@ -61,7 +61,7 @@ swift test --package-path ios/OpenCodeKit
 
 | Suite | Location | Runner |
 | --- | --- | --- |
-| Core logic (tokens, storage, redaction, endpoint, network guard, isolation, transport boundary) | `ios/OpenCodeKit/Tests/OpenCodeCoreTests` | `swift test` on the host |
+| Core logic (tokens, storage outcomes, logging, endpoint, network guard, isolation, transport boundary) | `ios/OpenCodeKit/Tests/OpenCodeCoreTests` | `swift test` on the host |
 | App reducer and launch configuration | `ios/OpenCodeKit/Tests/OpenCodeAppTests` | `swift test` on the host |
 | Platform checks (UserDefaults, endpoint encoding, launch mapping) | `ios/OpenCodeTests` | `xcodebuild test` on the simulator |
 | Launch smoke states | `ios/OpenCodeUITests` | `xcodebuild test` on the simulator |
@@ -74,7 +74,8 @@ entitlement note that puts the round-trip in the UI tests.
 
 - Swift Testing for reducers, dependency clients, transport decoding, persistence and formatting.
 - Every test uses a temporary directory, an in-memory Keychain double, a fixed clock and a deterministic ID
-  generator. Reaching a real host is a failure; live checks are opt-in behind environment variables that are not
+  generator. Storage failures are exercised with `FailingStorage`/`ScriptedKeychainOperations`, never by
+  provoking a real keychain error. Reaching a real host is a failure; live checks are opt-in behind environment variables that are not
   set by default.
 - Tests assert English copy for user-visible strings.
 

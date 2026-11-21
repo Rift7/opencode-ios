@@ -21,8 +21,17 @@ public struct SharedKey<Value: Codable & Sendable>: Sendable {
   }
 }
 
-/// Reads and writes shared values through the storage the key names. Decoding failures fall back to
-/// the default rather than propagating, because a stale or corrupt value must not block launch.
+/// The outcome of reading a shared value. `missing` and `undecodable` are the documented cases
+/// where a caller may use the key's default; `failure` is never one of them.
+public enum SharedRead<Value: Sendable>: Sendable {
+  case value(Value)
+  case missing
+  case undecodable
+  case failure(StorageFailure)
+}
+
+/// Reads and writes shared values through the storage the key names. A storage failure is reported
+/// as a failure; only a genuinely absent or undecodable value falls back to the default.
 public struct SharedStore: Sendable {
   private let defaults: any KeyValueStorage
   private let keychain: any KeyValueStorage
@@ -32,23 +41,41 @@ public struct SharedStore: Sendable {
     self.keychain = keychain
   }
 
-  public func value<Value>(_ key: SharedKey<Value>) -> Value {
-    guard
-      let data = storage(for: key).data(forKey: key.name),
-      let decoded = try? JSONDecoder().decode(Value.self, from: data)
-    else {
-      return key.defaultValue
+  public func read<Value>(_ key: SharedKey<Value>) -> SharedRead<Value> {
+    switch storage(for: key).read(key.name) {
+    case .missing:
+      return .missing
+    case .failure(let failure):
+      return .failure(failure)
+    case .value(let data):
+      guard let decoded = try? JSONDecoder().decode(Value.self, from: data) else {
+        return .undecodable
+      }
+      return .value(decoded)
     }
-    return decoded
   }
 
-  public func set<Value>(_ value: Value, for key: SharedKey<Value>) {
-    guard let data = try? JSONEncoder().encode(value) else { return }
-    storage(for: key).setData(data, forKey: key.name)
+  /// The value, or the key's default when the value is genuinely absent or undecodable. A storage
+  /// failure stays a failure, so a locked keychain is never mistaken for an empty one.
+  public func result<Value>(_ key: SharedKey<Value>) -> Result<Value, StorageFailure> {
+    switch read(key) {
+    case .value(let value): .success(value)
+    case .missing, .undecodable: .success(key.defaultValue)
+    case .failure(let failure): .failure(failure)
+    }
   }
 
-  public func reset<Value>(_ key: SharedKey<Value>) {
-    storage(for: key).removeValue(forKey: key.name)
+  @discardableResult
+  public func write<Value>(_ value: Value, for key: SharedKey<Value>) -> StorageWrite {
+    guard let data = try? JSONEncoder().encode(value) else {
+      return .failure(.encoding)
+    }
+    return storage(for: key).write(data, for: key.name)
+  }
+
+  @discardableResult
+  public func delete<Value>(_ key: SharedKey<Value>) -> StorageWrite {
+    storage(for: key).delete(key.name)
   }
 
   private func storage<Value>(for key: SharedKey<Value>) -> any KeyValueStorage {
