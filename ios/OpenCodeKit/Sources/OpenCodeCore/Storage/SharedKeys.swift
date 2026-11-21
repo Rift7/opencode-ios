@@ -2,7 +2,7 @@ import Foundation
 
 /// Where a shared value lives. Credentials and paired servers belong in the keychain; preferences
 /// belong in user defaults.
-public enum SharedStorage: Sendable {
+public enum SharedStorage: Equatable, Sendable {
   case userDefaults
   case keychain
 }

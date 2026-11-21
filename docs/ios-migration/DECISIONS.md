@@ -163,3 +163,70 @@ service is touched.
 iPhone only for this migration. `TARGETED_DEVICE_FAMILY = 1`; no iPad layout, multitasking or size-class work
 is planned until the product requirements ask for it.
 
+### D-17 Layout tokens — spacing and radius carried from current `dev`
+`OpenCodeSpacing` and `OpenCodeRadius` hold plain point values; `OpenCodeRadius.clamp(_:height:)` keeps an
+animated corner at or below half its height.
+
+- Source of the values: `core/src/main/kotlin/ai/opencode/core/ui/OpenCodeShapes.kt` at `dev = 7358160e`
+  (last changed `f79a895e`, 2026-11-14). Freshness gate: no later commit changed the grid or the radius scale,
+  and the parity corpus records no competing iOS table, so the values are applicable rather than superseded.
+- Not a port: the recovered iOS dossier has no radius or spacing table in this repository, so these are native
+  point tokens. They are reviewable values, covered by tests, not a parity claim.
+- Spacing stays a flat grid (`s1`…`s32` plus `screenHorizontal`, `stack`, `group`) and radii stay small
+  (`4…16`), so no view invents a value and no capsule appears by accident.
+
+### D-18 Motion — a vocabulary, not decoration
+`OpenCodeMotionRole` keeps the fourteen role names from current `dev`
+(`core/src/main/kotlin/ai/opencode/core/motion/MotionRole.kt`, last changed `583487e7`, 2026-11-18) and resolves
+one curve per phase: a spring, an ease-out or an ease-in-out. Numbers come from `MotionConstants.kt`
+(`cd3cbffa`, 2026-11-18). Reduce Motion collapses every role to one 0.20 s ease-in-out cross-fade
+(`OpenCodeMotionRole.curve(phase:reduceMotion:)`), and `OpenCodeMotionReduce` neutralises offset, scale, blur
+and rotation so only opacity changes — the audited rule that Reduce Motion drops travel but never cuts.
+
+- Native adaptation, recorded: SwiftUI's `.spring(duration:bounce:)` treats `duration` as a perceptual
+  duration, while the Kotlin/Compose side derives `ω = 2π / duration`. Role names, phase pairs and bounce
+  values are carried over; exact curve shape is not claimed to match Android frame for frame.
+- P3 adds no animation. This is data plus a policy; a screen that uses a role owes the PR an answer to "how
+  often will someone see this", per `ios/AGENTS.md`.
+- Gate: `MotionTests` (every role and phase resolves, exits shorter where the role has both, reduce motion
+  collapses to one curve, pose reduction, stagger cap).
+
+### D-19 Haptics — one vocabulary, inert by default in tests
+`Haptic` keeps the eleven names from current `dev` (`core/.../haptics/HapticsClient.kt`, last changed
+`f79a895e`, 2026-11-14) and maps each to platform-neutral `HapticFeedback`. `HapticsClient` is a
+`DependencyKey` with `play` and `prepare` closures, matching the Kotlin client's pair.
+
+- Live value: UIKit `UIImpactFeedbackGenerator`, `UISelectionFeedbackGenerator` and
+  `UINotificationFeedbackGenerator`, guarded by `applicationState == .active` so a background effect is silent.
+  The generators are main-actor bound, so the client hops to the main actor when a caller is elsewhere and runs
+  synchronously when it is already there; there is no `@unchecked Sendable` or `nonisolated(unsafe)` here.
+- Test value: `HapticsClient.inert` — empty closures. A test that forgets to override reaches nothing, and
+  `DependencyIsolationTests` fails a dependency key that omits a test value.
+- UIKit exists only under `#if canImport(UIKit)`, so the host `swift test` build resolves the inert client and
+  the simulator build compiles the live one.
+- Unverified: whether the feels are right on hardware. No Taptic Engine exists in the simulator, and no device
+  run was performed. Reported as unverified in `STATUS.md`, never as passed.
+
+### D-20 Store semantics are verified on representative compositions
+The four migration gates (ordering, cancellation identity, child-first `ifLet`, presented-child cancellation
+on dismissal) are tested with small reducers written for the test target, not by porting TCA's own suite and
+not by translating the Kotlin store.
+
+- Why: no product feature reducer exists yet in P3, so a test over a representative shape is the honest gate.
+  Feature phases add their own exhaustive tests; these four stay as the contract.
+- Semantics adopted with TCA 1.26.2, and measured rather than assumed:
+  - a `presented` action reduces the child first, then the parent, so the parent observes post-child state;
+  - child effects are scoped to a navigation identity, so dismissing the child or changing its identity
+    cancels them;
+  - for non-`Identifiable` child state the identity is the key path, so *replacing* one value with another
+    does not cancel — identity change means `Identifiable` id or enum-case change. This matches the Kotlin
+    store's default `childID = { it::class }`.
+  - `.dismiss` on a non-ephemeral child leaves the state in place; the parent clears it, and clearing it is
+    what cancels the child's work. The tests assert both the cleared state and the silence afterwards.
+  - cancellation ids are path-qualified: `_CancelID` carries the navigation path, so the same local id in two
+    child paths is two registrations. `PathIndexedCancellationTests` holds that with one parent, two children
+    of the same reducer and the local id `"ticker"` in both — cancelling one child leaves the sibling running.
+    Removing the child's `.cancel` makes the test fail with the stopped child's ticks, so the assertion is not
+    vacuous.
+- Rejected: reimplementing reducer composition or a custom `TestStore`, or replacing reducers with view models.
+
