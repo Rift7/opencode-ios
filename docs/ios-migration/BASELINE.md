@@ -57,3 +57,25 @@ $ git ls-remote --heads origin dev refs/heads/ios
 
 If `origin/dev` advances, audit the intervening delta before rebasing or merging it into `ios`; do not
 assume the recorded SHA is still current.
+
+## Phase 4 branch creation
+
+`ios-networking` was created from `origin/ios` after fetching, not from the previous task branch and not
+from `143d8f86`:
+
+```
+$ git fetch origin --prune
+   143d8f86..d0fdf2f5  ios -> origin/ios
+
+$ git merge-base --is-ancestor d0fdf2f5cc3c37b0e0fab6146a49469f0ff86540 origin/ios && echo ok
+ok
+
+$ git switch -c ios-networking origin/ios
+$ git log -1 --oneline
+d0fdf2f5 ios: complete the native core foundation (#2)
+```
+
+The merged tree was then checked for the completed foundation before any file was added: `ios/` exists with
+`OpenCodeKit/Sources/{OpenCodeCore,OpenCodeServer,OpenCodeApp,OpenCodeTestSupport}`, and the package test
+suite passed from that checkout. `origin/dev` was still the audited `7358160e`, so `dev`-derived behaviour in
+Phase 4 was read at the audited commit.

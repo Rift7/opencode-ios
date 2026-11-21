@@ -122,4 +122,6 @@ therefore runs in the app process through a DEBUG-only `-uiTestKeychainProbe` la
 | `xcodebuild … test -only-testing:OpenCodeUITests` | 3 launch smoke tests pass |
 | `xcodebuild … test -only-testing:OpenCodeUITests/KeychainProbeTests` | Keychain add/read/update/remove pass |
 | `swift test --package-path OpenCodeKit` | 75 tests pass (61 core, 14 app) as of Phase 3 |
+| `xcodebuild … test` (Phase 4) | app build succeeds; 2 Swift Testing platform tests; 4 UI tests |
+| `swift test --package-path OpenCodeKit` (Phase 4) | 205 tests pass (125 server, 66 core, 14 app) |
 

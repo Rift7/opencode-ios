@@ -16,12 +16,13 @@ where a migration instruction says so; this file is authoritative for `ios/`.
 | `ios/OpenCode.xcodeproj` | generated; never committed |
 | `ios/OpenCodeKit/` | local Swift package: all logic and its tests |
 | `ios/OpenCodeKit/Sources/OpenCodeCore` | design tokens, motion vocabulary, haptics, logging, dependency clients, storage |
-| `ios/OpenCodeKit/Sources/OpenCodeServer` | server address, transport, wire models, SSE (phase 4) |
+| `ios/OpenCodeKit/Sources/OpenCodeServer` | server address, pairing, wire models, retry, SSE and the client |
 | `ios/OpenCodeKit/Sources/OpenCodeApp` | app reducer and launch configuration |
-| `ios/OpenCodeKit/Sources/OpenCodeTestSupport` | isolated test environment and network guard |
+| `ios/OpenCodeKit/Sources/OpenCodeTestSupport` | isolated test environment, scripted network guard (fixtures, chunks, redirects) |
 | `ios/OpenCode/App/` | app target: entry point, root view, scenes |
 | `ios/OpenCode/{Drawer,Session,Transcript,Composer,Media,Voice,Settings,System}/` | UI areas, filled by their phases |
-| `ios/OpenCodeTests/` | app-hosted unit tests (no TCA dependency) |
+| `ios/OpenCodeTests/` | hostless unit tests (no TCA dependency) |
+| `ios/OpenCode/Info.plist` | app plist: local-network use, ATS local/overlay exceptions |
 | `ios/OpenCodeUITests/` | XCUITest launch smoke tests |
 | `ios/scripts/` | toolchain check, simulator selection, build/test |
 | `docs/ios-migration/` | status, parity, decisions, handoff, toolchain, sanitized audit |

@@ -230,3 +230,75 @@ not by translating the Kotlin store.
     vacuous.
 - Rejected: reimplementing reducer composition or a custom `TestStore`, or replacing reducers with view models.
 
+
+### D-21 Time is a dependency — `ClockClient`
+Retry schedules, the event watchdog and the flush timer read `ClockClient` (monotonic `now` plus an
+injectable `sleep`) instead of calling `Task.sleep` or `Date()`.
+
+- Replaces: nothing; it fills the gap left when P3 shipped `DateClient` (wall clock only).
+- Test values: `ClockClient.testValue` returns immediately without moving time; `.recording()` records every
+  requested wait and advances virtual time; `.gate()` suspends until the test releases each wait. A retry
+  schedule therefore runs in microseconds and is asserted by its recorded waits.
+- Live value: `DispatchTime.uptimeNanoseconds` and `Task.sleep`, so a suspended wait is cancellable and does
+  not drift with wall-clock changes.
+- Source: the audited `Clock` dependency (`core/.../dependencies`), which every retry loop and watchdog
+  resolved; the exact API is native because Kotlin coroutines and Swift tasks differ.
+
+### D-22 The transport seam carries requests, responses and streams
+`HTTPTransport` is now `send(HTTPRequest) -> HTTPResponse` plus `open(HTTPRequest) -> HTTPStream`, replacing
+the completed-`Data`-only seam. `HTTPStream` delivers body chunks as they arrive; an SSE connection is never
+buffered into a completed response and is never replaced by polling.
+
+- **Credential scope is structural.** `HTTPRequest` carries headers and an `Authorization` value bound to its
+  own URL; `HTTPRedirectRule` re-applies them on a same-origin hop and refuses a hop that changes scheme,
+  host or effective port. A 3xx from a policy that rejects redirects is delivered as the response, because
+  that is the audited behaviour for pairing redemption.
+- **Bounded delivery.** `BoundedChannel` (Mutex-guarded, pull-based) is the only buffer between a URLSession
+  delegate and a consumer. A full buffer is an overflow, never a dropped element: the connection ends so the
+  owner reconnects and rehydrates from REST. The same rule covers SSE events (128) and body chunks (64 × ≤16
+  KiB).
+- **Cleartext policy** is enforced twice: ATS in `Info.plist` (local networking plus named overlay domains)
+  and `TransportSecurity` before a byte is sent. Nothing disables certificate validation, and there is no
+  pinned certificate to copy.
+- **Local-network permission** (`NSLocalNetworkUsageDescription`) is required from iOS 14 for a LAN server;
+  it is declared, and the prompt itself is a device-only behaviour that no simulator test can pass.
+- `@unchecked Sendable` appears at four places only, each a `Mutex`-guarded class whose mutation must stay
+  synchronous: `BoundedChannel`, the URLSession redirect guard, the stream receiver and the stream-activity
+  holder. Each carries a one-line reason at the declaration; no `nonisolated(unsafe)` is used.
+- Rejected: a `URLProtocol`-based fixture for redirect integration tests. A custom protocol synthesizes the
+  redirect inside the protocol stack, so the session delegate is never consulted; the redirect decision is
+  therefore tested as a pure rule, and the session wiring stays thin. `PROTOCOL_COVERAGE.md` says so.
+
+### D-23 Event batching adopts ordering and bounds; transcript pressure shedding waits for P8
+`EventBatcher` adopts the audited flush (`75 ms` or 256 pending mutations), delta coalescing, per-session
+order, the non-content flush barrier and the bounded downstream (`128`, overflow ends the connection).
+
+- Not adopted yet: the off-screen delta shedding and the Markdown pre-projection hooks. Both exist to protect
+  a transcript reducer and a Markdown cache; neither exists before P8. Implementing them now would mean
+  guessing what “focused” and “pressure” mean without a consumer.
+- The SSE parser accepts the general frame syntax (CRLF/CR, multi-line data, `event:`/`id:`, comments) rather
+  than the server's current one-line shape, so a framing change upstream cannot corrupt the stream. It keeps
+  the audited 16 MiB frame bound.
+- `EventStreamRunner` owns the reconnect loop (audited `stream` policy: 1 s base, fast for 15 s, then up to
+  5 min) and stops after one 401. The watchdog (4.5 s connect, 45 s idle) is enabled in the app; a caller
+  that owns its own lifetime can disable it.
+
+### D-24 Pairing is parsed without side effects and redeemed explicitly
+`PairingLink` is a value: it has no transport, no client and no callback, so a paste, a share preview or a
+link unfurl cannot spend a one-time code. Redemption is `OpenCodeClient.redeemPairing`, which tries every
+reachable candidate once (`.unsafe`, 15 s, redirects refused, no `Authorization`) and stops at the first
+success.
+
+- Only one candidate reaches the server successfully because the code is single-use; concurrency is bounded
+  by the candidate list.
+- Failure copy is typed (`pairingExpired`, `pairingUnsupported`) rather than a status the UI has to
+  reinterpret; `ServerCopy` supplies the sentence, and tests assert it.
+- Credentials are stored per server entry and applied by origin. Pairing's returned token is never sent to
+  any other candidate or redirect target.
+- Saved-server replacement keeps local settings (`keepingLocalSettings`) and address order is preferred from
+  the code's own list, as the audited model does.
+
+### D-25 P4 has no connection or session UI
+`OpenCodeClient` is reachable as a dependency, but the app's launch states still use the inert probe from
+P2/P3. Wiring the client to the app is P5's change, so this phase cannot accidentally present a half-built
+connection flow.

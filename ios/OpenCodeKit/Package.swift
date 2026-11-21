@@ -46,6 +46,10 @@ let package = Package(
       name: "OpenCodeCoreTests",
       dependencies: ["OpenCodeCore", "OpenCodeServer", "OpenCodeTestSupport"]
     ),
+    .testTarget(
+      name: "OpenCodeServerTests",
+      dependencies: ["OpenCodeServer", "OpenCodeCore", "OpenCodeTestSupport"]
+    ),
   ],
   swiftLanguageModes: [.v6]
 )
