@@ -4,6 +4,9 @@ Status vocabulary: `not started`, `scaffold`, `partial`, `done`. A row is `done`
 is tested, and the test passes. Every claim names a source path; commit SHAs distinguish current `dev` behaviour
 from historical iOS evidence.
 
+Scaffold scope: the app boots into an explicit disconnected, loading or failed state; no server is contacted and
+no session screen exists yet. `done` means the behaviour exists and its test passes in this repository.
+
 Baselines:
 
 - Behaviour: `dev = 7358160e808fb1870eeb20f5da8df832667019d1`.
@@ -14,8 +17,9 @@ Baselines:
 
 | Behaviour | Android source (`dev`) | Recovered iOS source | New path | Status |
 | --- | --- | --- | --- | --- |
-| Process entry, root store, scene phase | `app/src/main/kotlin/ai/opencode/app/OpenCodeApplication.kt`, `MainActivity.kt` | `OpenCode/App/OpenCodeApp.swift` | `ios/OpenCode/App/` | not started |
-| Connection state machine | `app/AppFeature.kt` | `OpenCode/App/AppFeature.swift` | `ios/OpenCodeKit/Sources/OpenCodeApp` | not started |
+| Process entry, root store, scene phase | `app/src/main/kotlin/ai/opencode/app/OpenCodeApplication.kt`, `MainActivity.kt` | `OpenCode/App/OpenCodeApp.swift` | `ios/OpenCode/App/OpenCodeApp.swift` | scaffold |
+| Launch states (disconnected, loading, failed) | `app/AppFeature.kt` (`Connection` enum) | `AppFeature.swift`, `AppView.swift` | `ios/OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift`, `ios/OpenCode/App/RootView.swift` | scaffold |
+| Connection state machine | `app/AppFeature.kt` | `OpenCode/App/AppFeature.swift` | `ios/OpenCodeKit/Sources/OpenCodeApp` | scaffold (probe inert) |
 | Pairing link, saved servers | `app/AppFeaturePairing.kt`, `AppFeatureServers.kt` | `AppFeature+Pairing.swift`, `+Servers.swift` | same | not started |
 | Manual server form, failure report | `app/AppView.kt` | `AppView.swift` | same | not started |
 | QR scanning | `feature/settings/.../servers/PairingScanner.kt` | `Settings/PairingScanner.swift` | same | not started |
@@ -24,13 +28,14 @@ Baselines:
 
 | Behaviour | Android source | Recovered iOS source | New path | Status |
 | --- | --- | --- | --- | --- |
-| Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 | scaffold |
-| Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `swift-dependencies` | scaffold |
+| Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 (exact) | done |
+| Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `ios/OpenCodeKit/Sources/OpenCodeCore/Dependencies` (probe, date, id) | scaffold |
 | Shared keys and storage | `core/.../sharing/{Shared,SharedKeys}.kt` | `Core/SharedKeys.swift`, `Keychain.swift` | `ios/OpenCodeKit/Sources/OpenCodeCore/Storage` | scaffold |
-| Keychain | `core/.../sharing/LiveSharedBytes.kt` | `Core/Keychain.swift` | same | scaffold |
-| Semantic colour tokens | `core/.../ui/{BrandPalette,OpenCodeColors}.kt` | `Core/Theme/Theme.swift` (system colours) | `.../Design/OpenCodeColorTokens.swift` | scaffold |
-| Type tokens | `core/.../ui/OpenCodeTypography.kt` | system text styles | `.../Design/OpenCodeTypeTokens.swift` | scaffold |
-| Logging and redaction | `core/.../log/AppLog.kt` | `Core/AppLog.swift` | `.../Logging/` | scaffold |
+| Keychain | `core/.../sharing/LiveSharedBytes.kt` | `Core/Keychain.swift` | not started (owner-supplied service) | not started |
+| Semantic colour tokens | `core/.../ui/{BrandPalette,OpenCodeColors}.kt` | `Core/Theme/Theme.swift` (system colours) | `.../Design/OpenCodeColorTokens.swift` | done |
+| Type tokens | `core/.../ui/OpenCodeTypography.kt` | system text styles | `.../Design/OpenCodeTypeTokens.swift` | done |
+| Logging and redaction | `core/.../log/AppLog.kt` | `Core/AppLog.swift` | `.../Logging/AppLog.swift` | scaffold |
+| Test isolation and network guard | (test-only `TestNetworkBlock`) | `TestIsolationGuard` | `.../OpenCodeTestSupport` | done |
 | Haptics vocabulary | `core/.../haptics/HapticsClient.kt` | `Core/HapticsClient.swift` | `.../Haptics/` | not started |
 
 ## Server

@@ -1,0 +1,8 @@
+OpenCode.xcodeproj/
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+.build-results/

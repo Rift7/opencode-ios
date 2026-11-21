@@ -60,3 +60,56 @@ The failing build phase is `ComputeTargetDependencyGraph`, so the failure appear
 
 Pinning exact versions keeps the fingerprint set stable: a version bump re-prompts for trust, which is the intended
 signal that new plugin code is being executed.
+
+## Compiler and project notes
+
+Three findings from building the scaffold. Each is reproducible and already worked around; none of them changes
+the architecture.
+
+### `ReducerOf<Self>` fails to expand in the app module
+
+With `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, a public `@Reducer` whose body is declared as
+`some ReducerOf<Self>` fails with:
+
+```
+macro expansion @Reducer:1:1: error: circular reference
+note: while resolving type 'ReducerOf<Self>'
+note: in expansion of macro 'Reducer' on struct 'AppFeature'
+```
+
+Writing the same body as `some Reducer<State, Action>` compiles; the two are equivalent. The reducer now lives
+in the `OpenCodeApp` package target, where either spelling is accepted, and the explicit form is kept.
+
+### A `.run` effect must capture clients, not the reducer
+
+In a nonisolated package target, `return .run { send in await probe.check() }` captures `self` and fails with
+`capture of 'self' with non-Sendable type`. Bind the dependency client to a local (`let probe = probe`) before
+the effect. In the app target the MainActor default hid this; the package target is strict about it.
+
+### An app-hosted unit-test bundle could not link TCA
+
+An `OpenCodeTests` bundle configured with `dependencies: [target: OpenCode]` and the
+`ComposableArchitecture` product built `ComposableArchitecturedynamic-product` and failed:
+
+```
+ld: symbol(s) not found for architecture arm64
+  "(extension in SwiftNavigation):SwiftUI.Text.init(SwiftNavigation.TextState) -> SwiftUI.Text",
+  referenced from: … in ComposableArchitecture.o
+```
+
+The Xcode unit-test target is now hostless and TCA-free; reducer tests run in the package, where the same code
+links and passes. If a future phase needs app-hosted UI tests with TCA, resolve this at the project level
+(explicit `SwiftNavigation`/`SwiftUINavigation` products, or a different test host) rather than by weakening
+concurrency or test coverage.
+
+## Verified results
+
+| Command | Result |
+| --- | --- |
+| `ios/scripts/env.sh` | Xcode 27.2, Swift 6.4.2, iOS simulator SDK 27.2 |
+| `xcodebuild -list` | scheme `OpenCode` present (plus package schemes) |
+| `xcodebuild … build` | succeeds for `OpenCode` on the derived simulator (iPhone 18 Pro Max, iOS 27.2) |
+| `xcodebuild … test -only-testing:OpenCodeTests` | 3 tests pass |
+| `xcodebuild … test -only-testing:OpenCodeUITests` | 3 launch smoke tests pass |
+| `swift test --package-path OpenCodeKit` | 25 tests pass (18 core, 7 app) |
+

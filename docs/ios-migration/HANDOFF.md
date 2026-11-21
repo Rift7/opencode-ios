@@ -19,9 +19,10 @@ The Android tree is not modified by this work.
 
 ## Branches
 
-- `ios` — integration branch, base `7358160e808fb1870eeb20f5da8df832667019d1`.
-- Task branches from `ios` (for example `ios-foundation`, `ios-networking`) are pushed to the fork and opened as
-  **draft** PRs into `ios`. Nothing is merged, released or distributed from here.
+- `ios` — integration branch, base `7358160e808fb1870eeb20f5da8df832667019d1` (see `BASELINE.md`).
+- `ios-foundation` — the scaffold: project generation, package targets, launch states, test isolation.
+- Later task branches from `ios` (`ios-networking`, `ios-shell`, …) are pushed to the fork and opened as **draft**
+  PRs into `ios`. Nothing is merged, released or distributed from here.
 
 ## Prerequisites
 
@@ -54,6 +55,17 @@ Package-only tests, without the app target:
 ```sh
 swift test --package-path ios/OpenCodeKit
 ```
+
+## Where tests run
+
+| Suite | Location | Runner |
+| --- | --- | --- |
+| Core logic (tokens, storage, redaction, endpoint, network guard, isolation) | `ios/OpenCodeKit/Tests/OpenCodeCoreTests` | `swift test` on the host |
+| App reducer and launch configuration | `ios/OpenCodeKit/Tests/OpenCodeAppTests` | `swift test` on the host |
+| Platform checks (UserDefaults, endpoint encoding, launch mapping) | `ios/OpenCodeTests` | `xcodebuild test` on the simulator |
+| Launch smoke states | `ios/OpenCodeUITests` | `xcodebuild test` on the simulator |
+
+The Xcode unit target is hostless and does not link TCA; see `TOOLCHAIN.md` for why.
 
 ## Test conventions
 
