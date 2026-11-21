@@ -19,7 +19,7 @@ See `BASELINE.md` for the branch-creation evidence and the refresh check.
 | --- | --- | --- |
 | 1 | Read-only reconstruction audit | complete (`docs/ios-migration/audit/`) |
 | 2 | `ios` branch, baseline record, scaffold and gate | complete on `ios-foundation`; PR #1 open, **not merged** |
-| 3 | Core: store, dependencies, sharing, tokens, logging, haptics | **partial** — see `PHASES.md` for the itemised checklist |
+| 3 | Core: store, dependencies, sharing, tokens, logging, haptics | **partial** — radii/spacing, motion, haptics and the store-semantics tests remain; see `PHASES.md` |
 | 4 | Server: transport, retry, models, SSE, pairing | not started (address validation and an inert transport seam only) |
 | 5 | App shell: launch, connection, pairing, reconnect | scaffold only |
 | 6 | Home, drawer, projects, Catch Up, What's New | not started |
@@ -47,6 +47,7 @@ iPhone 18 Pro Max on iOS 27.2, derived from installed devices (`OPENCODE_SIM_NAM
 | Transport boundary | `OpenCodeCoreTests/TransportBoundaryTests` | unoverridden test dependency throws `blocked`; no source owns a `URLSession` |
 | App unit tests | `xcodebuild … -only-testing:OpenCodeTests test` | 3 tests pass |
 | Launch smoke | `xcodebuild … -only-testing:OpenCodeUITests test` | 3 tests pass (disconnected, failed, loading) |
+| Keychain round-trip | `… -only-testing:OpenCodeUITests/KeychainProbeTests` | add, read, update, remove pass in the app process |
 | Previews | `#Preview` in `RootView.swift` | compiles with the app target; dependency context is inert |
 | Full gate | `ios/scripts/verify.sh` | passes; logs in `ios/.build-results/` |
 
@@ -67,7 +68,8 @@ are Phase 3 items (`PHASES.md`).
 ## Next
 
 1. **Merge PR #1 into `ios`** (owner), then branch the next task from the updated `ios`.
-2. Finish Phase 3 on that branch: radii/spacing tokens, motion vocabulary, haptics client, Keychain and shared
-   keys (needs D-7), and the store-semantics tests (cancellation, child-first `ifLet`, presentation dismissal).
+2. Finish Phase 3 on that branch: radii/spacing tokens, motion vocabulary, haptics client, and the
+   store-semantics tests (cancellation, child-first `ifLet`, presentation dismissal). Keychain and shared-key
+   defaults are implemented and tested.
 3. Only then `ios-networking` (Phase 4): transport, retry, wire models, SSE, pairing, with fixtures and opt-in
    live checks.

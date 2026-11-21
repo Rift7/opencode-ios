@@ -99,6 +99,8 @@ one-line reason at the declaration and a `DECISIONS.md` entry.
   errors use the same rule. Tests assert the English text.
 - Reuse the recovered accessibility identifiers and copy where they still describe the UI
   (`docs/ios-migration/audit/FEATURE_MAP.md`).
-- Log through `AppLog`, which redacts addresses, emails and long tokens. Log identifiers, counts,
-  lengths, statuses and durations only.
+- Log through `AppLog`'s structured records. Public fields are numbers and booleans only (counts, statuses,
+  durations, flags); free text goes through `LogPrivateField` and is emitted with private visibility. There is no
+  API that publishes an arbitrary string, so a call site cannot leak a credential, path, address or message body
+  into the public log by accident.
 - Do not bundle fonts. Provider icons and wordmarks arrive with their own phase and their notices.

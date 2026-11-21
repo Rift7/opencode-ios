@@ -104,6 +104,13 @@ links and passes. If a future phase needs app-hosted UI tests with TCA, resolve 
 (explicit `SwiftNavigation`/`SwiftUINavigation` products, or a different test host) rather than by weakening
 concurrency or test coverage.
 
+### A hostless unit-test bundle cannot reach the Keychain
+
+`SecItemAdd` in `OpenCodeTests` returns `-34018` (`errSecMissingEntitlement`): hostless bundles carry no keychain
+entitlement, and an app-hosted bundle cannot link TCA in this project (previous note). The real round trip
+therefore runs in the app process through a DEBUG-only `-uiTestKeychainProbe` launch argument, asserted by
+`OpenCodeUITests/KeychainProbeTests`. Unit-level storage logic stays in the package with in-memory doubles.
+
 ## Verified results
 
 | Command | Result |
@@ -113,5 +120,6 @@ concurrency or test coverage.
 | `xcodebuild … build` | succeeds for `OpenCode` on the derived simulator (iPhone 18 Pro Max, iOS 27.2) |
 | `xcodebuild … test -only-testing:OpenCodeTests` | 3 tests pass |
 | `xcodebuild … test -only-testing:OpenCodeUITests` | 3 launch smoke tests pass |
-| `swift test --package-path OpenCodeKit` | 25 tests pass (18 core, 7 app) |
+| `xcodebuild … test -only-testing:OpenCodeUITests/KeychainProbeTests` | Keychain add/read/update/remove pass |
+| `swift test --package-path OpenCodeKit` | 37 tests pass (30 core, 7 app) |
 

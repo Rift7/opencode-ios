@@ -127,25 +127,3 @@ struct ServerEndpointTests {
     #expect(endpoint.displayAddress == "https://host.example")
   }
 }
-
-@Suite("Logging")
-struct LoggingTests {
-  @Test("addresses, emails and long tokens are redacted")
-  func redactsSensitiveValues() {
-    let message = "GET https://wire.invalid:4110/api/info token=abcdefghijklmnopqrstuvwxyz012345 user@host.example"
-
-    let redacted = LogRedactor.redact(message)
-
-    #expect(!redacted.contains("wire.invalid"))
-    #expect(!redacted.contains("abcdefghijklmnopqrstuvwxyz012345"))
-    #expect(!redacted.contains("user@host.example"))
-    #expect(redacted.contains("GET"))
-  }
-
-  @Test("counts, statuses and durations survive redaction")
-  func keepsSafeValues() {
-    let message = "sent 1 message, 200, 42ms, 3 attachments"
-
-    #expect(LogRedactor.redact(message) == message)
-  }
-}

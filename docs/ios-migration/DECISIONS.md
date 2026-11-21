@@ -3,13 +3,38 @@
 Recorded decisions for the native rebuild. Each decision names what it replaces so the audit evidence stays
 distinguishable from a current choice.
 
+## Two ID namespaces
+
+Two different documents numbered their decisions `D-1…`, so a bare "D-7" has been ambiguous. They are now kept
+apart:
+
+- **`P-n`** — the *plan* decisions in `audit/PLAN.md` ("Decisions needed before or during P3"). These describe
+  open product/platform questions. That file prints them as `D-1…D-9`; they are cited here as `P-1…P-9` to avoid
+  the collision with the implementation series.
+- **`D-n`** — the *implementation* decisions in this file. These record what the code does now.
+
+| Plan ID | Subject (audit) | Resolved by | Still open |
+| --- | --- | --- | --- |
+| `P-1` | Typography and colour system | D-1 (typography), D-2 (colour) | — |
+| `P-2` | Transcript motion | — | **open** |
+| `P-3` | Composer text input | — | **open** |
+| `P-4` | Photo picking | — | **open** |
+| `P-5` | Glass | — | **open** |
+| `P-6` | Branch location | D-3 | — |
+| `P-7` | Bundle id, team, App Group, Keychain service | D-8 (historical values are evidence), D-15 (service configurable) | production naming before real credentials |
+| `P-8` | iPad | D-16 (out of scope) | — |
+| `P-9` | Push notifications | — | **open** (default: Experimental, off) |
+
+Later documents cite `P-n` for plan questions and `D-n` for implemented choices. If a new plan decision is
+needed, continue the `P-` series; if an implementation choice changes, supersede it with a new `D-`.
+
 ## Owner-set direction, and the decisions that follow it
 
 ### D-1 Typography — system fonts only
 Interface text uses the system SF font; code, logs, tool output and other monospaced content use system SF Mono.
 No font files are bundled. Berkeley Mono, Inter and OpenMono are not migration defaults.
 
-- Replaces: the audit's open question D-1, and the Android baseline's Inter + OpenMono desktop typography.
+- Replaces: plan question `P-1`, and the Android baseline's Inter + OpenMono desktop typography.
 - Evidence kept: the recovered iOS dossier records SF for UI and SF Mono for code; Berkeley Mono appears only in
   onboarding and no licence text is recoverable.
 - Implementation: `OpenCodeTypeTokens` stores sizes/weights/design as plain data and exposes `Font` accessors
@@ -119,3 +144,18 @@ Every request goes through the `HTTPTransport` dependency (`OpenCodeCore/Transpo
 - The test value always throws `TransportError.blocked`, and a test resolves it without an override, so a test
   context that forgets a dependency cannot reach the network.
 - This is a boundary, not a mock library: phase 4 adds fixture responses by overriding the dependency.
+### D-15 Keychain service is application-defined and configurable
+`KeychainStorage(service:)` takes the service name from its caller; nothing is hard-coded. Tests and the
+in-app probe always use a unique service name, so runs cannot see each other's items and no real application
+service is touched.
+
+- A Keychain service is an application-defined string, not an Apple-issued credential, so it does not block
+  implementation. `SharedKeys` ships one keychain-backed key (`paired-servers`) to prove the path.
+- Production identifiers (bundle id, App Group, Keychain service) must be settled **before real user
+  credentials are stored**. Until then the app is exercised with disposable services only.
+- No Apple account setting, signing identity or entitlement is changed by this decision.
+
+### D-16 iPad is out of scope
+iPhone only for this migration. `TARGETED_DEVICE_FAMILY = 1`; no iPad layout, multitasking or size-class work
+is planned until the product requirements ask for it.
+

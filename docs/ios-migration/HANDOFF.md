@@ -65,8 +65,10 @@ swift test --package-path ios/OpenCodeKit
 | App reducer and launch configuration | `ios/OpenCodeKit/Tests/OpenCodeAppTests` | `swift test` on the host |
 | Platform checks (UserDefaults, endpoint encoding, launch mapping) | `ios/OpenCodeTests` | `xcodebuild test` on the simulator |
 | Launch smoke states | `ios/OpenCodeUITests` | `xcodebuild test` on the simulator |
+| Keychain round-trip | `ios/OpenCodeUITests/KeychainProbeTests` | `xcodebuild test`; the hostless unit bundle has no keychain entitlement, so the probe runs in the app process behind `-uiTestKeychainProbe` |
 
-The Xcode unit target is hostless and does not link TCA; see `TOOLCHAIN.md` for why.
+The Xcode unit target is hostless and does not link TCA; see `TOOLCHAIN.md` for why, and for the keychain
+entitlement note that puts the round-trip in the UI tests.
 
 ## Test conventions
 

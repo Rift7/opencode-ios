@@ -32,7 +32,7 @@ semantics, sharing, motion or haptics. P4 (networking) is therefore **not** the 
 | Requirement (audit `PLAN.md` P3) | Status | Evidence or gap |
 | --- | --- | --- |
 | Dependency clients as `DependencyKey`s with inert test values | partial | `ConnectionProbe`, `DateClient`, `UuidClient` (`OpenCodeCore/Dependencies`), `HTTPTransport` (inert) |
-| `Shared` storage, including Keychain | partial | `UserDefaultsStorage`, `InMemoryStorage`; **Keychain missing** (blocked on the owner-supplied service name, D-7) |
+| `Shared` storage, including Keychain | done | `UserDefaultsStorage`, `InMemoryStorage`, `KeychainStorage(service:)`; `SharedStore` + `SharedKeys` |
 | Design tokens: colour | done | `Design/OpenCodeColorTokens.swift`; every token resolves and body/link text clears WCAG AA in both appearances |
 | Design tokens: type | done | `Design/OpenCodeTypeTokens.swift`; system font, system monospaced for code/logs |
 | Design tokens: radii, spacing | **missing** | no `OpenCodeRadius`/`OpenCodeSpacing` equivalent yet |
@@ -43,8 +43,8 @@ semantics, sharing, motion or haptics. P4 (networking) is therefore **not** the 
 | Gate: path-indexed cancellation | **missing** | no test; TCA linkage is not a test |
 | Gate: `ifLet` child-first ordering | **missing** | no test |
 | Gate: presented-child cancellation on dismissal | **missing** | no test |
-| Gate: Keychain round-trip | **missing** | blocked on D-7 |
-| Gate: every shared key's default | **missing** | no shared keys defined yet |
+| Gate: Keychain round-trip | done | `KeychainProbeTests` runs it in the app process (a hostless test bundle has no keychain entitlement) |
+| Gate: every shared key's default | done | `SharedStoreTests` asserts each of the four foundation keys and its default |
 | Gate: redaction | done | as above |
 
 ## The categories named in the handoff
@@ -57,8 +57,11 @@ semantics, sharing, motion or haptics. P4 (networking) is therefore **not** the 
   tested yet.
 - **Navigation.** The app currently switches between four launch states. The App → Home → Session store
   topology, `@Presents` children and page stack belong to P5–P7 and are not started.
-- **Platform decisions.** D-1…D-13 are recorded. Still open and blocking later work: D-2 (transcript motion),
-  D-3 (text input), D-4 (photo picking), D-5 (glass), D-7 (identifiers/Keychain service), D-9 (push).
+- **Platform decisions.** Implementation decisions D-1…D-16 are recorded. Plan questions still open: `P-2`
+  (transcript motion), `P-3` (text input), `P-4` (photo picking), `P-5` (glass), `P-9` (push). `P-7`
+  (identifiers) is partially resolved: the Keychain service is application-defined and configurable (D-15), and
+  production naming must be settled before real credentials are stored — it is not a blocker for core work.
+  `DECISIONS.md` maps the two ID namespaces.
 - **Previews.** Preview support is enabled, two launch-state previews exist, and the dependency context under
   Xcode previews resolves inert values, so a preview cannot reach the network.
 
@@ -66,9 +69,9 @@ semantics, sharing, motion or haptics. P4 (networking) is therefore **not** the 
 
 1. **PR #1 merged into `ios` by the owner.** The next task branch starts from the updated `ios`, not from the
    documentation-only commit, and must not recreate the scaffold.
-2. **D-7 (owner-supplied identifiers).** The Keychain service name and bundle identifiers are needed for the
-   Keychain and shared-key items; those two gate items cannot be finished without them.
-3. Nothing else blocks: radii/spacing tokens, motion vocabulary, haptics, and the TCA semantics tests
-   (cancellation, child-first `ifLet`, presentation dismissal) can be built and verified without owner input.
+2. Nothing else blocks. Radii/spacing tokens, motion vocabulary, haptics and the TCA semantics tests
+   (cancellation, child-first `ifLet`, presentation dismissal) need no owner input. Production identifiers
+   (bundle id, App Group, Keychain service) must be settled before real user credentials are stored, but they do
+   not block disposing of test data under unique service names.
 
 P4 (networking) starts only after the P3 gate is green, or after the owner explicitly reorders the phases.

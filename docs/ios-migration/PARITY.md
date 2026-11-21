@@ -35,11 +35,11 @@ Baselines:
 | --- | --- | --- | --- | --- |
 | Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 (exact) | scaffold — linked only; ordering, cancellation and presentation tests are outstanding |
 | Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `ios/OpenCodeKit/Sources/OpenCodeCore/{Dependencies,Transport}` (probe, date, id, HTTP transport) | scaffold |
-| Shared keys and storage | `core/.../sharing/{Shared,SharedKeys}.kt` | `Core/SharedKeys.swift`, `Keychain.swift` | `ios/OpenCodeKit/Sources/OpenCodeCore/Storage` | scaffold |
-| Keychain | `core/.../sharing/LiveSharedBytes.kt` | `Core/Keychain.swift` | not started (owner-supplied service) | not started |
+| Shared keys and storage | `core/.../sharing/{Shared,SharedKeys}.kt` | `Core/SharedKeys.swift`, `Keychain.swift` | `.../Storage/{KeyValueStorage,SharedKeys}.swift` | done — four foundation keys, defaults and round-trip tested |
+| Keychain | `core/.../sharing/LiveSharedBytes.kt` | `Core/Keychain.swift` | `.../Storage/KeychainStorage.swift` | done — round-trip verified in the app process (`KeychainProbeTests`) |
 | Semantic colour tokens | `core/.../ui/{BrandPalette,OpenCodeColors}.kt` | `Core/Theme/Theme.swift` (system colours) | `.../Design/OpenCodeColorTokens.swift` | done |
 | Type tokens | `core/.../ui/OpenCodeTypography.kt` | system text styles | `.../Design/OpenCodeTypeTokens.swift` | done |
-| Logging and redaction | `core/.../log/AppLog.kt` | `Core/AppLog.swift` | `.../Logging/AppLog.swift` | scaffold |
+| Logging | `core/.../log/AppLog.kt` | `Core/AppLog.swift` | `.../Logging/AppLog.swift` | scaffold — structured public fields only (numbers/booleans), free text private; not the full Android journal |
 | Test isolation and network guard | (test-only `TestNetworkBlock`) | `TestIsolationGuard` | `.../OpenCodeTestSupport` | done — isolated storage, network guard, and a transport seam whose test value blocks |
 | Preview states | n/a | SwiftUI previews | `ios/OpenCode/App/RootView.swift` (`#Preview` × 2) | scaffold |
 | Haptics vocabulary | `core/.../haptics/HapticsClient.kt` | `Core/HapticsClient.swift` | `.../Haptics/` | not started |
@@ -78,7 +78,7 @@ Recorded here so they are not mistaken for missing work.
 | Item | Android behaviour | New iOS decision |
 | --- | --- | --- |
 | Typography | Inter + OpenMono, desktop scale | SF + SF Mono (D-1) |
-| Transcript motion | bottom-anchored `LazyColumn`, no follower | pending native decision (D-6 in the audit plan) |
+| Transcript motion | bottom-anchored `LazyColumn`, no follower | pending native decision (`P-2`) |
 | Photo picking | system picker | system picker proposed; no in-app photo sheet |
 | Autocomplete | list, next-frame filtering | SwiftUI-native list |
 | Quotes | quote cards | pending product decision |
