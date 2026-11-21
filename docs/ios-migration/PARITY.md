@@ -4,6 +4,14 @@ Status vocabulary: `not started`, `scaffold`, `partial`, `done`. A row is `done`
 is tested, and the test passes. Every claim names a source path; commit SHAs distinguish current `dev` behaviour
 from historical iOS evidence.
 
+Scaffold scope: the app boots into an explicit disconnected, loading or failed state; no server is contacted and
+no session screen exists yet.
+
+`done` means the behaviour exists **and** a test in this repository demonstrates it. Linking a library is not a
+demonstrated behaviour: `ComposableArchitecture` is linked, but the reconstructed reducer ordering, cancellation
+identity and presentation semantics are not ported or tested, so those rows stay `scaffold`. Phase mapping and the
+remaining P3 work list are in `PHASES.md`.
+
 Baselines:
 
 - Behaviour: `dev = 7358160e808fb1870eeb20f5da8df832667019d1`.
@@ -14,8 +22,9 @@ Baselines:
 
 | Behaviour | Android source (`dev`) | Recovered iOS source | New path | Status |
 | --- | --- | --- | --- | --- |
-| Process entry, root store, scene phase | `app/src/main/kotlin/ai/opencode/app/OpenCodeApplication.kt`, `MainActivity.kt` | `OpenCode/App/OpenCodeApp.swift` | `ios/OpenCode/App/` | not started |
-| Connection state machine | `app/AppFeature.kt` | `OpenCode/App/AppFeature.swift` | `ios/OpenCodeKit/Sources/OpenCodeApp` | not started |
+| Process entry, root store, scene phase | `app/src/main/kotlin/ai/opencode/app/OpenCodeApplication.kt`, `MainActivity.kt` | `OpenCode/App/OpenCodeApp.swift` | `ios/OpenCode/App/OpenCodeApp.swift` | scaffold |
+| Launch states (disconnected, loading, failed) | `app/AppFeature.kt` (`Connection` enum) | `AppFeature.swift`, `AppView.swift` | `ios/OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift`, `ios/OpenCode/App/RootView.swift` | scaffold |
+| Connection state machine | `app/AppFeature.kt` | `OpenCode/App/AppFeature.swift` | `ios/OpenCodeKit/Sources/OpenCodeApp` | scaffold (probe inert) |
 | Pairing link, saved servers | `app/AppFeaturePairing.kt`, `AppFeatureServers.kt` | `AppFeature+Pairing.swift`, `+Servers.swift` | same | not started |
 | Manual server form, failure report | `app/AppView.kt` | `AppView.swift` | same | not started |
 | QR scanning | `feature/settings/.../servers/PairingScanner.kt` | `Settings/PairingScanner.swift` | same | not started |
@@ -24,13 +33,15 @@ Baselines:
 
 | Behaviour | Android source | Recovered iOS source | New path | Status |
 | --- | --- | --- | --- | --- |
-| Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 | scaffold |
-| Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `swift-dependencies` | scaffold |
-| Shared keys and storage | `core/.../sharing/{Shared,SharedKeys}.kt` | `Core/SharedKeys.swift`, `Keychain.swift` | `ios/OpenCodeKit/Sources/OpenCodeCore/Storage` | scaffold |
-| Keychain | `core/.../sharing/LiveSharedBytes.kt` | `Core/Keychain.swift` | same | scaffold |
-| Semantic colour tokens | `core/.../ui/{BrandPalette,OpenCodeColors}.kt` | `Core/Theme/Theme.swift` (system colours) | `.../Design/OpenCodeColorTokens.swift` | scaffold |
-| Type tokens | `core/.../ui/OpenCodeTypography.kt` | system text styles | `.../Design/OpenCodeTypeTokens.swift` | scaffold |
-| Logging and redaction | `core/.../log/AppLog.kt` | `Core/AppLog.swift` | `.../Logging/` | scaffold |
+| Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 (exact) | scaffold — linked only; ordering, cancellation and presentation tests are outstanding |
+| Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `ios/OpenCodeKit/Sources/OpenCodeCore/{Dependencies,Transport}` (probe, date, id, HTTP transport) | scaffold |
+| Shared keys and storage | `core/.../sharing/{Shared,SharedKeys}.kt` | `Core/SharedKeys.swift`, `Keychain.swift` | `.../Storage/{KeyValueStorage,SharedKeys}.swift` | done — four foundation keys, defaults, round-trip and failure propagation tested |
+| Keychain | `core/.../sharing/LiveSharedBytes.kt` | `Core/Keychain.swift` | `.../Storage/{KeyValueStorage,KeychainStorage}.swift` | done — typed `value`/`missing`/`failure` outcomes, failure mapping unit-tested, round-trip verified in the app process |
+| Semantic colour tokens | `core/.../ui/{BrandPalette,OpenCodeColors}.kt` | `Core/Theme/Theme.swift` (system colours) | `.../Design/OpenCodeColorTokens.swift` | done |
+| Type tokens | `core/.../ui/OpenCodeTypography.kt` | system text styles | `.../Design/OpenCodeTypeTokens.swift` | done |
+| Logging | `core/.../log/AppLog.kt` | `Core/AppLog.swift` | `.../Logging/AppLog.swift` | scaffold — structured public fields only (numbers/booleans), free text private; not the full Android journal |
+| Test isolation and network guard | (test-only `TestNetworkBlock`) | `TestIsolationGuard` | `.../OpenCodeTestSupport` | done — isolated storage, network guard, and a transport seam whose test value blocks |
+| Preview states | n/a | SwiftUI previews | `ios/OpenCode/App/RootView.swift` (`#Preview` × 2) | scaffold |
 | Haptics vocabulary | `core/.../haptics/HapticsClient.kt` | `Core/HapticsClient.swift` | `.../Haptics/` | not started |
 
 ## Server
@@ -67,7 +78,7 @@ Recorded here so they are not mistaken for missing work.
 | Item | Android behaviour | New iOS decision |
 | --- | --- | --- |
 | Typography | Inter + OpenMono, desktop scale | SF + SF Mono (D-1) |
-| Transcript motion | bottom-anchored `LazyColumn`, no follower | pending native decision (D-6 in the audit plan) |
+| Transcript motion | bottom-anchored `LazyColumn`, no follower | pending native decision (`P-2`) |
 | Photo picking | system picker | system picker proposed; no in-app photo sheet |
 | Autocomplete | list, next-frame filtering | SwiftUI-native list |
 | Quotes | quote cards | pending product decision |
