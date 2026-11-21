@@ -5,7 +5,12 @@ is tested, and the test passes. Every claim names a source path; commit SHAs dis
 from historical iOS evidence.
 
 Scaffold scope: the app boots into an explicit disconnected, loading or failed state; no server is contacted and
-no session screen exists yet. `done` means the behaviour exists and its test passes in this repository.
+no session screen exists yet.
+
+`done` means the behaviour exists **and** a test in this repository demonstrates it. Linking a library is not a
+demonstrated behaviour: `ComposableArchitecture` is linked, but the reconstructed reducer ordering, cancellation
+identity and presentation semantics are not ported or tested, so those rows stay `scaffold`. Phase mapping and the
+remaining P3 work list are in `PHASES.md`.
 
 Baselines:
 
@@ -28,14 +33,15 @@ Baselines:
 
 | Behaviour | Android source | Recovered iOS source | New path | Status |
 | --- | --- | --- | --- | --- |
-| Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 (exact) | done |
-| Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `ios/OpenCodeKit/Sources/OpenCodeCore/Dependencies` (probe, date, id) | scaffold |
+| Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 (exact) | scaffold — linked only; ordering, cancellation and presentation tests are outstanding |
+| Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `ios/OpenCodeKit/Sources/OpenCodeCore/{Dependencies,Transport}` (probe, date, id, HTTP transport) | scaffold |
 | Shared keys and storage | `core/.../sharing/{Shared,SharedKeys}.kt` | `Core/SharedKeys.swift`, `Keychain.swift` | `ios/OpenCodeKit/Sources/OpenCodeCore/Storage` | scaffold |
 | Keychain | `core/.../sharing/LiveSharedBytes.kt` | `Core/Keychain.swift` | not started (owner-supplied service) | not started |
 | Semantic colour tokens | `core/.../ui/{BrandPalette,OpenCodeColors}.kt` | `Core/Theme/Theme.swift` (system colours) | `.../Design/OpenCodeColorTokens.swift` | done |
 | Type tokens | `core/.../ui/OpenCodeTypography.kt` | system text styles | `.../Design/OpenCodeTypeTokens.swift` | done |
 | Logging and redaction | `core/.../log/AppLog.kt` | `Core/AppLog.swift` | `.../Logging/AppLog.swift` | scaffold |
-| Test isolation and network guard | (test-only `TestNetworkBlock`) | `TestIsolationGuard` | `.../OpenCodeTestSupport` | done |
+| Test isolation and network guard | (test-only `TestNetworkBlock`) | `TestIsolationGuard` | `.../OpenCodeTestSupport` | done — isolated storage, network guard, and a transport seam whose test value blocks |
+| Preview states | n/a | SwiftUI previews | `ios/OpenCode/App/RootView.swift` (`#Preview` × 2) | scaffold |
 | Haptics vocabulary | `core/.../haptics/HapticsClient.kt` | `Core/HapticsClient.swift` | `.../Haptics/` | not started |
 
 ## Server

@@ -21,7 +21,7 @@ The Android tree is not modified by this work.
 
 - `ios` — integration branch, base `7358160e808fb1870eeb20f5da8df832667019d1` (see `BASELINE.md`).
 - `ios-foundation` — the scaffold: project generation, package targets, launch states, test isolation.
-  Draft PR: https://github.com/Rift7/opencode-ios/pull/1 (base `ios`, not merged).
+  Draft PR: https://github.com/Rift7/opencode-ios/pull/1 (base `ios`, **open for review, not merged**).
 - Later task branches from `ios` (`ios-networking`, `ios-shell`, …) are pushed to the fork and opened as **draft**
   PRs into `ios`. Nothing is merged, released or distributed from here.
 
@@ -61,7 +61,7 @@ swift test --package-path ios/OpenCodeKit
 
 | Suite | Location | Runner |
 | --- | --- | --- |
-| Core logic (tokens, storage, redaction, endpoint, network guard, isolation) | `ios/OpenCodeKit/Tests/OpenCodeCoreTests` | `swift test` on the host |
+| Core logic (tokens, storage, redaction, endpoint, network guard, isolation, transport boundary) | `ios/OpenCodeKit/Tests/OpenCodeCoreTests` | `swift test` on the host |
 | App reducer and launch configuration | `ios/OpenCodeKit/Tests/OpenCodeAppTests` | `swift test` on the host |
 | Platform checks (UserDefaults, endpoint encoding, launch mapping) | `ios/OpenCodeTests` | `xcodebuild test` on the simulator |
 | Launch smoke states | `ios/OpenCodeUITests` | `xcodebuild test` on the simulator |
@@ -75,6 +75,12 @@ The Xcode unit target is hostless and does not link TCA; see `TOOLCHAIN.md` for 
   generator. Reaching a real host is a failure; live checks are opt-in behind environment variables that are not
   set by default.
 - Tests assert English copy for user-visible strings.
+
+## Where the work stands
+
+`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P2 is complete on `ios-foundation`;
+**P3 (core) is partial** and is the next implementation phase. P4 (networking) starts only after the P3 gate is
+green or the owner reorders the phases. Do not branch from `ios` until PR #1 is merged.
 
 ## Phase-end checklist
 

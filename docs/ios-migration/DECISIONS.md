@@ -3,7 +3,7 @@
 Recorded decisions for the native rebuild. Each decision names what it replaces so the audit evidence stays
 distinguishable from a current choice.
 
-## Approved by the owner
+## Owner-set direction, and the decisions that follow it
 
 ### D-1 Typography — system fonts only
 Interface text uses the system SF font; code, logs, tool output and other monospaced content use system SF Mono.
@@ -22,6 +22,9 @@ tokens that resolve per appearance, rather than by porting a palette wholesale.
 - Implementation: `OpenCodeColorTokens` exposes semantic names (canvas, raised surface, code band, user bubble,
   text tiers, border, accent, link, signal, danger, warning, success) resolved from light/dark values through
   `Color(uiColor:)` dynamic providers.
+- Provenance of the values: the hex set is the desktop token palette carried in the Android baseline
+  (`BrandPalette`), not a recovered iOS theme. The owner set the direction, not these individual values; they
+  remain reviewable and are covered by contrast tests rather than treated as parity.
 - Gate: contrast tests in both appearances for body text on canvas/surface, and for the link/accent on canvas.
 
 ### D-3 Worktree and branch model
@@ -46,8 +49,9 @@ Xcode 27 refuses to build SPM macro targets until each plugin is trusted. Exact 
 `docs/ios-migration/TOOLCHAIN.md`. This project does **not** disable macro validation globally, does not write
 Xcode defaults, and does not add a global `xcodebuild` flag to any shared configuration.
 
-- Local/CI verification may pass `-skipMacroValidation` on the single `xcodebuild` invocation for this scheme,
-  which is what `ios/scripts/verify.sh` does and what its help text states.
+- Local/CI verification may pass `-skipMacroValidation` on the `xcodebuild` invocations for this scheme.
+  `ios/scripts/test.sh` adds it to its `build` and `test` commands only (two invocations, with a comment stating
+  the scope); `ios/scripts/verify.sh` delegates to that script, and `--package-only` runs no `xcodebuild`.
 - Preferred on a developer machine: accept Xcode's per-plugin trust prompt once.
 
 ### D-6 Default actor isolation
@@ -104,3 +108,14 @@ leaving view code free to use SwiftUI.
 The first scaffold defines its copy as literals inside the four launch views, because there is no screen yet to
 own resources and no translation pipeline in this phase. The first feature phase moves user-visible text into
 string catalogs before adding more screens. Protocol constants, identifiers and log messages stay literals.
+
+### D-14 HTTP through one dependency seam
+Every request goes through the `HTTPTransport` dependency (`OpenCodeCore/Transport`). Features never create a
+`URLSession`; a source test fails if any file outside the transport and the test-only guard mentions
+`URLSession(`, and no file may use `URLSession.shared`.
+
+- The live value is currently inert (`TransportError.notConfigured`) because the client does not exist yet. The
+  networking phase replaces it in this one file.
+- The test value always throws `TransportError.blocked`, and a test resolves it without an override, so a test
+  context that forgets a dependency cannot reach the network.
+- This is a boundary, not a mock library: phase 4 adds fixture responses by overriding the dependency.

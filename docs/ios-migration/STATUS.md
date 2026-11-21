@@ -18,9 +18,9 @@ See `BASELINE.md` for the branch-creation evidence and the refresh check.
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | Read-only reconstruction audit | complete (`docs/ios-migration/audit/`) |
-| 2 | `ios` branch, baseline record, scaffold and gate | complete on `ios-foundation` |
-| 3 | Core: store, dependencies, sharing, tokens, logging, haptics | partial (tokens, logging, storage, clock/id/probe clients) |
-| 4 | Server: transport, retry, models, SSE, pairing | not started (endpoint validation only) |
+| 2 | `ios` branch, baseline record, scaffold and gate | complete on `ios-foundation`; PR #1 open, **not merged** |
+| 3 | Core: store, dependencies, sharing, tokens, logging, haptics | **partial** — see `PHASES.md` for the itemised checklist |
+| 4 | Server: transport, retry, models, SSE, pairing | not started (address validation and an inert transport seam only) |
 | 5 | App shell: launch, connection, pairing, reconnect | scaffold only |
 | 6 | Home, drawer, projects, Catch Up, What's New | not started |
 | 7 | Session, subagents, background work, request review | not started |
@@ -43,13 +43,19 @@ iPhone 18 Pro Max on iOS 27.2, derived from installed devices (`OPENCODE_SIM_NAM
 | Scheme discoverable | `xcodebuild -project OpenCode.xcodeproj -list` | `OpenCode` present (plus package schemes) |
 | Dependencies resolve | `xcodebuild … -resolvePackageDependencies` | TCA 1.26.2 and transitive pins resolved |
 | Simulator build | `xcodebuild … -destination <derived> -skipMacroValidation build` | `BUILD SUCCEEDED` |
-| Dependency isolation | `swift test --package-path OpenCodeKit` | isolated environments, deterministic ids, network guard, tokens, endpoint |
+| Dependency isolation | `swift test --package-path OpenCodeKit` | isolated environments, deterministic ids, network guard, transport boundary |
+| Transport boundary | `OpenCodeCoreTests/TransportBoundaryTests` | unoverridden test dependency throws `blocked`; no source owns a `URLSession` |
 | App unit tests | `xcodebuild … -only-testing:OpenCodeTests test` | 3 tests pass |
 | Launch smoke | `xcodebuild … -only-testing:OpenCodeUITests test` | 3 tests pass (disconnected, failed, loading) |
+| Previews | `#Preview` in `RootView.swift` | compiles with the app target; dependency context is inert |
 | Full gate | `ios/scripts/verify.sh` | passes; logs in `ios/.build-results/` |
 
 The scaffold launches into explicit disconnected, loading, failed and connected states. The live connection
 probe is inert (`notConfigured`) and never touches the network, so first launch cannot contact anything.
+
+This phase verified the build, the launch states, tokens, redaction and test isolation. It did **not** verify
+reconstructed reducer ordering, cancellation identity, presentation semantics, sharing, motion or haptics; those
+are Phase 3 items (`PHASES.md`).
 
 ## Not verified
 
@@ -60,5 +66,8 @@ probe is inert (`notConfigured`) and never touches the network, so first launch 
 
 ## Next
 
-1. `ios-networking`: transport, retry, wire models, SSE, pairing, with fixtures and opt-in live checks.
-2. Foundation follow-ups: Keychain storage, shared-key plumbing, haptics vocabulary.
+1. **Merge PR #1 into `ios`** (owner), then branch the next task from the updated `ios`.
+2. Finish Phase 3 on that branch: radii/spacing tokens, motion vocabulary, haptics client, Keychain and shared
+   keys (needs D-7), and the store-semantics tests (cancellation, child-first `ifLet`, presentation dismissal).
+3. Only then `ios-networking` (Phase 4): transport, retry, wire models, SSE, pairing, with fixtures and opt-in
+   live checks.

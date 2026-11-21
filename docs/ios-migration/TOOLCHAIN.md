@@ -52,8 +52,10 @@ The failing build phase is `ComputeTargetDependencyGraph`, so the failure appear
 
 1. **Developer machine (preferred):** build once in Xcode and accept the per-plugin trust prompt. Trust is stored
    per user and per plugin fingerprint.
-2. **Command line or CI, narrowly scoped:** pass `-skipMacroValidation` on the single `xcodebuild` invocation that
-   builds this project's scheme. `ios/scripts/verify.sh` does exactly that, and only that.
+2. **Command line or CI, narrowly scoped:** pass `-skipMacroValidation` on the `xcodebuild` invocations for this
+   project's scheme. `ios/scripts/test.sh` adds it to exactly two commands — its `build` and its `test` — and
+   `ios/scripts/verify.sh` delegates to that script. `--package-only` runs no `xcodebuild` at all, and nothing
+   else in the repository passes the flag.
 3. **Rejected:** `defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES`, any
    `build.xcconfig` or project setting that disables validation, or a wrapper that silently adds the flag to every
    `xcodebuild` call. Those hide the trust decision from the operator and apply repository-wide.

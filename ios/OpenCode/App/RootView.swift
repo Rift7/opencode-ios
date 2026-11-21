@@ -121,3 +121,13 @@ private struct ConnectedView: View {
     .accessibilityIdentifier("root-phase-connected")
   }
 }
+
+#Preview("Disconnected") {
+  RootView(store: Store(initialState: AppFeature.State(phase: .disconnected)) { AppFeature() })
+}
+
+#Preview("Failed") {
+  RootView(store: Store(initialState: AppFeature.State(phase: .failed(.unreachable))) {
+    AppFeature()
+  })
+}
