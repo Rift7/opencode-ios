@@ -23,8 +23,8 @@ The Android tree is not modified by this work.
   Head at Phase 4 start: `d0fdf2f5` (PR #2 merge).
 - `ios-foundation` — the scaffold. Squash-merged into `ios` as `143d8f86` (PR #1, closed).
 - `ios-core` — Phase 3 (tokens, motion, haptics, store gates). Merged into `ios` as `d0fdf2f5` (PR #2).
-- `ios-networking` — Phase 4: transport, retry, models, SSE, pairing, client seam. Draft PR into `ios`
-  (**open for review, not merged**).
+- `ios-networking` — Phase 4: transport, retry, models, SSE, pairing, client seam. Draft PR into `ios`:
+  https://github.com/Rift7/opencode-ios/pull/3 (**open for review, not merged**).
 - Later task branches from `ios` (`ios-shell`, `ios-home`, …) are pushed to the fork and opened as **draft**
   PRs into `ios`. Nothing is merged, released or distributed from here.
 

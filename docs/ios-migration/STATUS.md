@@ -8,7 +8,7 @@
 | Base commit | `7358160e808fb1870eeb20f5da8df832667019d1` (`origin/dev`) |
 | Verified against | audit of 2026-11-21 (`docs/ios-migration/audit/AUDIT.md`) |
 | `ios` head when P4 started | `d0fdf2f5cc3c37b0e0fab6146a49469f0ff86540` (PR #2, core foundation) |
-| P4 branch | `ios-networking`, created from that `ios` head |
+| P4 branch | `ios-networking`, created from that `ios` head (draft PR: `Rift7/opencode-ios#3`) |
 | Worktree | a separate worktree; the Android checkout is untouched |
 
 `git fetch origin` then `git merge-base --is-ancestor d0fdf2f5 origin/ios` confirmed PR #2's merge was in
