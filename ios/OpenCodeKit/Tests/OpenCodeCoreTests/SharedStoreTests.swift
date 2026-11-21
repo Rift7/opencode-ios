@@ -16,6 +16,23 @@ struct SharedStoreTests {
         "return-key-sends", "sidebar-shown", "last-viewed-session", "paired-servers",
       ]
     )
+    #expect(SharedKeys.names.count == Set(SharedKeys.names).count)
+  }
+
+  @Test("every key declares the default a fresh install sees")
+  func defaultsAreDeclared() {
+    #expect(SharedKeys.returnKeySends.defaultValue == false)
+    #expect(SharedKeys.sidebarShown.defaultValue == true)
+    #expect(SharedKeys.lastViewedSession.defaultValue == nil)
+    #expect(SharedKeys.pairedServers.defaultValue == nil)
+  }
+
+  @Test("every key names the storage its value belongs in")
+  func storageRouting() {
+    #expect(SharedKeys.returnKeySends.storage == .userDefaults)
+    #expect(SharedKeys.sidebarShown.storage == .userDefaults)
+    #expect(SharedKeys.lastViewedSession.storage == .userDefaults)
+    #expect(SharedKeys.pairedServers.storage == .keychain)
   }
 
   @Test("an unwritten key reads as missing, and the default is a caller decision")

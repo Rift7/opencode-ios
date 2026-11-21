@@ -15,7 +15,7 @@ where a migration instruction says so; this file is authoritative for `ios/`.
 | `ios/project.yml` | XcodeGen spec — the checked-in source of truth for the project |
 | `ios/OpenCode.xcodeproj` | generated; never committed |
 | `ios/OpenCodeKit/` | local Swift package: all logic and its tests |
-| `ios/OpenCodeKit/Sources/OpenCodeCore` | design tokens, logging, dependency clients, storage |
+| `ios/OpenCodeKit/Sources/OpenCodeCore` | design tokens, motion vocabulary, haptics, logging, dependency clients, storage |
 | `ios/OpenCodeKit/Sources/OpenCodeServer` | server address, transport, wire models, SSE (phase 4) |
 | `ios/OpenCodeKit/Sources/OpenCodeApp` | app reducer and launch configuration |
 | `ios/OpenCodeKit/Sources/OpenCodeTestSupport` | isolated test environment and network guard |
