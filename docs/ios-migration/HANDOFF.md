@@ -21,6 +21,7 @@ The Android tree is not modified by this work.
 
 - `ios` — integration branch, base `7358160e808fb1870eeb20f5da8df832667019d1` (see `BASELINE.md`).
 - `ios-foundation` — the scaffold: project generation, package targets, launch states, test isolation.
+  Draft PR: https://github.com/Rift7/opencode-ios/pull/1 (base `ios`, not merged).
 - Later task branches from `ios` (`ios-networking`, `ios-shell`, …) are pushed to the fork and opened as **draft**
   PRs into `ios`. Nothing is merged, released or distributed from here.
 
