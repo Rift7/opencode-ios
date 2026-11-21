@@ -7,16 +7,17 @@ from historical iOS evidence.
 Scaffold scope: the app boots into an explicit disconnected, loading or failed state; no server is contacted and
 no session screen exists yet.
 
-`done` means the behaviour exists **and** a test in this repository demonstrates it. Linking a library is not a
-demonstrated behaviour: `ComposableArchitecture` is linked, but the reconstructed reducer ordering, cancellation
-identity and presentation semantics are not ported or tested, so those rows stay `scaffold`. Phase mapping and the
-remaining P3 work list are in `PHASES.md`.
+`done` means the behaviour exists **and** a test in this repository demonstrates it. Linking a library is not
+a demonstrated behaviour: `ComposableArchitecture` is linked, and the ordering, cancellation-identity and
+presentation semantics the Kotlin store relies on are now demonstrated by tests over representative
+compositions. Phase mapping and the remaining work list are in `PHASES.md`.
 
 Baselines:
 
 - Behaviour: `dev = 7358160e808fb1870eeb20f5da8df832667019d1`.
 - iOS evidence: parity corpus synced at iOS `01eef583`; screenshots at `d809b1e` and `16b40f7` (October).
-- New code: `ios` branch from the same `dev` SHA.
+- New code: `ios` branch from the same `dev` SHA (`ios` head `143d8f86` when Phase 3 branched; Phase 3
+  work is on `ios-core`).
 
 ## App shell
 
@@ -33,16 +34,18 @@ Baselines:
 
 | Behaviour | Android source | Recovered iOS source | New path | Status |
 | --- | --- | --- | --- | --- |
-| Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 (exact) | scaffold — linked only; ordering, cancellation and presentation tests are outstanding |
-| Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `ios/OpenCodeKit/Sources/OpenCodeCore/{Dependencies,Transport}` (probe, date, id, HTTP transport) | scaffold |
-| Shared keys and storage | `core/.../sharing/{Shared,SharedKeys}.kt` | `Core/SharedKeys.swift`, `Keychain.swift` | `.../Storage/{KeyValueStorage,SharedKeys}.swift` | done — four foundation keys, defaults, round-trip and failure propagation tested |
+| Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 (exact) | done — sibling order, effect order, cancellation identity, child-first `ifLet` and presentation dismissal tested on representative compositions (`OpenCodeAppTests/StoreSemanticsTests.swift`) |
+| Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `ios/OpenCodeKit/Sources/OpenCodeCore/{Dependencies,Transport,Haptics}` (probe, date, id, haptics, HTTP transport) | done — five keys, every test value inert, guarded by `DependencyIsolationTests` |
+| Shared keys and storage | `core/.../sharing/{Shared,SharedKeys}.kt` | `Core/SharedKeys.swift`, `Keychain.swift` | `.../Storage/{KeyValueStorage,SharedKeys}.swift` | done — four foundation keys, defaults, storage routing, round-trip and failure propagation tested |
 | Keychain | `core/.../sharing/LiveSharedBytes.kt` | `Core/Keychain.swift` | `.../Storage/{KeyValueStorage,KeychainStorage}.swift` | done — typed `value`/`missing`/`failure` outcomes, failure mapping unit-tested, round-trip verified in the app process |
 | Semantic colour tokens | `core/.../ui/{BrandPalette,OpenCodeColors}.kt` | `Core/Theme/Theme.swift` (system colours) | `.../Design/OpenCodeColorTokens.swift` | done |
 | Type tokens | `core/.../ui/OpenCodeTypography.kt` | system text styles | `.../Design/OpenCodeTypeTokens.swift` | done |
+| Spacing and radius tokens | `core/.../ui/OpenCodeShapes.kt` (`OpenCodeSpacing`, `OpenCodeRadius`, `OpenCodeShapeGeometry`) | not recoverable — native decision (D-17) | `.../Design/OpenCodeLayoutTokens.swift` | done — grid, radius scale and corner clamp tested |
+| Motion vocabulary | `core/.../motion/{MotionRole,MotionConstants,MotionReduce}.kt` | not recoverable — native decision (D-18) | `.../Motion/OpenCodeMotion.swift` | done — fourteen roles, per-phase curves, Reduce Motion collapse, pose and stagger tested; no screen animates yet |
 | Logging | `core/.../log/AppLog.kt` | `Core/AppLog.swift` | `.../Logging/AppLog.swift` | scaffold — structured public fields only (numbers/booleans), free text private; not the full Android journal |
 | Test isolation and network guard | (test-only `TestNetworkBlock`) | `TestIsolationGuard` | `.../OpenCodeTestSupport` | done — isolated storage, network guard, and a transport seam whose test value blocks |
 | Preview states | n/a | SwiftUI previews | `ios/OpenCode/App/RootView.swift` (`#Preview` × 2) | scaffold |
-| Haptics vocabulary | `core/.../haptics/HapticsClient.kt` | `Core/HapticsClient.swift` | `.../Haptics/` | not started |
+| Haptics vocabulary | `core/.../haptics/HapticsClient.kt` | not recoverable — native decision (D-19) | `.../Haptics/HapticsClient.swift` | done for the seam and vocabulary; physical-device feel unverified |
 
 ## Server
 
@@ -78,6 +81,8 @@ Recorded here so they are not mistaken for missing work.
 | Item | Android behaviour | New iOS decision |
 | --- | --- | --- |
 | Typography | Inter + OpenMono, desktop scale | SF + SF Mono (D-1) |
+| Motion curves | Compose springs from `(duration, bounce)` via `ω = 2π/duration` | Same role names and numbers; SwiftUI's perceptual `duration`/`bounce` (D-18) |
+| Haptics | Composed vibrator primitives with a predefined fallback | UIKit feedback generators mapped from the same vocabulary (D-19) |
 | Transcript motion | bottom-anchored `LazyColumn`, no follower | pending native decision (`P-2`) |
 | Photo picking | system picker | system picker proposed; no in-app photo sheet |
 | Autocomplete | list, next-frame filtering | SwiftUI-native list |
@@ -88,9 +93,14 @@ Recorded here so they are not mistaken for missing work.
 
 | Area | Tests | Status |
 | --- | --- | --- |
-| Design tokens | `OpenCodeKit/Tests/OpenCodeCoreTests/DesignTokenTests.swift` | scaffold |
-| Log redaction | `.../LogRedactionTests.swift` | scaffold |
-| Keychain and shared keys | `.../StorageTests.swift` | scaffold |
-| Store semantics | `.../StoreSemanticsTests.swift` | scaffold |
+| Design tokens (type, colour) | `OpenCodeKit/Tests/OpenCodeCoreTests/DesignTokenTests.swift` | done |
+| Layout tokens (spacing, radius) | `.../LayoutTokenTests.swift` | done |
+| Motion vocabulary | `.../MotionTests.swift` | done |
+| Haptics | `.../HapticsTests.swift` | done |
+| Log redaction | `.../LoggingTests.swift` | done |
+| Shared keys and storage | `.../SharedStoreTests.swift`, `.../KeychainFailureTests.swift` | done |
+| Dependency isolation and transport boundary | `.../DependencyIsolationTests.swift`, `.../TransportBoundaryTests.swift`, `.../NetworkAndIsolationTests.swift` | done |
+| Store semantics | `OpenCodeAppTests/StoreSemanticsTests.swift` | done |
+| App reducer | `OpenCodeAppTests/AppFeatureTests.swift`, `LaunchConfigurationTests.swift` | done |
 | Server | none yet | not started |
-| UI (XCUITest) | none yet | not started |
+| UI (XCUITest) | `OpenCodeUITests/{LaunchSmokeTests,KeychainProbeTests}.swift` | done for the launch states |

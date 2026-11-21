@@ -21,7 +21,9 @@ The Android tree is not modified by this work.
 
 - `ios` — integration branch, base `7358160e808fb1870eeb20f5da8df832667019d1` (see `BASELINE.md`).
 - `ios-foundation` — the scaffold: project generation, package targets, launch states, test isolation.
-  Draft PR: https://github.com/Rift7/opencode-ios/pull/1 (base `ios`, **open for review, not merged**).
+  Squash-merged into `ios` as `143d8f86` (PR #1, closed).
+- `ios-core` — Phase 3: layout tokens, motion vocabulary, haptics client, store-semantics gates.
+  Draft PR into `ios`: https://github.com/Rift7/opencode-ios/pull/2 (**open for review, not merged**).
 - Later task branches from `ios` (`ios-networking`, `ios-shell`, …) are pushed to the fork and opened as **draft**
   PRs into `ios`. Nothing is merged, released or distributed from here.
 
@@ -61,8 +63,8 @@ swift test --package-path ios/OpenCodeKit
 
 | Suite | Location | Runner |
 | --- | --- | --- |
-| Core logic (tokens, storage outcomes, logging, endpoint, network guard, isolation, transport boundary) | `ios/OpenCodeKit/Tests/OpenCodeCoreTests` | `swift test` on the host |
-| App reducer and launch configuration | `ios/OpenCodeKit/Tests/OpenCodeAppTests` | `swift test` on the host |
+| Core logic (tokens, storage outcomes, logging, endpoint, network guard, isolation, transport boundary, haptics, motion) | `ios/OpenCodeKit/Tests/OpenCodeCoreTests` | `swift test` on the host |
+| App reducer, launch configuration, store semantics | `ios/OpenCodeKit/Tests/OpenCodeAppTests` | `swift test` on the host |
 | Platform checks (UserDefaults, endpoint encoding, launch mapping) | `ios/OpenCodeTests` | `xcodebuild test` on the simulator |
 | Launch smoke states | `ios/OpenCodeUITests` | `xcodebuild test` on the simulator |
 | Keychain round-trip | `ios/OpenCodeUITests/KeychainProbeTests` | `xcodebuild test`; the hostless unit bundle has no keychain entitlement, so the probe runs in the app process behind `-uiTestKeychainProbe` |
@@ -81,15 +83,22 @@ entitlement note that puts the round-trip in the UI tests.
 
 ## Where the work stands
 
-`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P2 is complete on `ios-foundation`;
-**P3 (core) is partial** and is the next implementation phase. P4 (networking) starts only after the P3 gate is
-green or the owner reorders the phases. Do not branch from `ios` until PR #1 is merged.
+`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P2 is complete and merged into `ios`;
+**P3 (core) is complete on `ios-core`** and awaits review. P4 (networking) starts only after P3 is merged or
+the owner reorders the phases. Branch Phase 4 from the updated `ios`, not from `ios-core`.
+
+What P3 added: spacing/radius tokens (`Design/OpenCodeLayoutTokens.swift`), the motion vocabulary and Reduce
+Motion policy (`Motion/OpenCodeMotion.swift`), the haptics client (`Haptics/HapticsClient.swift`), and the four
+store-semantics gates (`OpenCodeAppTests/StoreSemanticsTests.swift`).
+
+Known unverified item: physical-device haptics. No device run was performed; the simulator has no Taptic
+Engine. Do not record that as passing.
 
 ## Phase-end checklist
 
 1. `scripts/verify.sh` passes.
 2. No credential, server address, pairing code, message text or file content can reach a log — the redaction test
-   covers it.
+   covers it, and the Phase 3 additions log nothing at all.
 3. `STATUS.md`, `PARITY.md`, `DECISIONS.md`, `HANDOFF.md` updated with completed behaviour, paths and the base SHA.
 4. Screenshots, if any, are captured on a simulator with no personal data in frame and no machine identifiers in
    filenames.
