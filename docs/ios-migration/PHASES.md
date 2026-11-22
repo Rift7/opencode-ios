@@ -16,7 +16,7 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | P5 | App shell: launch, connection, pairing, reconnect | done — merged into `ios` as `3b34932c` (PR #4) | `STATUS.md`, `PARITY.md` App shell, `ConnectionFeatureTests`, UI tests |
 | P6 | Home, drawer, projects, Catch Up, What's New | done — merged into `ios` as `7966dcfe` (PR #5, tree `25b6d297`) | `STATUS.md` Phase 6, `PARITY.md` Home, `HomeFeatureTests`, 8 UI tests, screenshots, scroll trace |
 | **P7** | **Session, subagents, background work, request review** | **done on `ios-session`** (draft PR) | `STATUS.md` Phase 7, `PARITY.md` Session, `SessionFeatureTests`, request-model and family tests, 5 UI tests, screenshots |
-| **P8** | **Transcript** | **done on `ios-transcript`** (draft PR #7, corrected head `1dc7f5f2`) | `STATUS.md` Phase 8, `PARITY.md` Transcript, 26 grouping/Markdown + 19 session + 11 decoding tests, 9 UI journeys, 2 scroll traces, 6 screenshots |
+| **P8** | **Transcript** | **done on `ios-transcript`** (draft PR #7, overflow-recovery head `151b7ff5`) | `STATUS.md` Phase 8, `PARITY.md` Transcript, 26 grouping/Markdown + 19 session + 11 decoding tests, 9 UI journeys, 2 scroll traces, 6 screenshots |
 | P9 | Composer | not started | folders only |
 | P10 | Media | not started | folders only |
 | P11 | Settings, experiments, diagnostics, onboarding | not started | folders only |
