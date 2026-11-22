@@ -156,7 +156,7 @@ Useful entry points:
 ### P7 evidence
 
 - `swift test --package-path ios/OpenCodeKit`: see `STATUS.md` for the gate count (server, core, app,
-  drawer and session suites). Session has 23 reducer tests; requests 6 model tests; family 4 tests;
+  drawer and session suites). Session has 25 reducer tests; requests 6 model tests; family 4 tests;
   App has the stream-forwarding integration test; Session UI has 6 journeys including shell stop.
 - `ios/scripts/verify.sh`: app build, `OpenCodeTests`, 31 UI tests and package tests pass.
 - `SessionUITests`: session/subagent navigation, permission approval, form validation/submission and a

@@ -962,21 +962,103 @@ struct SessionFeatureTests {
     #expect(store.state.background.output?.endCursor == 0)
   }
 
-  @Test("a cancelled drain does not delete the shell")
-  func shellDrainCancellation() async {
+  @Test("cancelling during the final size probe never dispatches the destructive stop")
+  func shellDrainCancellationAtProbe() async {
     let gate = Gate()
     let stopCalls = CallCounter()
     let shellSession = root
     let client = client(
       getSession: { _, _ in shellSession },
-      shellOutput: { _, _, _, _, _ in
-        await gate.wait()
-        return ShellOutputPage(output: "aaaa", cursor: 4, size: 10)
+      shellOutput: { _, _, _, cursor, _ in
+        switch cursor {
+        case 0: return ShellOutputPage(output: "aaaa", cursor: 4, size: 8)
+        case 4: return ShellOutputPage(output: "bbbb", cursor: 8, size: 8)
+        case Int.max:
+          await gate.wait()
+          return ShellOutputPage(output: "", cursor: 8, size: 8)
+        default:
+          return ShellOutputPage(output: "", cursor: 8, size: 8)
+        }
       },
       stopShell: { _, _, _ in
         await stopCalls.increment("stop")
       }
     )
+    let store = makeStore(drainState(size: 8), client: client)
+    await store.send(.shellStopConfirmed)
+    #expect(await waitUntil { await gate.isWaiting })
+    await store.skipReceivedActions(strict: false)
+    #expect(store.state.background.output?.endCursor == 8)
+
+    await store.send(.connectionChanged(isConnected: false))
+    await gate.open()
+    await settle(store)
+    #expect(await stopCalls.count("stop") == 0)
+    #expect(store.state.background.shells.count == 1)
+    #expect(store.state.background.output?.endCursor == 8)
+  }
+
+  @Test("cancelling while a progressing page is suspended never dispatches stop")
+  func shellDrainCancellationAtPage() async {
+    let gate = Gate()
+    let stopCalls = CallCounter()
+    let shellSession = root
+    let client = client(
+      getSession: { _, _ in shellSession },
+      shellOutput: { _, _, _, cursor, _ in
+        switch cursor {
+        case 0: return ShellOutputPage(output: "aaaa", cursor: 4, size: 8)
+        case 4:
+          await gate.wait()
+          return ShellOutputPage(output: "bbbb", cursor: 8, size: 8)
+        default:
+          return ShellOutputPage(output: "", cursor: 8, size: 8)
+        }
+      },
+      stopShell: { _, _, _ in
+        await stopCalls.increment("stop")
+      }
+    )
+    let store = makeStore(drainState(size: 8), client: client)
+    await store.send(.shellStopConfirmed)
+    #expect(await waitUntil { await gate.isWaiting })
+    await store.skipReceivedActions(strict: false)
+    #expect(store.state.background.output?.endCursor == 4)
+
+    await store.send(.connectionChanged(isConnected: false))
+    await gate.open()
+    await settle(store)
+    #expect(await stopCalls.count("stop") == 0)
+    #expect(store.state.background.shells.count == 1)
+  }
+
+  @Test("a successful drain with the same fixture reaches exactly one stop")
+  func shellDrainControl() async {
+    let stopCalls = CallCounter()
+    let shellSession = root
+    let client = client(
+      getSession: { _, _ in shellSession },
+      shellOutput: { _, _, _, cursor, _ in
+        switch cursor {
+        case 0: return ShellOutputPage(output: "aaaa", cursor: 4, size: 8)
+        case 4: return ShellOutputPage(output: "bbbb", cursor: 8, size: 8)
+        default: return ShellOutputPage(output: "", cursor: 8, size: 8)
+        }
+      },
+      stopShell: { _, _, _ in
+        await stopCalls.increment("stop")
+      }
+    )
+    let store = makeStore(drainState(size: 8), client: client)
+    await store.send(.shellStopConfirmed)
+    await settle(store)
+    #expect(await stopCalls.count("stop") == 1)
+    #expect(store.state.background.output?.output == "aaaabbbb")
+    #expect(store.state.background.output?.endCursor == 8)
+    #expect(store.state.background.shells.isEmpty)
+  }
+
+  private func drainState(size: Int) -> SessionFeature.State {
     var initial = state()
     initial.background.shells = [
       ServerShell(id: "shell-1", command: "swift test", sessionID: "root")
@@ -985,18 +1067,11 @@ struct SessionFeatureTests {
       shellID: "shell-1",
       title: "swift test",
       endCursor: 0,
-      size: 10,
+      size: size,
       isStopping: true,
       isVisible: true
     )
-    let store = makeStore(initial, client: client)
-    await store.send(.shellStopConfirmed)
-    #expect(await waitUntil { await gate.isWaiting })
-    await store.send(.connectionChanged(isConnected: false))
-    await gate.open()
-    await settle(store)
-    #expect(await stopCalls.count("stop") == 0)
-    #expect(store.state.background.shells.count == 1)
+    return initial
   }
 
   @Test("a background shell tails output, loads earlier bytes and stops")

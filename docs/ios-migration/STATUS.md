@@ -106,7 +106,7 @@ intervals during the measured swipes; the p95 stays at one interval.
 
 | Area | New or changed path | Gate |
 | --- | --- | --- |
-| Session reducer, refresh identity, run lifecycle, family pages, request review, shell panel | `OpenCodeKit/Sources/OpenCodeSession/SessionFeature.swift`, `SessionModels.swift` | `SessionFeatureTests` — 23 Swift Testing cases (coalescing, races, settlement, interrupt ambiguity/resume, stranded steer, validation, duplicate submit, conflict, permission rules, root/child/sibling navigation, uncached load/retry/reconnect, stale read, shell poll timing, byte ranges, drain/failure/cancel) |
+| Session reducer, refresh identity, run lifecycle, family pages, request review, shell panel | `OpenCodeKit/Sources/OpenCodeSession/SessionFeature.swift`, `SessionModels.swift` | `SessionFeatureTests` — 25 Swift Testing cases (coalescing, races, settlement, interrupt ambiguity/resume, stranded steer, validation, duplicate submit, conflict, permission rules, root/child/sibling navigation, uncached load/retry/reconnect, stale read, shell poll timing, byte ranges, drain/failure/cancel) |
 | Session destination and App → Home → Session ownership | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift`, `ios/OpenCode/App/RootView.swift`, `ios/OpenCode/Session/SessionView.swift` | `AppFeatureTests.sessionOwnership`, `sessionServerIsolation`, `sessionEventForwarding`; `SessionUITests.testSessionAndSubagentNavigation` |
 | Request models: fields, values, conditions, defaults, validation, permissions, form state and settlement | `OpenCodeServer/Models/RequestModels.swift` | `RequestModelsTests` — 6 cases (value order, defaults/visibility, typed validation, hidden answers, strict type decoding, global question) |
 | Family and shell models, selection moved down to the server layer | `OpenCodeServer/Models/SessionModels.swift` | `SessionFamilyTests` — breadth-first, cycle/dedupe, 100-session cap, running descendant |
@@ -169,13 +169,13 @@ intervals during the measured swipes; the p95 stays at one interval.
 | A selection with no cache rejected its first snapshot | The refresh identity guard accepts the selected session when root and family are still empty; reconnect is allowed during the initial load. | `uncachedInitialLoad`: success, failure, retry, and interruption followed by reconnect. |
 | Shell polling could miss its only start | `isVisible` is tracked; prepared or appeared starts exactly one poll when both are ready; reconnection restarts it. | `shellPollTiming`: appearance before load, load before appearance, dismissal during load, reconnect. |
 | Trimmed output ranges were not contiguous | Trimming returns the discarded byte count, which advances `startCursor`; Load Earlier joins the retained start and never exceeds 4 MiB. | `shellRangeContiguity`, `shellTrimThenEarlier`, `shellEarlierBounded` (multibyte and page crossing the cap). |
-| Stop deleted after one page read | Stop cancels polling, drains to the probing completion boundary, retains bounded output, and only then deletes. A failed/incomplete drain needs an explicit discard. | `shellDrainAndFailure`, `shellDrainCancellation`: multiple pages, failure, discard decision and cancellation. |
+| Stop deleted after one page read | Stop cancels polling, drains to the probing completion boundary, retains bounded output, and only then deletes. Cooperative cancellation is checked throughout the drain and immediately before DELETE; a dependency that succeeds after cancellation cannot reach the stop. A failed/incomplete drain needs an explicit discard. | `shellDrainAndFailure`, `shellDrainCancellationAtProbe`, `shellDrainCancellationAtPage`, `shellDrainControl`: multiple pages, failure, discard decision, cancellation at the probe/page and a successful control. |
 
 ## Verified in this phase
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | **363 tests pass**: 174 server, 67 core, 61 app, 38 drawer, 23 session; live and loopback opt-outs behave as before |
+| `swift test --package-path ios/OpenCodeKit` | **365 tests pass**: 174 server, 67 core, 61 app, 38 drawer, 25 session; live and loopback opt-outs behave as before |
 | `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **34 UI tests pass**; package suites pass |
 | `xcodebuild ... -only-testing:OpenCodeUITests/SessionUITests` | 6 journeys: session/subagent navigation, permission approval, permission rejection, form validation/submission, failed reply retry, shell output and stop |
 | `xcodebuild ... -only-testing:OpenCodeUITests/HomeUITests` | 8 tests including Mark All from the drawer menu |

@@ -1829,11 +1829,16 @@ extension SessionFeature {
       var pages = 0
       let maximumPages = 4_096
       do {
+        // Cancellation observed before dispatch prevents the DELETE; a request already sent may
+        // have an uncertain outcome. Every dependency return is checked because a transport call
+        // can complete successfully after its task was cancelled.
+        try Task.checkCancellation()
         // Stopping discards the server's capture: drain every remaining page first, with bounded
         // local retention. A failed or incomplete drain never reaches the delete. The capture can
         // grow while it drains, so the completion boundary is the size the probe reports once the
         // pages caught up.
         draining: while true {
+          try Task.checkCancellation()
           while cursor < knownSize {
             guard pages < maximumPages else {
               await send(
@@ -1844,9 +1849,11 @@ extension SessionFeature {
               )
               return
             }
+            try Task.checkCancellation()
             let page = try await client.shellOutput(
               server, directory, shellID, cursor, ShellOutputState.pageBytes
             )
+            try Task.checkCancellation()
             guard page.cursor > cursor else {
               await send(
                 .shellDrainFailed(
@@ -1860,12 +1867,15 @@ extension SessionFeature {
             cursor = page.cursor
             pages += 1
           }
+          try Task.checkCancellation()
           let probe = try await client.shellOutput(
             server, directory, shellID, Int.max, 1
           )
+          try Task.checkCancellation()
           if probe.size <= cursor { break draining }
           knownSize = probe.size
         }
+        try Task.checkCancellation()
         try await client.stopShell(server, directory, shellID)
         await send(.shellStopFinished(shellID: shellID, error: nil))
       } catch is CancellationError {
@@ -1889,6 +1899,9 @@ extension SessionFeature {
     let shellID = output.shellID
     return .run { send in
       do {
+        // The explicit discard is also bounded by cancellation before dispatch; once the DELETE is
+        // sent its outcome is uncertain and is treated as the normal request failure path.
+        try Task.checkCancellation()
         try await client.stopShell(server, directory, shellID)
         await send(.shellStopFinished(shellID: shellID, error: nil))
       } catch is CancellationError {

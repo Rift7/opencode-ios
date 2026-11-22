@@ -753,7 +753,11 @@ semantics, not test-only patches:
 - **Shell ranges are contiguous and bounded.** Trimming returns the discarded byte count, including
   newline and UTF-8 alignment, and the reducer advances `startCursor` by it. Load Earlier joins at the
   retained start and is capped at 4 MiB; it never trims the newly loaded front.
-- **Stop drains before it deletes.** Stop cancels polling, reads the remaining pages to a probe-confirmed
-  completion boundary, and only then sends `DELETE`. A failed or incomplete drain keeps the output and
-  asks for an explicit Discard Unread Output decision; cancellation never deletes. This prevents silently
-  destroying output the person never saw.
+- **Stop drains before it deletes, and cancellation is cooperative.** Stop cancels polling, reads the
+  remaining pages to a probe-confirmed completion boundary, and checks cancellation at the loop, before
+  and after each dependency return, and immediately before `DELETE`. A dependency that completes
+  successfully after its task was cancelled therefore cannot reach the destructive request. Scope: a
+  cancellation observed before dispatch prevents the request; a `DELETE` already sent may have an
+  uncertain outcome and is left to the normal request/response path. A failed or incomplete drain keeps
+  the output and asks for an explicit Discard Unread Output decision. This prevents silently destroying
+  output the person never saw.
