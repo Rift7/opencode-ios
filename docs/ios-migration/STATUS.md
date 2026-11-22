@@ -72,7 +72,7 @@ though the squash merge makes `2326a49b` not an ancestor.
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | **279 tests pass**: 161 server, 67 core, 51 app (live suite skipped without environment variables) |
+| `swift test --package-path ios/OpenCodeKit` | **281 tests pass**: 161 server, 67 core, 53 app (live suite skipped without environment variables) |
 | `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; `OpenCodeTests` passes; **18 UI tests pass**; package suites pass |
 | Loopback compatible fixture | `LocalFixtureServerTests.compatibleFixtureConnection` serves `/api/info`, `/api/project`, `/api/event` over the real `URLSession` stack; health, projects and the handshake all arrive |
 | Signed device build and install | with the existing local development identity (identifier not recorded): build, install and launch on the connected iPhone succeed |

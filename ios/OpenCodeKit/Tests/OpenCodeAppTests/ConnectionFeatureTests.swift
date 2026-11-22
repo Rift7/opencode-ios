@@ -363,6 +363,58 @@ struct ConnectionFeatureTests {
     #expect(script.healthCalls.count == 0)
   }
 
+  @Test("retry invalidates a delayed stream callback")
+  func retryInvalidatesStreamCallbacks() async {
+    let script = ScriptedClient(
+      health: Script([.success(TestServer.info)]),
+      projects: Script([.success(TestServer.projects)])
+    )
+    let store = store(script: script, state: ConnectionFeature.State(id: 1, server: TestServer.server))
+    store.exhaustivity = .off
+
+    await store.send(.task)
+    await store.receive(.refreshFinished(attempt: 1_001, result: .success(TestServer.projects)))
+    let old = token(attempt: 1_001, stream: 2)
+
+    await store.send(.retryTapped)
+    await store.send(.streamPhase(token: old, phase: .ended(OpenCodeClientError(.status(401)))))
+    await store.send(.streamResynchronized(token: old, result: .success([])))
+    await store.send(
+      .streamEvent(
+        token: old,
+        event: .projectUpdated(ServerProject(id: "late", name: "Late", directory: "/work/late"))
+      )
+    )
+
+    #expect(store.state.failure == nil)
+    #expect(store.state.projects == TestServer.projects)
+    await store.send(.scenePhaseChanged(isActive: false))
+  }
+
+  @Test("path loss invalidates a delayed stream callback")
+  func pathLossInvalidatesStreamCallbacks() async {
+    let script = ScriptedClient(
+      health: Script([.success(TestServer.info)]),
+      projects: Script([.success(TestServer.projects)])
+    )
+    let store = store(script: script, state: ConnectionFeature.State(id: 1, server: TestServer.server))
+    store.exhaustivity = .off
+
+    await store.send(.task)
+    await store.receive(.refreshFinished(attempt: 1_001, result: .success(TestServer.projects)))
+    let old = token(attempt: 1_001, stream: 2)
+
+    await store.send(.networkPathChanged(.offline)) {
+      $0.isOffline = true
+      $0.phase = .reconnecting
+    }
+    await store.send(.streamPhase(token: old, phase: .ended(OpenCodeClientError(.status(401)))))
+    await store.send(.streamResynchronized(token: old, result: .success([])))
+
+    #expect(store.state.failure == nil)
+    #expect(store.state.projects == TestServer.projects)
+  }
+
   @Test("delayed stream and refresh callbacks from cancelled work are ignored")
   func delayedCallbacksAreIgnored() async {
     let script = ScriptedClient(
