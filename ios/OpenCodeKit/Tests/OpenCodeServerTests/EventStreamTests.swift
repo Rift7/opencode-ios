@@ -13,6 +13,14 @@ final class CloseCounter: Sendable {
   func increment() { state.withLock { $0 += 1 } }
 }
 
+final class Flag: Sendable {
+  private let state = Mutex(false)
+
+  var value: Bool { state.withLock { $0 } }
+
+  func set() { state.withLock { $0 = true } }
+}
+
 final class OverflowRecorder: Sendable {
   private let state = Mutex<[EventStreamOverflow]>([])
 
@@ -219,6 +227,31 @@ struct EventStreamTests {
     #expect(closed)
   }
 
+  @Test("a transport chunk overflow becomes the recoverable stream overflow")
+  func transportOverflowIsMapped() async throws {
+    let transport = streamTransport { _, _ in
+      let (chunks, continuation) = AsyncThrowingStream<Data, any Error>.makeStream()
+      continuation.yield(Data("data: {\"type\":\"server.connected\"}\n\n".utf8))
+      continuation.finish(throwing: TransportError.streamOverflow)
+      return HTTPStream(
+        status: 200,
+        headers: [:],
+        finalURL: URL(string: "http://10.0.0.2:4096/api/event")!,
+        chunks: chunks,
+        close: {}
+      )
+    }
+    let stream = EventStream(transport: transport, clock: .suspended, enabledWatchdog: false)
+    let connection = try await stream.connect(server: server)
+
+    do {
+      for try await _ in connection.events {}
+      Issue.record("expected an overflow")
+    } catch let error as OpenCodeClientError {
+      #expect(error.failure == .streamOverflow)
+    }
+  }
+
   @Test("the watchdog ends a silent connection as a timeout")
   func watchdogTimesOut() async throws {
     let (chunks, _) = AsyncThrowingStream<Data, any Error>.makeStream()
@@ -388,6 +421,106 @@ struct EventStreamRunnerTests {
     #expect(clock.sleeps.count == 1)
   }
 
+  @Test("repeated connections that send connected and then overflow still reach the limit")
+  func connectedThenOverflowIsBounded() async throws {
+    let clock = ClockClient.recording()
+    let attempts = AttemptCounter()
+    let resyncs = OverflowRecorder()
+    let runner = EventStreamRunner(
+      clock: clock.client,
+      connect: { _ in
+        _ = attempts.next()
+        // Real connections emit `connected` before their content; that handshake must not reset
+        // overflow protection.
+        return self.connection([.connected], then: EventStreamOverflow())
+      },
+      environment: .online(unit: 0),
+      maximumConsecutiveOverflows: 2,
+      onResynchronize: { resyncs.record($0) }
+    )
+
+    do {
+      for try await _ in runner.events(server: server) {}
+      Issue.record("expected the runner to give up")
+    } catch is EventStreamOverflow {
+      // Expected: the third connect-then-overflow cycle exceeds the limit of two.
+    }
+    #expect(attempts.value == 3)
+    #expect(resyncs.overflows.count == 2)
+  }
+
+  @Test("healthy consumption past the window resets overflow protection")
+  func healthyConsumptionResetsOverflowLimit() async throws {
+    let clock = ClockClient.recording()
+    let attempts = AttemptCounter()
+    let resyncs = OverflowRecorder()
+    let runner = EventStreamRunner(
+      clock: clock.client,
+      connect: { _ in
+        let attempt = attempts.next()
+        if attempt >= 4 {
+          return self.lingeringConnection([.connected, .sessionDeleted(sessionID: "s1")])
+        }
+        return self.connection(
+          [.connected, .sessionDeleted(sessionID: "old"), .sessionDeleted(sessionID: "older")],
+          then: EventStreamOverflow()
+        )
+      },
+      environment: .online(unit: 0),
+      maximumConsecutiveOverflows: 1,
+      healthyResetWindow: .zero,
+      healthyResetEvents: 1,
+      onResynchronize: { resyncs.record($0) }
+    )
+
+    let received = try await collect(runner.events(server: server), count: 9)
+    #expect(received.count == 9)
+    let sawThreeResyncs = await waitUntilEvent { resyncs.overflows.count == 3 }
+    #expect(sawThreeResyncs)
+    // Three overflow/resync cycles happened, and none of them tripped a limit of one because each
+    // connection delivered content after its handshake.
+    #expect(attempts.value == 4)
+  }
+
+  @Test("a transport chunk overflow reconnects and resynchronizes like an event overflow")
+  func transportOverflowResynchronizes() async throws {
+    let clock = ClockClient.recording()
+    let attempts = AttemptCounter()
+    let resyncs = OverflowRecorder()
+    let firstClose = CloseCounter()
+    let closedBeforeResync = Flag()
+
+    let runner = EventStreamRunner(
+      clock: clock.client,
+      connect: { _ in
+        let attempt = attempts.next()
+        if attempt == 1 {
+          return self.connection(
+            [.connected],
+            then: OpenCodeClientError(.streamOverflow),
+            close: firstClose
+          )
+        }
+        return self.lingeringConnection([.connected, .sessionDeleted(sessionID: "s1")])
+      },
+      environment: .online(unit: 0),
+      maximumConsecutiveOverflows: 5,
+      onResynchronize: { overflow in
+        if firstClose.count == 1 {
+          closedBeforeResync.set()
+        }
+        resyncs.record(overflow)
+      }
+    )
+
+    let received = try await collect(runner.events(server: server), count: 3)
+    #expect(received.last == .sessionDeleted(sessionID: "s1"))
+    #expect(resyncs.overflows.count == 1)
+    #expect(firstClose.count == 1)
+    #expect(closedBeforeResync.value)
+    #expect(attempts.value == 2)
+  }
+
   @Test("consecutive overflows are bounded, then the stream ends with the overflow")
   func overflowsAreBounded() async throws {
     let clock = ClockClient.recording()
@@ -412,6 +545,30 @@ struct EventStreamRunnerTests {
     }
     #expect(attempts.value == 3)
     #expect(resyncs.overflows.count == 2)
+  }
+
+  @Test("cancelling the consumer closes the connection and stops the loop")
+  func consumerCancellationClosesConnection() async throws {
+    let close = CloseCounter()
+    let attempts = AttemptCounter()
+    let runner = EventStreamRunner(
+      clock: ClockClient.recording().client,
+      connect: { _ in
+        _ = attempts.next()
+        return self.lingeringConnection([.connected], close: close)
+      },
+      environment: .online(unit: 0)
+    )
+
+    let consumer = Task {
+      for try await _ in runner.events(server: server) {}
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    consumer.cancel()
+    _ = try? await consumer.value
+
+    #expect(await waitUntilEvent { close.count == 1 })
+    #expect(attempts.value == 1)
   }
 
   @Test("a completed connection's close runs before the next one opens")
@@ -450,4 +607,17 @@ final class AttemptCounter: Sendable {
       return value
     }
   }
+}
+
+
+private func waitUntilEvent(
+  timeout: Duration = .seconds(2),
+  _ condition: @Sendable () -> Bool
+) async -> Bool {
+  let deadline = ContinuousClock.now.advanced(by: timeout)
+  while ContinuousClock.now < deadline {
+    if condition() { return true }
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+  return condition()
 }

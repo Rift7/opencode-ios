@@ -11,7 +11,10 @@ public enum ServerCopy {
   public static let eventStreamOversizedFrame = "The event stream sent an oversized frame."
   public static let eventStreamEnded = "The event stream ended."
   public static let eventStreamServerFailure = "The event stream reported a server failure."
-  public static let eventStreamOverflow = "The event stream fell behind and reconnected." 
+  public static let eventStreamOverflow = "The event stream fell behind and reconnected."
+  /// A 2xx that is a web page: not a credential or connectivity failure, and not a decode mismatch.
+  public static let incompatibleAPI =
+    "This address answered with a web page, not the OpenCode V2 API. Check that the address is the OpenCode server, and update OpenCode on your computer." 
   public static let toolFailed = "Tool failed"
 
   public static func httpStatus(_ status: Int) -> String {
@@ -81,6 +84,8 @@ extension OpenCodeClientError {
       return ServerCopy.unsupported("that")
     case .undecodable(let feature):
       return ServerCopy.undecodable(feature)
+    case .incompatibleAPI:
+      return ServerCopy.incompatibleAPI
     case .streamEnded:
       return ServerCopy.eventStreamEnded
     case .streamServerFailure:

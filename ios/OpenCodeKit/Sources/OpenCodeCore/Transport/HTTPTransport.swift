@@ -12,6 +12,9 @@ public enum TransportError: Error, Equatable, Sendable {
   case invalidRequest
   /// A stream was requested from a server that does not answer with one.
   case notAStream
+  /// The stream's bounded chunk buffer filled: the consumer fell behind the socket, so the rest of
+  /// this connection is incomplete. Recoverable by reconnecting and resynchronizing from REST.
+  case streamOverflow
 }
 
 /// How a request treats redirects. Credentials are bound to the origin a request was built for, so

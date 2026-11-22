@@ -63,6 +63,36 @@ extension ClockClient {
   public static func gate() -> GatedClock {
     GatedClock()
   }
+
+  /// A clock the test moves by hand; its waits return at once without advancing time. Use it when a
+  /// test must distinguish "a moment later" from "after a retry wait".
+  public static func manual(startingAt start: Duration = .zero) -> ManualClock {
+    ManualClock(startingAt: start)
+  }
+}
+
+/// A clock the test advances explicitly; waits return at once.
+public final class ManualClock: Sendable {
+  private let state: Mutex<Duration>
+
+  init(startingAt start: Duration) {
+    state = Mutex(start)
+  }
+
+  public var elapsed: Duration {
+    state.withLock { $0 }
+  }
+
+  public func advance(by duration: Duration) {
+    state.withLock { $0 += duration }
+  }
+
+  public var client: ClockClient {
+    ClockClient(
+      now: { self.state.withLock { $0 } },
+      sleep: { _ in try Task.checkCancellation() }
+    )
+  }
 }
 
 /// A scripted clock: waits return at once, advance the clock by their duration, and are recorded.

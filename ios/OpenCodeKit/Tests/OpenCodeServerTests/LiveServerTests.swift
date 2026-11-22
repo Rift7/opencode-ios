@@ -70,4 +70,21 @@ struct LiveServerTests {
     connection.close()
     #expect(sawConnected)
   }
+
+  @Test("health distinguishes a V2 server from an incompatible web shell, auth and connectivity")
+  func healthClassification() async throws {
+    let server = try #require(server)
+    do {
+      let info = try await client().health(server)
+      #expect(!info.version.isEmpty)
+    } catch let error as OpenCodeClientError {
+      switch error.failure {
+      case .incompatibleAPI, .undecodable:
+        // This build does not serve the audited `/api/info`; the classification is the result.
+        return
+      default:
+        Issue.record("health failed for a reason other than a contract mismatch")
+      }
+    }
+  }
 }

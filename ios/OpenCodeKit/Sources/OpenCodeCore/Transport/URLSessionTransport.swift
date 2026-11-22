@@ -16,9 +16,15 @@ public struct URLSessionTransport: Sendable {
 
   private let makeConfiguration: @Sendable () -> URLSessionConfiguration
   private let requestSession = RequestSessionHolder()
+  /// Test seam: a smaller buffer lets a test force the overflow this path must report.
+  private let chunkCapacity: Int
 
-  public init(configuration: @escaping @Sendable () -> URLSessionConfiguration = URLSessionTransport.ephemeralConfiguration) {
+  public init(
+    configuration: @escaping @Sendable () -> URLSessionConfiguration = URLSessionTransport.ephemeralConfiguration,
+    chunkCapacity: Int = URLSessionTransport.streamChunkCapacity
+  ) {
     self.makeConfiguration = configuration
+    self.chunkCapacity = max(1, chunkCapacity)
   }
 
   public static func ephemeralConfiguration() -> URLSessionConfiguration {
@@ -63,7 +69,7 @@ public struct URLSessionTransport: Sendable {
     try Task.checkCancellation()
     try checkCleartext(request.url)
     let urlRequest = try request.wireRequest()
-    let channel = BoundedChannel<Data>(capacity: Self.streamChunkCapacity)
+    let channel = BoundedChannel<Data>(capacity: chunkCapacity)
     let receiver = StreamReceiver(request: request, channel: channel)
     // The receiver owns this session from here on; every exit path invalidates it.
     let session = URLSession(configuration: makeConfiguration(), delegate: receiver, delegateQueue: nil)
@@ -187,10 +193,6 @@ private final class RedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked 
 /// and registering the continuation, after registering it, or after the headers arrived. Every path
 /// resumes the caller exactly once and invalidates the session.
 private final class StreamReceiver: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-  private enum Overflow: Error {
-    case chunks
-  }
-
   private struct State {
     var continuation: CheckedContinuation<HTTPStream, any Error>?
     var session: URLSession?
@@ -351,7 +353,7 @@ private final class StreamReceiver: NSObject, URLSessionDataDelegate, @unchecked
     case .closed:
       closeSocket()
     case .overflow:
-      channel.fail(Overflow.chunks)
+      channel.fail(TransportError.streamOverflow)
       closeSocket()
     }
   }

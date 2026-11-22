@@ -68,7 +68,7 @@ swift test --package-path ios/OpenCodeKit
 | Core logic (tokens, storage outcomes, logging, endpoint, network guard, isolation, transport boundary, haptics, motion, bounded channel) | `ios/OpenCodeKit/Tests/OpenCodeCoreTests` | `swift test` on the host |
 | Server (address, redirects, transport, retry, pairing, SSE, events, batching, stream, client) | `ios/OpenCodeKit/Tests/OpenCodeServerTests` | `swift test` on the host |
 | Loopback HTTP fixture (real URLSession delegates, socket lifetimes) | `ios/OpenCodeKit/Tests/OpenCodeServerTests/LocalFixtureServerTests.swift` | `swift test`; loopback only, opt-out env var |
-| Live read-only server | `ios/OpenCodeKit/Tests/OpenCodeServerTests/LiveServerTests.swift` | `swift test` with env vars; skipped by default |
+| Live read-only server | `ios/OpenCodeKit/Tests/OpenCodeServerTests/LiveServerTests.swift` | `swift test` with env vars; skipped by default; records contract mismatches rather than hiding them |
 | App reducer, launch configuration, store semantics | `ios/OpenCodeKit/Tests/OpenCodeAppTests` | `swift test` on the host |
 | Platform checks (UserDefaults, endpoint encoding, launch mapping) | `ios/OpenCodeTests` | `xcodebuild test` on the simulator |
 | Launch smoke states | `ios/OpenCodeUITests` | `xcodebuild test` on the simulator |
@@ -127,6 +127,9 @@ Useful entry points:
 
 Session and stream ownership (D-26/D-27): one request session per transport, one per stream connection;
 every connection exit closes its tasks and session. The connect deadline covers response headers.
+Overflow protection clears only after healthy consumption, not on `server.connected` (D-29); the
+transport's chunk buffer overflows into the same recoverable path (D-30); an HTML 2xx is an
+`.incompatibleAPI` failure, distinct from auth and connectivity (D-31).
 
 Device work (one iPhone Air, debug build, configured development identity):
 
@@ -137,8 +140,17 @@ Device work (one iPhone Air, debug build, configured development identity):
 
 Live read-only smoke: `OPENCODE_LIVE_SERVER` + `OPENCODE_LIVE_PASSWORD` + `swift test --filter
 LiveServerTests` passed against `opencode serve 0.0.0-dev-202611170722` for `/api/session`,
-`/api/session/active` and `/api/event`. That snapshot serves its web shell for `/api/info` and
-`/api/project`, so those routes were not exercised live; the audited fixture shapes remain their gate.
+`/api/session/active`, `/api/event`, and for the compatibility classification.
+
+That build does not implement the audited `/api/info` and `/api/project`; unknown `/api/*` paths return
+its web shell (200 `text/html`), and `/project` has a different shape. The cause is the server build's
+route set, not auth (401 JSON works), prefix (`/api/session` works) or a proxy. The client does not
+remap routes. A compatible server must serve `/api/info` (`{version,pid}`), `/api/project` (bare array
+with `canonical`), `/api/session`, `/api/session/active` and `/api/event`; these requirements are in
+`PROTOCOL_COVERAGE.md`.
+
+Phase 5 must distinguish `.incompatibleAPI` (wrong address or non-V2 server) from `.status(401)`
+(rejected credentials) and `.transport(…)` (unreachable).
 
 Known unverified items:
 

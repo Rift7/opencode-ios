@@ -103,8 +103,11 @@ Notes that stay visible:
 | Rejected response closes the connection | implied by `use {}` in the audited stream | `EventStream.connect` (`response.close()`), `HTTPStream.close` | implemented + tested (401/503, loopback 401) |
 | Consumer shutdown closes the request | audited `awaitClose { call.cancel() }` | `EventConnection.close`, channel close handler | implemented + tested: a cancelled consumer and an explicit close both close the loopback socket |
 | Overflow is an explicit signal for REST resynchronization | audited `EventStreamOverflow` + reconnect loop | `EventStreamOverflow`, `EventStreamRunner.onResynchronize` | implemented + tested: overflow closes the connection, calls the callback once, reconnects, and resumes events |
-| Overflow recovery is bounded | audited stream-overflow policy (new policy in D-27) | `maximumConsecutiveOverflows`, `RetryPolicy.streamOverflow` | implemented + tested: three consecutive overflows with a limit of two end the stream |
-| Reconnect closes the previous connection first | audited loop's connection ownership | `EventStreamRunner` (defer close) | implemented + tested |
+| Overflow recovery is bounded | audited stream-overflow policy (D-27) | `maximumConsecutiveOverflows`, `RetryPolicy.streamOverflow` | implemented + tested: three consecutive overflows with a limit of two end the stream; repeated connect-then-overflow cycles reach the limit too (D-29) |
+| Overflow protection resets only after healthy consumption | new bound (D-29) | `healthyResetWindow`, `healthyResetEvents` | implemented + tested: a handshake alone never resets; content past the window does |
+| Transport chunk-buffer overflow is recoverable | new typed outcome (D-30) | `TransportError.streamOverflow` → `.streamOverflow` | implemented + tested: real loopback buffer overflow is typed; the runner resynchronizes and reconnects |
+| Reconnect closes the previous connection first | audited loop's connection ownership | `EventStreamRunner` (explicit close before resync, defer close otherwise) | implemented + tested |
+| A web page is not API data | not audited (diagnostic gap) | `.incompatibleAPI` (D-31) | implemented + tested with real content types; 401 stays an auth failure |
 
 ## Events
 
@@ -142,6 +145,22 @@ hand-off; recovery is bounded (D-27).
 Not adopted from `EventBatcher` (deliberate, recorded in `DECISIONS.md` D-23): the off-screen pressure
 shedding and the Markdown pre-projection hooks. Both exist to protect a transcript reducer that this phase
 does not have; they belong with P8, where they can be measured.
+
+## Compatible server requirements
+
+The app expects an OpenCode V2 server that serves the audited JSON routes. Checked read-only against
+`opencode serve` 0.0.0-dev-202611170722 (the newest `dev` build available when this phase ran):
+
+| Requirement | Evidence |
+| --- | --- |
+| `GET /api/info` returns JSON `{version, pid, urls?}` | that build has no such route; authenticated requests fall through to its web shell (200 `text/html`) |
+| `GET /api/project` returns the bare project array with `canonical` | that build exposes `/project` (JSON) with a different shape (`worktree`, no `canonical`), not `/api/project` |
+| `GET /api/session`, `/api/session/active`, `/api/event` | present and JSON/SSE in that build, and exercised by the live smoke |
+| Basic auth | present: unauthenticated `/api/session` answers `401` JSON `UnauthorizedError`, and the live smoke authenticated successfully |
+
+Do not silently remap `/api/project` to `/project` or treat the web shell as data: neither matches the
+audited contract. A connection attempt that lands on an HTML page now fails as
+`.incompatibleAPI` (D-31), which is distinct from a rejected password and from an unreachable host.
 
 ## Authentication and pairing
 

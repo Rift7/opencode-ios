@@ -345,8 +345,8 @@ Every way an SSE connection can end now runs through one lifecycle:
   `EventStreamRunner.onResynchronize` is called once per overflow, before the reconnect, as the
   documented point where a feature rehydrates from REST (the authority). Overflow uses its own
   retry preset (1 s base, 15 s cap, no network wait) and is bounded: after five consecutive overflows
-  the runner ends the stream with the overflow instead of spinning. A `server.connected` resets the
-  count.
+  the runner ends the stream with the overflow instead of spinning. The count clears only after
+  healthy consumption (D-29), not on `server.connected`.
 - **Rejected**: treating overflow as a silent drop or as a permanent failure. A dropped delta makes
   the projection wrong without telling anyone; a permanent failure would strand a consumer that can
   recover by re-reading REST.
@@ -363,3 +363,45 @@ redirect, pairing redirect refusal, withheld headers, rejected responses and con
 - The live-server check is separate again: it reads `OPENCODE_LIVE_SERVER` and
   `OPENCODE_LIVE_PASSWORD` from the environment, is skipped when they are unset, and only performs
   reads.
+
+### D-29 Overflow protection clears only after healthy consumption
+`server.connected` resets the ordinary reconnect backoff (the audited handshake) but **not** the
+consecutive-overflow count or the overflow backoff. Those clear only when a connection has stayed open
+`healthyResetWindow` (default 30 s) and has delivered at least `healthyResetEvents` (default 1) events
+beyond the handshake.
+
+- Why: a server (or a broken proxy) can emit `connected` and then immediately flood the consumer.
+  Resetting on the handshake would let that cycle repeat forever, defeating the bound.
+- The check runs per delivered event, so a connection that connects, sends one burst and overflows
+  before the window never resets. A long-lived stream that keeps delivering resets promptly.
+- Tests: repeated connect-then-overflow cycles reach the limit; a connection that delivers content
+  past the window keeps the limit clear across three overflow cycles; the transport-buffer overflow
+  takes the same path.
+
+### D-30 Transport chunk-buffer overflow is a typed, recoverable outcome
+Exhausting `URLSessionTransport`'s bounded chunk buffer fails the stream with
+`TransportError.streamOverflow`, not a private sentinel. `EventStream.clientError` maps it to
+`OpenCodeClientError(.streamOverflow)`, which the runner treats exactly like an event-hand-off
+overflow: close the connection, resynchronize from REST, then reconnect on the overflow schedule.
+
+- Why: the buffer exists to bound memory; a full buffer means the consumer fell behind, which a
+  reconnect plus REST rehydration repairs. Converting it to `.unreachable` (the old behaviour) made
+  a recoverable gap permanent and skipped the resync signal.
+- The chunk capacity is injectable so a test can force the overflow; the default stays 64 chunks
+  (≈1 MiB).
+
+### D-31 A web page is an incompatible API, not a decode or auth failure
+A 2xx response whose `Content-Type` is `text/html` or `application/xhtml+xml` is
+`OpenCodeClientError(.incompatibleAPI(feature:))`, with its own copy. It is distinct from:
+
+- `.status(401)` — the credentials were rejected;
+- `.transport(…)` / `.unreachable` — the server could not be reached;
+- `.undecodable(feature:)` — JSON that does not match the V2 contract.
+
+Phase 5's connection screen can therefore tell “wrong address / not an OpenCode V2 server” from
+“wrong password” and “offline”. The classification is decided only after the status guard, so a 401
+with an HTML body remains an authentication failure.
+
+The live investigation (STATUS) found exactly this case: an installable `opencode serve` build
+answers unknown `/api/*` paths with its web shell, so `/api/info` and `/api/project` look like 200s
+until the content type is checked.

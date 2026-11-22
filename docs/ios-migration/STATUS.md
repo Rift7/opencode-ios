@@ -78,16 +78,19 @@ is labelled a native decision, not a port.
 | The connect deadline did not cover response headers | `openWithDeadline` races the whole open (connect, request, headers) against the clock and closes a late stream | withheld headers fail by the deadline and the socket closes |
 | Rejected responses, consumer shutdown, overflow and reconnect could leave a connection or its tasks alive | `HTTPStream.close` and `EventConnection.close` are explicit, idempotent, and cancel the read, watchdog and session; rejected responses close before throwing; the runner closes with `defer` | 401/503 close; cancelled consumer closes the loopback socket; explicit close; close-before-reconnect |
 | "One ephemeral session" did not match per-request sessions | D-26: one shared request session for the transport's lifetime, one per stream connection, each invalidated on its own lifecycle | two requests build one session; two streams build two |
+| The overflow limit reset on every `server.connected` | D-29: the handshake resets only the ordinary backoff; the overflow count clears after `healthyResetWindow` with `healthyResetEvents` events beyond the handshake | repeated connect-then-overflow cycles reach the limit; content past the window clears it |
+| A transport chunk-buffer overflow became permanent `.unreachable` | D-30: `TransportError.streamOverflow` is mapped to `.streamOverflow` and takes the same close → resync → bounded reconnect path | real loopback buffer overflow is typed; the runner resynchronizes and reconnects |
+| An HTML page looked like a contract/decode problem | D-31: a 2xx `text/html` page is `.incompatibleAPI`, distinct from 401 and transport failures | loopback and scripted clients assert the classification and copy |
 
 ## Verified in this phase
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path OpenCodeKit` | **222 tests pass**: 142 server, 66 core, 14 app (the live suite is skipped without environment variables) |
+| `swift test --package-path OpenCodeKit` | **232 tests pass**: 152 server, 66 core, 14 app (the live suite is skipped without environment variables) |
 | `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; `OpenCodeTests` Swift Testing suite passes (2 tests); 4 UI tests pass; package suites pass |
-| Loopback fixture suite (`LocalFixtureServerTests`) | same-origin redirect followed with credentials; cross-origin redirect refused and target untouched; pairing redirect refused (302, no auth header); withheld headers time out and close; 401 closes; cancelled consumer and explicit close stop the socket |
+| Loopback fixture suite (`LocalFixtureServerTests`) | same-origin redirect followed with credentials; cross-origin redirect refused and target untouched; pairing redirect refused (302, no auth header); withheld headers time out and close; 401 closes; cancelled consumer and explicit close stop the socket; a 256 KiB chunk stream overflows the typed chunk buffer; an HTML `/api/info` is `.incompatibleAPI` |
 | Device build (iPhone Air, physical) | `xcodebuild … -destination id=<device> -allowProvisioningUpdates DEVELOPMENT_TEAM=<team> -skipMacroValidation build` succeeded with the configured development identity |
-| Live read-only smoke, opt-in | `OPENCODE_LIVE_SERVER=… OPENCODE_LIVE_PASSWORD=… swift test --filter LiveServerTests` passed against `opencode serve 0.0.0-dev-202611170722` on loopback: session page, active IDs and `server.connected` over SSE |
+| Live read-only smoke, opt-in | `OPENCODE_LIVE_SERVER=… OPENCODE_LIVE_PASSWORD=… swift test --filter LiveServerTests` passed against `opencode serve 0.0.0-dev-202611170722` on loopback: session page, active IDs, `server.connected` over SSE, and the compatibility classification below |
 
 ## Hardware observations (separate from automated results)
 
@@ -103,12 +106,35 @@ credential.
 
 These are observations on one device. They do not run in CI and no simulator can reproduce them.
 
+## Live-server investigation (read-only)
+
+Executable: the `opencode serve` binary from npm `opencode-ai@0.0.0-dev-202611170722` (the newest `dev`
+tag available at the time; the absolute install path is intentionally not recorded here). Bound to
+loopback with a disposable password passed by environment variable only; nothing was logged or committed.
+
+| Probe | Result |
+| --- | --- |
+| `/doc` OpenAPI paths | no `/api/info`; `/api/health` present; project routes are `/project`, `/project/current`, `/project/{id}`; `/api/session`, `/api/session/active`, `/api/event` present |
+| `GET /api/session` without credentials | `401` JSON `{"_tag":"UnauthorizedError"}` — authentication works, not the cause |
+| `GET /api/info`, `/api/project` with credentials | `200 text/html` (the web shell), also with `Accept: application/json`, a trailing slash, `?x=1`, or `/api/v2/info` |
+| `GET /api/health` | `200 application/json` `{"healthy":true}` |
+| `GET /project` | `200 application/json`, but a different shape (`worktree`, no `canonical`) |
+| Proxy | none configured; the server bound directly to `127.0.0.1` |
+
+Cause: **server build / route set**, not authentication, endpoint prefix (the `/api` prefix does serve
+session and event), proxy routing or transport. Unknown `/api/*` paths in that build fall through to the
+web UI, which is why an HTML 200 looked like data. Mapping `/api/project` to `/project` would still not
+decode the audited shape, so the client does not remap anything.
+
+A connection attempt that lands on that build now fails `health` as `.incompatibleAPI(feature: "server
+info")`; Phase 5 must present that as “this address is not an OpenCode V2 server”, separately from a
+rejected password (`.status(401)`) and an unreachable host (`.transport`).
+
 ## Not verified
 
-- **Live server contract**: the installable `opencode serve` snapshot answers `/api/session`,
-  `/api/session/active` and `/api/event`, but serves its web shell for `/api/info` and `/api/project`, so
-  those two audited routes were not exercised live. `health` and `projects` remain covered by fixture tests
-  of the audited shapes only.
+- **`/api/info` and `/api/project` against a real V2 server**: no build with those audited routes was
+  available. They remain covered by fixture tests of the audited shapes, and the live probe recorded the
+  incompatibility rather than treating it as success.
 - **iPhone/iPad visual comparison**: the original app is unavailable; October screenshots are evidence, not
   a target.
 - **`/api/info` `pid` numeric type** across older servers: decoded as `Int`, as the audited payload does.

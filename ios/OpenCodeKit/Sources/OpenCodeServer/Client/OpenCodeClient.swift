@@ -525,6 +525,13 @@ enum Operations {
         )
         throw error
       }
+      // A 2xx that is a web page means this address is not serving the V2 API. Keep that distinct
+      // from a decode mismatch, a 401 and a transport failure so a connection screen can say which.
+      if let contentType = response.header("content-type")?.lowercased(),
+        contentType.hasPrefix("text/html") || contentType.hasPrefix("application/xhtml+xml")
+      {
+        throw OpenCodeClientError(.incompatibleAPI(feature: feature))
+      }
       log.event(
         .networkResponse,
         [

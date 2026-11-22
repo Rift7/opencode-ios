@@ -137,6 +137,56 @@ struct OpenCodeClientTests {
     }
   }
 
+  @Test("a web page answer is an incompatible API, not a decode or auth failure")
+  func htmlResponseIsIncompatible() async throws {
+    let transport = HTTPTransport(
+      send: { request in
+        HTTPResponse(
+          status: 200,
+          headers: ["content-type": "text/html; charset=utf-8"],
+          body: Data("<!doctype html><html></html>".utf8),
+          finalURL: request.url
+        )
+      },
+      open: { _ in throw TransportError.blocked }
+    )
+    let client = OpenCodeClient.live(transport: transport, clock: ClockClient.testValue)
+
+    do {
+      _ = try await client.projects(server)
+      Issue.record("expected an incompatible-API failure")
+    } catch let error as OpenCodeClientError {
+      #expect(error.failure == .incompatibleAPI(feature: "project list"))
+      #expect(error.copy == ServerCopy.incompatibleAPI)
+      #expect(error.logSummary == "incompatible API project list")
+      #expect(error.statusCode == nil)
+    }
+  }
+
+  @Test("a 401 with an HTML body is still an authentication failure")
+  func unauthorizedHTMLIsStill401() async throws {
+    let transport = HTTPTransport(
+      send: { request in
+        HTTPResponse(
+          status: 401,
+          headers: ["content-type": "text/html"],
+          body: Data("<!doctype html>".utf8),
+          finalURL: request.url
+        )
+      },
+      open: { _ in throw TransportError.blocked }
+    )
+    let client = OpenCodeClient.live(transport: transport, clock: ClockClient.testValue)
+
+    do {
+      _ = try await client.projects(server)
+      Issue.record("expected a 401")
+    } catch let error as OpenCodeClientError {
+      #expect(error.statusCode == 401)
+      #expect(error.copy == ServerCopy.credentialsRejected)
+    }
+  }
+
   @Test("a body that does not match the contract is an undecodable error")
   func undecodable() async throws {
     let (client, _) = client { _, _ in Fixtures.json(#"{"data":{"id":42}}"#) }

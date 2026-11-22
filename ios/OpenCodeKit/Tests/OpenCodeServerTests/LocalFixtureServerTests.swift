@@ -168,6 +168,55 @@ struct LocalFixtureServerTests {
     #expect(await server.waitForConnectionClosed(timeout: .seconds(3)))
   }
 
+  @Test("a web-page API answer is classified as incompatible")
+  func webPageAPIAnswer() async throws {
+    let server = try LocalHTTPServer()
+    defer { server.stop() }
+    server.route(
+      "/api/info",
+      .http(status: 200, headers: ["Content-Type": "text/html"], body: Data("<!doctype html>".utf8))
+    )
+
+    let client = OpenCodeClient.live(transport: liveTransport(), clock: ClockClient.testValue)
+    do {
+      _ = try await client.health(openCodeServer(for: server.baseURL.absoluteString))
+      Issue.record("expected an incompatible-API failure")
+    } catch let error as OpenCodeClientError {
+      #expect(error.failure == .incompatibleAPI(feature: "server info"))
+      #expect(error.copy == ServerCopy.incompatibleAPI)
+    }
+  }
+
+  @Test("a chunk-buffer overflow is a typed, recoverable error")
+  func chunkBufferOverflow() async throws {
+    let server = try LocalHTTPServer()
+    defer { server.stop() }
+    let block = Data(repeating: 0x41, count: 256 * 1024)
+    server.route(
+      "/api/event",
+      .stream(
+        headers: ["Content-Type": "text/event-stream"],
+        chunks: [block, block, block],
+        intervalMilliseconds: 40
+      )
+    )
+
+    let transport = URLSessionTransport(chunkCapacity: 1)
+    let stream = try await transport.open(
+      HTTPRequest(url: URL(string: "\(server.baseURL.absoluteString)/api/event")!)
+    )
+    // Do not read for a moment, so more than one chunk arrives at a capacity of one.
+    try await Task.sleep(for: .milliseconds(400))
+
+    do {
+      for try await _ in stream.chunks {}
+      Issue.record("expected the chunk buffer to overflow")
+    } catch let error as TransportError {
+      #expect(error == .streamOverflow)
+    }
+    #expect(await server.waitForConnectionClosed(timeout: .seconds(3)))
+  }
+
   @Test("a rejected stream response closes its connection")
   func rejectedResponseClosesTheConnection() async throws {
     let server = try LocalHTTPServer()
