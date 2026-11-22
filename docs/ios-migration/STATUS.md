@@ -25,7 +25,7 @@ in `origin/ios:ios/OpenCode/Resources/Localizable.xcstrings`, and the gate was c
 | 3 | Core: store, dependencies, sharing, tokens, logging, haptics | complete — `d0fdf2f5` (PR #2) |
 | 4 | Server: transport, retry, models, SSE, pairing | complete — `5f143ea7` (PR #3, tree `2326a49b`) |
 | 5 | App shell: launch, connection, pairing, reconnect | complete — `3b34932c` (PR #4) |
-| 6 | Home, drawer, projects, Catch Up, What's New | **complete on `ios-home`** (draft PR pending) |
+| 6 | Home, drawer, projects, Catch Up, What's New | **complete on `ios-home`** (draft PR #5) |
 | 7 | Session, subagents, background work, request review | not started |
 | 8 | Transcript | not started |
 | 9 | Composer | not started |

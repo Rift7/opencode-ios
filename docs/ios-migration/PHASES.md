@@ -14,7 +14,7 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | P3 | Core: store, dependencies, sharing, tokens, logging, haptics | done — merged into `ios` as `d0fdf2f5` (PR #2) | checklist below |
 | P4 | Server: transport, retry, models, SSE, pairing | done — merged into `ios` as `5f143ea7` (PR #3, tree `2326a49b`) | `PROTOCOL_COVERAGE.md`, `STATUS.md` |
 | P5 | App shell: launch, connection, pairing, reconnect | done — merged into `ios` as `3b34932c` (PR #4) | `STATUS.md`, `PARITY.md` App shell, `ConnectionFeatureTests`, UI tests |
-| **P6** | **Home, drawer, projects, Catch Up, What's New** | **done on `ios-home`** | `STATUS.md` Phase 6, `PARITY.md` Home, `HomeFeatureTests`, 8 UI tests, screenshots, scroll trace |
+| **P6** | **Home, drawer, projects, Catch Up, What's New** | **done on `ios-home`** (PR #5, draft) | `STATUS.md` Phase 6, `PARITY.md` Home, `HomeFeatureTests`, 8 UI tests, screenshots, scroll trace |
 | P7 | Session, subagents, background work, request review | not started | folders only |
 | P8 | Transcript | not started | folders only |
 | P9 | Composer | not started | folders only |

@@ -28,7 +28,7 @@ The Android tree is not modified by this work.
 - `ios-shell` — Phase 5: launch, connection, pairing and reconnect; review corrections at `04da03cf`.
   Merged into `ios` as `3b34932c` (PR #4).
 - `ios-home` — Phase 6: Home, drawer, projects, Catch Up and What's New. Branched from `origin/ios`
-  `3b34932c`; draft PR into `ios` pending.
+  `3b34932c`; draft PR into `ios`: https://github.com/Rift7/opencode-ios/pull/5
 - Later task branches from `ios` are pushed to the fork and opened as **draft** PRs into `ios`. Nothing is
   merged, released or distributed from here.
 
