@@ -79,3 +79,28 @@ The merged tree was then checked for the completed foundation before any file wa
 `OpenCodeKit/Sources/{OpenCodeCore,OpenCodeServer,OpenCodeApp,OpenCodeTestSupport}`, and the package test
 suite passed from that checkout. `origin/dev` was still the audited `7358160e`, so `dev`-derived behaviour in
 Phase 4 was read at the audited commit.
+
+## Phase 5 branch creation
+
+`ios-shell` was created from `origin/ios` after fetching, not from a task branch and not from
+`d0fdf2f5`:
+
+```
+$ git fetch origin --prune
+   d0fdf2f5..5f143ea7  ios -> origin/ios
+
+$ gh pr view 3 --json state,mergedAt,mergeCommit
+{"state":"MERGED","mergedAt":"2026-11-22T02:28:55Z","mergeCommit":{"oid":"5f143ea7…"}}
+
+$ git rev-parse origin/ios^{tree} 2326a49b^{tree}
+013231110dec5a52b4144d16ec5b26a1f24661e7
+013231110dec5a52b4144d16ec5b26a1f24661e7
+
+$ git worktree add -b ios-shell <migration-worktree> origin/ios
+$ git -C <migration-worktree> log -1 --oneline
+5f143ea7 ios: native transport, retry, models, SSE and pairing (#3)
+```
+
+The squash merge means `2326a49b` is not an ancestor of `origin/ios`, but the tree comparison above
+proves the corrected networking source is what merged. The P5 branch therefore contains the full
+P4 transport, retry, model, SSE and pairing implementation before any P5 file was added.

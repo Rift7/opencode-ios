@@ -21,6 +21,20 @@ public struct EventStreamOverflow: Error, Equatable, Sendable {
   }
 }
 
+/// What the reconnect loop is doing, reported before it acts. A consumer uses this to show a
+/// reconnecting state and to re-read REST before an overflow reconnect; the loop awaits the
+/// handler, so the refresh finishes before the next socket opens.
+public enum EventStreamPhase: Sendable, Equatable {
+  /// The server handshake arrived on a connection.
+  case connected
+  /// This connection ended and another will be attempted.
+  case disconnected(OpenCodeClientError?)
+  /// The consumer fell behind: REST is authoritative and is being re-read now.
+  case resynchronizing
+  /// The loop will not reconnect (rejected credentials, exhausted overflow bound, or cancellation).
+  case ended(OpenCodeClientError?)
+}
+
 /// An open SSE connection: its events and the one way to close it.
 ///
 /// `close` is idempotent. It cancels the read, the watchdog and the underlying request's session,
@@ -316,6 +330,8 @@ public struct EventStreamRunner: Sendable {
   /// Called once per overflow, before the reconnect, and never after the stream ends. This is the
   /// explicit REST-resynchronization signal: events are a projection, REST is authoritative.
   public var onResynchronize: @Sendable (EventStreamOverflow) async -> Void
+  /// Called for each connection and each terminal outcome, before the loop acts on it.
+  public var onPhase: @Sendable (EventStreamPhase) async -> Void
   /// A connection that overflows this many times in a row is abandoned rather than retried forever.
   public var maximumConsecutiveOverflows: Int
   /// Overflow protection clears only after a connection has stayed open this long…
@@ -332,7 +348,8 @@ public struct EventStreamRunner: Sendable {
     maximumConsecutiveOverflows: Int = 5,
     healthyResetWindow: Duration = .seconds(30),
     healthyResetEvents: Int = 1,
-    onResynchronize: @escaping @Sendable (EventStreamOverflow) async -> Void = { _ in }
+    onResynchronize: @escaping @Sendable (EventStreamOverflow) async -> Void = { _ in },
+    onPhase: @escaping @Sendable (EventStreamPhase) async -> Void = { _ in }
   ) {
     self.init(
       clock: stream.clock,
@@ -344,7 +361,8 @@ public struct EventStreamRunner: Sendable {
       maximumConsecutiveOverflows: maximumConsecutiveOverflows,
       healthyResetWindow: healthyResetWindow,
       healthyResetEvents: healthyResetEvents,
-      onResynchronize: onResynchronize
+      onResynchronize: onResynchronize,
+      onPhase: onPhase
     )
   }
 
@@ -358,7 +376,8 @@ public struct EventStreamRunner: Sendable {
     maximumConsecutiveOverflows: Int = 5,
     healthyResetWindow: Duration = .seconds(30),
     healthyResetEvents: Int = 1,
-    onResynchronize: @escaping @Sendable (EventStreamOverflow) async -> Void = { _ in }
+    onResynchronize: @escaping @Sendable (EventStreamOverflow) async -> Void = { _ in },
+    onPhase: @escaping @Sendable (EventStreamPhase) async -> Void = { _ in }
   ) {
     self.clock = clock
     self.connect = connect
@@ -370,6 +389,7 @@ public struct EventStreamRunner: Sendable {
     self.healthyResetWindow = healthyResetWindow
     self.healthyResetEvents = max(1, healthyResetEvents)
     self.onResynchronize = onResynchronize
+    self.onPhase = onPhase
   }
 
   public func events(server: OpenCodeServer) -> AsyncThrowingStream<ServerEvent, any Error> {
@@ -381,6 +401,7 @@ public struct EventStreamRunner: Sendable {
     let overflowPolicy = overflowPolicy
     let environment = environment
     let onResynchronize = onResynchronize
+    let onPhase = onPhase
     let maximumConsecutiveOverflows = max(1, maximumConsecutiveOverflows)
     let healthyResetWindow = healthyResetWindow
     let healthyResetEvents = max(1, healthyResetEvents)
@@ -414,6 +435,7 @@ public struct EventStreamRunner: Sendable {
               openedAt = clock.now()
               eventsSinceOpen = 0
               healthyResetDone = false
+              await onPhase(.connected)
             } else {
               eventsSinceOpen += 1
               if !healthyResetDone, let openedAt,
@@ -436,8 +458,11 @@ public struct EventStreamRunner: Sendable {
           }
           // The connection ended without an error the batcher could report.
           log.event(.streamDisconnected)
-          guard try await waitForRetry(OpenCodeClientError(.streamEnded), schedule: &schedule) else {
-            channel.fail(OpenCodeClientError(.streamEnded))
+          let ended = OpenCodeClientError(.streamEnded)
+          await onPhase(.disconnected(ended))
+          guard try await waitForRetry(ended, schedule: &schedule) else {
+            await onPhase(.ended(ended))
+            channel.fail(ended)
             return
           }
         } catch is CancellationError {
@@ -466,25 +491,33 @@ public struct EventStreamRunner: Sendable {
               [LogField("consecutive", .count(consecutiveOverflows))]
             )
             if consecutiveOverflows > maximumConsecutiveOverflows {
+              let ended = OpenCodeClientError(.streamOverflow)
+              await onPhase(.ended(ended))
               channel.fail(overflow)
               return
             }
+            await onPhase(.resynchronizing)
             await onResynchronize(overflow)
             log.event(.streamResynchronized)
             guard try await waitForRetry(OpenCodeClientError(.streamOverflow), schedule: &overflowSchedule)
             else {
+              await onPhase(.ended(OpenCodeClientError(.streamOverflow)))
               channel.fail(overflow)
               return
             }
           } else if let clientError = error as? OpenCodeClientError {
             log.event(.streamDisconnected, [LogField("status", .status(clientError.statusCode ?? 0))])
+            await onPhase(.disconnected(clientError))
             guard try await waitForRetry(clientError, schedule: &schedule) else {
+              await onPhase(.ended(clientError))
               channel.fail(clientError)
               return
             }
           } else {
             let wrapped = EventStream.clientError(for: error)
+            await onPhase(.disconnected(wrapped))
             guard try await waitForRetry(wrapped, schedule: &schedule) else {
+              await onPhase(.ended(wrapped))
               channel.fail(wrapped)
               return
             }

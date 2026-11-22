@@ -10,7 +10,8 @@ final class KeychainProbeTests: XCTestCase {
   func testKeychainRoundTripInTheAppProcess() {
     let app = XCUIApplication()
     app.launchArguments = [
-      "-uiTesting", "-uiTestKeychainProbe", "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+      "-uiTesting", "-uiTestScenario", "disconnected", "-uiTestKeychainProbe", "-AppleLanguages", "(en)",
+      "-AppleLocale", "en_US",
     ]
     app.launch()
 

@@ -16,26 +16,35 @@ Baselines:
 
 - Behaviour: `dev = 7358160e808fb1870eeb20f5da8df832667019d1`.
 - iOS evidence: parity corpus synced at iOS `01eef583`; screenshots at `d809b1e` and `16b40f7` (October).
-- New code: `ios` branch from the same `dev` SHA (`ios` head `d0fdf2f5` when Phase 4 branched; Phase 4
-  work is on `ios-networking`).
+- New code: `ios` branch from the same `dev` SHA; P5 branched from `ios` head `5f143ea7` (PR #3, tree
+  `2326a49b`) and is on `ios-shell`.
 
 ## App shell
 
 | Behaviour | Android source (`dev`) | Recovered iOS source | New path | Status |
 | --- | --- | --- | --- | --- |
-| Process entry, root store, scene phase | `app/src/main/kotlin/ai/opencode/app/OpenCodeApplication.kt`, `MainActivity.kt` | `OpenCode/App/OpenCodeApp.swift` | `ios/OpenCode/App/OpenCodeApp.swift` | scaffold |
-| Launch states (disconnected, loading, failed) | `app/AppFeature.kt` (`Connection` enum) | `AppFeature.swift`, `AppView.swift` | `ios/OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift`, `ios/OpenCode/App/RootView.swift` | scaffold |
-| Connection state machine | `app/AppFeature.kt` | `OpenCode/App/AppFeature.swift` | `ios/OpenCodeKit/Sources/OpenCodeApp` | scaffold (probe inert) |
-| Pairing link, saved servers | `app/AppFeaturePairing.kt`, `AppFeatureServers.kt` | `AppFeature+Pairing.swift`, `+Servers.swift` | same | not started |
-| Manual server form, failure report | `app/AppView.kt` | `AppView.swift` | same | not started |
-| QR scanning | `feature/settings/.../servers/PairingScanner.kt` | `Settings/PairingScanner.swift` | same | not started |
+| Process entry, root store, scene phase | `app/src/main/kotlin/ai/opencode/app/OpenCodeApplication.kt`, `MainActivity.kt` | `OpenCode/App/OpenCodeApp.swift` | `ios/OpenCode/App/OpenCodeApp.swift` | done — one store, `.task`, `scenePhase` forwarding, `.onOpenURL` |
+| Launch restore: saved server, list and cache | `app/AppFeature.kt` (`State.initial`), `server/ServerSharedKeys.kt` | `AppFeature.swift` | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift`, `OpenCodeServer/Address/ServerSharedKeys.swift` | done — missing/corrupt/unavailable are distinct; a Keychain failure never deletes or overwrites credentials |
+| Saved-data trust and explicit replacement | `app/AppFeature.kt` (`knownServers`, `remember`), `server/ServerSharedKeys.kt` | `AppFeature.swift` | same (`SavedDataState`, `SavedDataWarningBanner`) | done — unreadable data blocks automatic writes; a manual connection is shown but not persisted until Retry succeeds or the person confirms Replace |
+| Manual entry from storage or corrupt data | `app/AppView.kt` | `AppView.swift` | `ios/OpenCode/App/RootView.swift` | done — Enter Manually works from both failure screens; the resulting connection keeps a storage warning |
+| Attempt and stream identity | `app/AppFeature.kt` (`connectionGeneration`), `drawer/HomeConnectionFeature.kt` | not recoverable — native | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` (`ConnectionFeature.Token`) | done — try, replace, background, path loss and disconnect invalidate both identities; delayed callbacks are tested |
+| Central connection eligibility | `server/retry/NetworkPath.kt`, `app/AppFeature.kt` | `NetworkPath.swift` | same (`canAttempt`) | done — work starts only in the foreground with a non-offline path; an offline restore recovers on path return without a manual retry |
+| Launch states (disconnected, connecting, loading, connected, reconnecting, failed) | `app/AppFeature.kt` (`Connection` enum) | `AppFeature.swift`, `AppView.swift` | `ios/OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift`, `ios/OpenCode/App/RootView.swift` | done — typed phases and actionable failures |
+| Connection state machine and identity guard | `app/AppFeature.kt` (`connectionGeneration`, `ConnectionAttempt`) | `AppFeature.swift` | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` (`ConnectionFeature`) | done — identified child state, attempt/stream tokens seeded per connection, stale callbacks ignored |
+| Address race and authoritative REST refresh | `server/ServerLink.kt`, `drawer/HomeConnectionFeature.kt` | `OpenCodeClient+Connection.swift` | `OpenCodeServer/Address/ServerLink.swift`, `OpenCodeServer/Client/OpenCodeClient.swift` | done — preferred head start, 401 preference; projects refresh on every handshake and overflow |
+| Network path observation | `server/retry/NetworkPath.kt` | `NetworkPath.swift` | `OpenCodeCore/Network/NetworkPathClient.swift`, `OpenCodeServer/Retry/NetworkPathRetry.swift` | done for the seam and state transitions; the live `NWPathMonitor` path is simulator/device-only |
+| Pairing link, saved servers | `app/AppFeaturePairing.kt`, `AppFeatureServers.kt` | `AppFeature+Pairing.swift`, `+Servers.swift` | same | done for paste and deep links; saved-server switch/forget UI is P6 |
+| Manual server form, validation | `app/AppView.kt` | `AppView.swift` | `ios/OpenCode/App/RootView.swift` | partial — name/address/username/password, typed validation, reachable from storage and corrupt screens; custom headers and error-report copy deferred |
+| Pairing confirmation | `app/AppFeaturePairing.kt` (`PendingPairing`) | `AppFeature+Pairing.swift` | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` | done — an opened link is parsed without network and needs Pair |
+| QR scanning | `feature/settings/.../servers/PairingScanner.kt` | `Settings/PairingScanner.swift` | — | deferred to a later phase; device-only, no scanner in P5 |
+
 
 ## Core
 
 | Behaviour | Android source | Recovered iOS source | New path | Status |
 | --- | --- | --- | --- | --- |
 | Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 (exact) | done — sibling order, effect order, cancellation identity, child-first `ifLet`, presentation dismissal and path-indexed cancellation tested on representative compositions (`OpenCodeAppTests/StoreSemanticsTests.swift`) |
-| Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `ios/OpenCodeKit/Sources/OpenCodeCore/{Dependencies,Transport,Haptics}` (probe, date, id, haptics, HTTP transport) | done — five keys, every test value inert, guarded by `DependencyIsolationTests` |
+| Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `ios/OpenCodeKit/Sources/OpenCodeCore/{Dependencies,Transport,Haptics,Storage,Network}` (date, id, pasteboard, shared store, network path, haptics, HTTP transport) | done — every test value inert, guarded by `DependencyIsolationTests` |
 | Shared keys and storage | `core/.../sharing/{Shared,SharedKeys}.kt` | `Core/SharedKeys.swift`, `Keychain.swift` | `.../Storage/{KeyValueStorage,SharedKeys}.swift` | done — four foundation keys, defaults, storage routing, round-trip and failure propagation tested |
 | Keychain | `core/.../sharing/LiveSharedBytes.kt` | `Core/Keychain.swift` | `.../Storage/{KeyValueStorage,KeychainStorage}.swift` | done — typed `value`/`missing`/`failure` outcomes, failure mapping unit-tested, round-trip verified in the app process |
 | Semantic colour tokens | `core/.../ui/{BrandPalette,OpenCodeColors}.kt` | `Core/Theme/Theme.swift` (system colours) | `.../Design/OpenCodeColorTokens.swift` | done |
@@ -56,7 +65,9 @@ Baselines:
 | Credential scope | `OpenCodeServer.kt`, `live/LiveTransport.kt` | not recoverable | `HTTPRedirectRule`, `OpenCodeServer.wireHeaders` | done — Basic header applied by origin, cross-origin hop refused and rule-tested |
 | Retry, backoff, `Retry-After`, idempotency | `server/retry/NetworkRetry.kt` | `NetworkRetry.swift` | `OpenCodeServer/Retry/{RetryPolicy,NetworkRetry}.swift` | done — presets, classification, equal jitter, window, cancellation, unsafe-write rule tested |
 | Wire models | `server/model/*.kt`, `live/Payloads.kt` | `OpenCodeClient+Payloads.swift` | `OpenCodeServer/Models/*.swift` | partial — session, project, shell, job, prompt body, model ref and envelopes modelled; remaining routes listed in `PROTOCOL_COVERAGE.md` |
-| Client boundary | `server/OpenCodeClient.kt` | `OpenCodeClient.swift` | `OpenCodeServer/Client/OpenCodeClient.swift` | partial — health, pairing redeem, projects, session page, get session, active IDs, events; other call sites belong to their feature phases |
+| Client boundary | `server/OpenCodeClient.kt` | `OpenCodeClient.swift` | `OpenCodeServer/Client/OpenCodeClient.swift` | done for the shell: health, pairing redeem, projects, session page, get session, active IDs, events with awaited phase callbacks; other call sites belong to their feature phases |
+| Alternate-origin routing | `server/ServerLink.kt` | `OpenCodeClient+Family.swift` | `OpenCodeServer/Address/ServerLink.swift` | done — every candidate probed once, preferred head start, first answer wins, 401 preferred on failure |
+| Network path | `server/retry/NetworkPath.kt` | `NetworkPath.swift` | `OpenCodeCore/Network/NetworkPathClient.swift` | done for observation, offline/wait and reroute-driven reconnect; live monitor hardware path unverified |
 | SSE decode and batching | `server/live/LiveEvents.kt`, `EventBatcher.kt` | `OpenCodeClient+Events.swift` | `OpenCodeServer/Events/*.swift` | done for framing, decoding, coalescing, ordering and bounds; transcript pressure shedding deferred (D-23) |
 | Reconnect and watchdog | `server/live/LiveEvents.kt`, `retry/NetworkRetry.kt` | not recoverable | `EventStreamRunner`, `EventStream` | done — reconnect schedule, 401 stop, 45 s idle watchdog, connect deadline covering headers, bounded overflow recovery with a REST resync callback tested (D-27) |
 | Pairing decode and redeem | `server/OpenCodePairingLink.kt`, `live/LiveConnection.kt` | `OpenCodePairingLink.swift` | `OpenCodeServer/Pairing/PairingLink.swift`, `OpenCodeClient.redeemPairing` | done — every form, validation reasons, loopback filtering, non-fetching draw link, one unauthenticated GET per candidate tested |
@@ -96,6 +107,9 @@ Recorded here so they are not mistaken for missing work.
 | Redirect tests | OkHttp interceptor + MockWebServer | pure `HTTPRedirectRule` plus a loopback HTTP server that exercises the real URLSession delegate (D-22, D-28) |
 | Cleartext | manifest cleartext plus an interceptor | ATS exceptions plus `TransportSecurity`, both narrower than "cleartext everywhere" (D-22) |
 | Time in retries | `Clock` dependency over coroutines | `ClockClient` with recording/gated doubles (D-21) |
+| Local-network denial | Android 17 permission preflight with a dedicated denial message | iOS does not expose a preflight; the shell shows a generic unreachable message plus a Local Network settings hint, never a denial claim (D-35) |
+| Storage identity | Android application id + keys | Keychain service derived at runtime from the configured bundle identifier; no historical identifier copied (D-32) |
+| Connected destination | Home drawer and session list | P5 shows the server and its project list; Home/sessions are P6/P7 (D-36) |
 
 ## Test coverage
 
@@ -109,8 +123,9 @@ Recorded here so they are not mistaken for missing work.
 | Shared keys and storage | `.../SharedStoreTests.swift`, `.../KeychainFailureTests.swift` | done |
 | Dependency isolation and transport boundary | `.../DependencyIsolationTests.swift`, `.../TransportBoundaryTests.swift`, `.../NetworkAndIsolationTests.swift` | done |
 | Store semantics | `OpenCodeAppTests/StoreSemanticsTests.swift` | done |
-| App reducer | `OpenCodeAppTests/AppFeatureTests.swift`, `LaunchConfigurationTests.swift` | done |
+| App reducer | `OpenCodeAppTests/AppFeatureTests.swift`, `ConnectionFeatureTests.swift`, `LaunchConfigurationTests.swift` | done |
 | Server: address and cleartext policy | `OpenCodeServerTests/ServerAddressTests.swift` | done |
+| Server: address race | `.../ServerLinkTests.swift` | done |
 | Server: redirect rule | `.../RedirectRuleTests.swift` | done |
 | Server: transport send/stream | `.../TransportTests.swift` | done |
 | Server: pairing | `.../PairingLinkTests.swift` | done |
@@ -118,9 +133,9 @@ Recorded here so they are not mistaken for missing work.
 | Server: SSE parsing | `.../SSEParserTests.swift` | done |
 | Server: event decoding | `.../ServerEventDecoderTests.swift` | done |
 | Server: event batching | `.../EventBatcherTests.swift` | done |
-| Server: event stream and reconnect | `.../EventStreamTests.swift` | done |
-| Server: loopback delegates and socket lifetime | `.../LocalFixtureServerTests.swift` | done (loopback only, opt-out env var) |
+| Server: event stream and reconnect | `.../EventStreamTests.swift`, `.../EventStreamPhaseTests.swift` | done |
+| Server: loopback delegates and socket lifetime | `.../LocalFixtureServerTests.swift` | done (loopback only, opt-out env var); includes a compatible fixture connection |
 | Server: live read-only smoke | `.../LiveServerTests.swift` | run once manually; skipped by default |
 | Server: client requests | `.../OpenCodeClientTests.swift` | done |
-| Bounded channel | `OpenCodeCoreTests/BoundedChannelTests.swift` | done |
-| UI (XCUITest) | `OpenCodeUITests/{LaunchSmokeTests,KeychainProbeTests}.swift` | done for the launch states |
+| Bounded channel | `OpenCodeCoreTests/BoundedChannelTests.swift` | done; one pre-existing timing-sensitive expectation flaked once and passed on rerun |
+| UI (XCUITest) | `OpenCodeUITests/{LaunchSmokeTests,ConnectionLifecycleUITests,KeychainProbeTests,SavedServerProbeTests}.swift` | done — 18 tests covering launch, manual entry from both storage-error screens, paste, connected/reconnecting, failures, deep-link confirmation, lifecycle fixture and Keychain restore |

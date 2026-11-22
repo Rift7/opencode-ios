@@ -25,7 +25,7 @@ struct DependencyIsolationTests {
     for file in files {
       let contents = try String(contentsOf: file, encoding: .utf8)
       let keys = contents.components(separatedBy: ": DependencyKey").count - 1
-      let testValues = contents.components(separatedBy: "static let testValue").count - 1
+      let testValues = contents.components(separatedBy: "testValue").count - 1
       keyCount += keys
 
       #expect(

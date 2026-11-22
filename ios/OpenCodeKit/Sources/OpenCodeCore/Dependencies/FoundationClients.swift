@@ -2,36 +2,6 @@ import ComposableArchitecture
 import Foundation
 import Synchronization
 
-/// Why a connection probe could not reach a server. The app owns the user-facing copy so this
-/// layer stays free of localized strings.
-public enum ProbeFailure: Error, Equatable, Sendable {
-  case notConfigured
-  case unreachable
-  case rejected
-}
-
-/// The connection probe. The live value is inert until the networking phase: it reports
-/// `notConfigured` and never touches the network.
-public struct ConnectionProbe: Sendable {
-  public var check: @Sendable () async -> Result<Void, ProbeFailure>
-
-  public init(check: @escaping @Sendable () async -> Result<Void, ProbeFailure>) {
-    self.check = check
-  }
-}
-
-extension ConnectionProbe: DependencyKey {
-  public static let liveValue = ConnectionProbe { .failure(.notConfigured) }
-  public static let testValue = ConnectionProbe { .failure(.notConfigured) }
-}
-
-extension DependencyValues {
-  public var connectionProbe: ConnectionProbe {
-    get { self[ConnectionProbe.self] }
-    set { self[ConnectionProbe.self] = newValue }
-  }
-}
-
 /// Wall-clock access. Reducers never call `Date()` directly so tests can pin time.
 public struct DateClient: Sendable {
   public var now: @Sendable () -> Date
@@ -47,7 +17,7 @@ extension DateClient: DependencyKey {
 }
 
 extension DependencyValues {
-  public var date: DateClient {
+  public var dateClient: DateClient {
     get { self[DateClient.self] }
     set { self[DateClient.self] = newValue }
   }
@@ -84,7 +54,7 @@ extension UuidClient: DependencyKey {
 }
 
 extension DependencyValues {
-  public var uuid: UuidClient {
+  public var uuidClient: UuidClient {
     get { self[UuidClient.self] }
     set { self[UuidClient.self] = newValue }
   }

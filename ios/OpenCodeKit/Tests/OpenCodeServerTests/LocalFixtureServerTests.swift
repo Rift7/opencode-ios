@@ -284,4 +284,61 @@ struct LocalFixtureServerTests {
 
     #expect(await server.waitForConnectionClosed(timeout: .seconds(3)))
   }
+
+  @Test("a compatible fixture server serves health, projects and the event handshake")
+  func compatibleFixtureConnection() async throws {
+    let server = try LocalHTTPServer()
+    defer { server.stop() }
+    server.route(
+      "/api/info",
+      .http(
+        status: 200,
+        headers: ["Content-Type": "application/json"],
+        body: Data(#"{"version":"0.0.0-fixture","pid":1}"#.utf8)
+      )
+    )
+    server.route(
+      "/api/project",
+      .http(
+        status: 200,
+        headers: ["Content-Type": "application/json"],
+        body: Data(
+          #"[{"id":"p1","canonical":"/work/box","name":"Box"}]"#.utf8
+        )
+      )
+    )
+    server.route(
+      "/api/event",
+      .stream(
+        headers: ["Content-Type": "text/event-stream"],
+        chunks: [Data("data: {\"type\":\"server.connected\"}\n\n".utf8)],
+        intervalMilliseconds: 10
+      )
+    )
+
+    let serverValue = openCodeServer(for: server.baseURL.absoluteString)
+    let client = OpenCodeClient.live(
+      transport: liveTransport(),
+      clock: .liveValue,
+      policy: .once
+    )
+
+    let info = try await client.health(serverValue)
+    let projects = try await client.projects(serverValue)
+
+    var connected = false
+    for try await event in client.events(serverValue, { _ in }) {
+      if event == .connected {
+        connected = true
+        break
+      }
+    }
+
+    #expect(info.version == "0.0.0-fixture")
+    #expect(projects.map(\.name) == ["Box"])
+    #expect(connected)
+    #expect(server.requests.map(\.path).contains("/api/info"))
+    #expect(server.requests.map(\.path).contains("/api/project"))
+    #expect(server.requests.map(\.path).contains("/api/event"))
+  }
 }

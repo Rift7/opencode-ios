@@ -34,8 +34,8 @@ Status vocabulary:
 | Unsafe requests resent only when provably unsent | `RequestIdempotency`, `retryVerdict` | same | implemented + tested (interrupted unsafe write sent once; `notSent` retried; 408/429/503 retried) |
 | Cancellation is never a reachability failure | `retryVerdict` | `NetworkRetry.run`, transport delegate | implemented + tested |
 | Under tests a request is sent once unless a policy is set | `NetworkRetry.currentPolicy` | `OpenCodeClient.live(…, policy: .once)` | implemented — the test factory defaults to `.once` |
-| Offline detection and a network-path wait | `retry/NetworkPath.kt` | `RetryEnvironment` | deferred to P5: the seam exists; nothing observes the path yet |
-| Alternate-origin routing between candidate addresses | `retry/ServerLink.kt`, `ServerContact.kt` | `OpenCodeServer.candidateURLs`, `preferredURLs` | partial — candidates are carried and pairing orders them; the live race/watchdog is P5 |
+| Offline detection and a network-path wait | `retry/NetworkPath.kt` | `NetworkPathClient`, `NetworkPathRetry` | implemented — one `NWPathMonitor`, injected updates, offline wait; P5 reconnects on a satisfied path |
+| Alternate-origin routing between candidate addresses | `retry/ServerLink.kt`, `ServerContact.kt` | `OpenCodeServer.candidateURLs`, `ServerLink` | implemented — every candidate probed once with a preferred head start; the winning address is used for the connection |
 
 ## REST routes
 
@@ -161,6 +161,11 @@ The app expects an OpenCode V2 server that serves the audited JSON routes. Check
 Do not silently remap `/api/project` to `/project` or treat the web shell as data: neither matches the
 audited contract. A connection attempt that lands on an HTML page now fails as
 `.incompatibleAPI` (D-31), which is distinct from a rejected password and from an unreachable host.
+
+P5 uses exactly these routes: `health` (`/api/info`), `projects` (`/api/project`) and `events`
+(`/api/event`). A compatible fixture serves those three through the real `URLSession` stack in
+`LocalFixtureServerTests.compatibleFixtureConnection`. The live P4 build still fails the connection
+screen as incompatible; that outcome is preserved, not remapped.
 
 ## Authentication and pairing
 

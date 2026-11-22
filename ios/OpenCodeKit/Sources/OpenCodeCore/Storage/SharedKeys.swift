@@ -1,4 +1,20 @@
+import ComposableArchitecture
 import Foundation
+
+/// Application-defined storage identifiers. The Keychain service follows the configured bundle
+/// identifier, so the owner-supplied app identity decides where credentials live instead of a
+/// migration constant or a historical identifier.
+public enum StorageIdentity {
+  public static let fallbackBundleIdentifier = "ai.opencode.migration"
+
+  public static var bundleIdentifier: String {
+    Bundle.main.bundleIdentifier ?? fallbackBundleIdentifier
+  }
+
+  public static var keychainService: String {
+    "\(bundleIdentifier).credentials"
+  }
+}
 
 /// Where a shared value lives. Credentials and paired servers belong in the keychain; preferences
 /// belong in user defaults.
@@ -83,6 +99,29 @@ public struct SharedStore: Sendable {
     case .userDefaults: defaults
     case .keychain: keychain
     }
+  }
+}
+
+extension SharedStore: DependencyKey {
+  /// The app's store: preferences in `UserDefaults`, credentials in the Keychain service derived
+  /// from the configured bundle identifier.
+  public static var liveValue: SharedStore {
+    SharedStore(
+      defaults: UserDefaultsStorage(),
+      keychain: KeychainStorage(service: StorageIdentity.keychainService)
+    )
+  }
+
+  /// A fresh pair of in-memory stores per dependency resolution, so tests never share bytes.
+  public static var testValue: SharedStore {
+    SharedStore(defaults: InMemoryStorage(), keychain: InMemoryStorage())
+  }
+}
+
+extension DependencyValues {
+  public var sharedStore: SharedStore {
+    get { self[SharedStore.self] }
+    set { self[SharedStore.self] = newValue }
   }
 }
 
