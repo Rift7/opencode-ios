@@ -30,7 +30,10 @@ struct RootView: View {
               PairingProblemBanner(problem: problem) { store.send(.pairingProblemDismissed) }
             }
             if store.connection != nil, store.savedData.isUnreadable {
-              SavedDataWarningBanner { store.send(.replaceSavedDataTapped) }
+              SavedDataWarningBanner(
+                retry: { store.send(.restoreRetried) },
+                replace: { store.send(.replaceSavedDataTapped) }
+              )
             }
             if let notice = store.notice {
               NoticeBanner(notice: notice) { store.send(.noticeDismissed) }
@@ -785,6 +788,7 @@ private struct NoticeBanner: View {
 }
 
 private struct SavedDataWarningBanner: View {
+  let retry: () -> Void
   let replace: () -> Void
 
   var body: some View {
@@ -792,13 +796,22 @@ private struct SavedDataWarningBanner: View {
       Text(AppCopy.text("saved_data.warning"))
         .font(OpenCodeFonts.font(.footnote))
         .foregroundStyle(OpenCodeColors.color(.warning))
-      Button(action: replace) {
-        Text(AppCopy.text("saved_data.replace"))
-          .font(OpenCodeFonts.font(.footnote))
-          .foregroundStyle(OpenCodeColors.color(.link))
+      HStack(spacing: OpenCodeSpacing.s16) {
+        Button(action: retry) {
+          Text(AppCopy.text("common.try_again"))
+            .font(OpenCodeFonts.font(.footnote))
+            .foregroundStyle(OpenCodeColors.color(.link))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("saved-data-retry")
+        Button(action: replace) {
+          Text(AppCopy.text("saved_data.replace"))
+            .font(OpenCodeFonts.font(.footnote))
+            .foregroundStyle(OpenCodeColors.color(.link))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("saved-data-replace")
       }
-      .buttonStyle(.plain)
-      .accessibilityIdentifier("saved-data-replace")
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(OpenCodeSpacing.s12)
