@@ -144,7 +144,7 @@ message or file content.
 ## Where the work stands
 
 `PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P7 are merged into `ios`
-(P7 as `92a7c677`). P8 is implemented on `ios-transcript` (draft PR #7; corrections at `4c2ecd7d`); the composer is P9. The transcript's
+(P7 as `92a7c677`). P8 is implemented on `ios-transcript` (draft PR #7; corrections at `1dc7f5f2`); the composer is P9. The transcript's
 state boundaries are P7's refresh identity plus P8's per-session `TranscriptState`.
 
 What P6 added, in one paragraph: `HomeFeature` replaces the project-only connected destination with the
