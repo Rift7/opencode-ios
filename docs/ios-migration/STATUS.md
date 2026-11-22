@@ -10,6 +10,7 @@
 | P7 branch | `ios-session`, created from `origin/ios` after `git fetch origin` |
 | P8 base | `92a7c677cb1f1007f1acc1e441603af757e51dfa` (`origin/ios`, PR #6 merged) |
 | P8 branch | `ios-transcript`, created from `origin/ios` |
+| P8 verified head | `2619c1d5` (draft PR #7) |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
 `git fetch origin` moved `origin/ios` from `3b34932c` to `7966dcfe`. PR #5 (`ios: add the native Home,
@@ -29,7 +30,7 @@ is the hand-off check.
 | 5 | App shell: launch, connection, pairing, reconnect | complete — `3b34932c` (PR #4) |
 | 6 | Home, drawer, projects, Catch Up, What's New | complete — `7966dcfe` (PR #5, tree `25b6d297`) |
 | 7 | Session, subagents, background work, request review | complete — `92a7c677` (PR #6); merged tree `e8e1db5b` equals reviewed `56c10086` |
-| 8 | Transcript | **complete on `ios-transcript`** (draft PR) |
+| 8 | Transcript | **complete on `ios-transcript`** (draft PR #7, verified head `2619c1d5`) |
 | 9 | Composer | not started |
 | 10 | Media | not started |
 | 11 | Settings, experiments, diagnostics, onboarding | not started |
