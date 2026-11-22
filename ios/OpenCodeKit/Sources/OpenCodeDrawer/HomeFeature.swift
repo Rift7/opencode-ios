@@ -114,13 +114,12 @@ public struct HomeFeature {
     /// Session ID -> idle watermark at or below which a delayed view event is stale for a
     /// deliberate unread mark or an undone read.
     var unreadFloors: [String: Int64]
-    /// Deletes whose server call has not settled. They survive disconnect and are reconciled by
-    /// the first authoritative refresh after reconnect.
-    var inFlightDeletions: [String: DeletionBackup]
-    /// Session ID -> the refresh counter at which the server confirmed deletion. A refresh that
-    /// started later and no longer lists the session clears the tombstone.
+    /// Deletes whose server outcome is not settled. They survive disconnect and are verified by a
+    /// targeted session read after reconnect; absence from the first page proves nothing.
+    var pendingDeletions: [String: PendingDeletion]
+    /// Session ID -> the refresh counter at which the server confirmed deletion. Tombstones are
+    /// kept for the Home lifetime so an older refresh cannot resurrect a deleted row.
     var deletionTombstones: [String: Int]
-    var reconcilesDeletionsOnRefresh: Bool
     /// Directories a cold attention event taught us about; a later full attention read includes
     /// them without scanning every project.
     var attentionHints: [String]
@@ -131,6 +130,15 @@ public struct HomeFeature {
       public init(session: OpenCodeSession) {
         self.session = session
       }
+    }
+
+    struct PendingDeletion: Equatable, Sendable {
+      var backup: DeletionBackup
+      var operationID: UUID
+      /// The DELETE request has not produced an operation result yet.
+      var isRunning: Bool
+      /// A targeted read must establish the outcome before local records are touched.
+      var needsVerification: Bool
     }
 
     struct ReadReceipt: Equatable, Sendable {
@@ -196,9 +204,8 @@ public struct HomeFeature {
       self.refreshQueued = false
       self.readReceipts = [:]
       self.unreadFloors = [:]
-      self.inFlightDeletions = [:]
+      self.pendingDeletions = [:]
       self.deletionTombstones = [:]
-      self.reconcilesDeletionsOnRefresh = false
       self.attentionHints = []
     }
 
@@ -352,11 +359,15 @@ public struct HomeFeature {
     }
 
     public func isDeletionInFlight(_ sessionID: String) -> Bool {
-      inFlightDeletions[sessionID] != nil
+      pendingDeletions[sessionID] != nil
     }
 
     public func isDeletionConfirmed(_ sessionID: String) -> Bool {
       deletionTombstones[sessionID] != nil
+    }
+
+    public func deletionOperationID(_ sessionID: String) -> UUID? {
+      pendingDeletions[sessionID]?.operationID
     }
 
     public var drawerBadge: DrawerIndicator? {
@@ -429,8 +440,16 @@ public struct HomeFeature {
     case deleteConfirmed
     case deletionFinished(
       serverID: String,
-      backup: State.DeletionBackup,
+      sessionID: String,
+      operationID: UUID,
       result: Result<Bool, OpenCodeClientError>
+    )
+    case deletionVerified(
+      generation: Int,
+      serverID: String,
+      sessionID: String,
+      operationID: UUID,
+      outcome: DeletionVerification
     )
     case noticeExpired
 
@@ -465,6 +484,7 @@ public struct HomeFeature {
     case notice
     case readReceipt(String)
     case deletion(String)
+    case deletionVerification(String)
   }
 
   @Dependency(\.openCodeClient) private var client
@@ -529,7 +549,6 @@ public struct HomeFeature {
           state.page.next = refresh.next
           state.page.failed = false
           state.notice = nil
-          reconcileDeletions(refresh.sessions, request: request, state: &state)
           reconcileCatchUp(&state)
           AppLog(category: .app).event(
             .connectionReady,
@@ -568,19 +587,17 @@ public struct HomeFeature {
         if isConnected {
           guard !state.isLive else { return .none }
           state.isLive = true
-          if !state.inFlightDeletions.isEmpty { state.reconcilesDeletionsOnRefresh = true }
-          return startRefresh(&state, delay: .zero)
+          return .merge(
+            startRefresh(&state, delay: .zero),
+            verifyPendingDeletions(&state)
+          )
         }
-        let hadWork =
-          state.isLive || state.isRefreshing || state.page.isLoading
-          || (state.search?.isLoading ?? false)
         state.isLive = false
         state.isRefreshing = false
         state.refreshQueued = false
         state.page.isLoading = false
         state.search?.isLoading = false
         state.readReceipts = [:]
-        guard hadWork else { return .none }
         state.generation += 1
         return cancelServerWork()
 
@@ -760,26 +777,74 @@ public struct HomeFeature {
       case .deleteConfirmed:
         return confirmDeletion(&state)
 
-      case .deletionFinished(let serverID, let backup, let result):
+      case .deletionFinished(let serverID, let sessionID, let operationID, let result):
         guard serverID == state.serverID else { return .none }
-        // A refresh after reconnect may already have reconciled this delete; a late answer then
-        // has nothing left to settle.
-        guard state.inFlightDeletions[backup.session.id] != nil else { return .none }
-        state.inFlightDeletions[backup.session.id] = nil
+        guard var pending = state.pendingDeletions[sessionID],
+          pending.operationID == operationID
+        else { return .none }
         switch result {
         case .success:
-          confirmDeleted(backup, state: &state)
+          state.pendingDeletions[sessionID] = nil
+          confirmDeleted(pending.backup, state: &state)
           return .none
-        case .failure:
-          state.deletionTombstones[backup.session.id] = nil
-          restoreDeletion(backup, state: &state)
-          state.notice = .couldNotDelete(title: backup.session.title)
-          let clock = clock
-          return .run { send in
-            try? await clock.sleep(.seconds(5))
-            await send(.noticeExpired)
+        case .failure(let error):
+          switch deletionFailureKind(error) {
+          case .confirmed:
+            state.pendingDeletions[sessionID] = nil
+            confirmDeleted(pending.backup, state: &state)
+            return .none
+          case .failed:
+            state.pendingDeletions[sessionID] = nil
+            state.deletionTombstones[sessionID] = nil
+            restoreDeletion(pending.backup, state: &state)
+            state.notice = .couldNotDelete(title: pending.backup.session.title)
+            return noticeExpiryEffect()
+          case .uncertain:
+            // The server may have acted. Keep the backup and the local records; a targeted read
+            // decides the outcome. Never infer it from the first session page.
+            pending.isRunning = false
+            pending.needsVerification = true
+            state.pendingDeletions[sessionID] = pending
+            guard state.isLive else { return .none }
+            return verifyDeletion(
+              server: state.server,
+              serverID: state.serverID,
+              generation: state.generation,
+              sessionID: sessionID,
+              operationID: operationID
+            )
           }
-          .cancellable(id: CancelID.notice, cancelInFlight: true)
+        }
+
+      case .deletionVerified(let generation, let serverID, let sessionID, let operationID, let outcome):
+        guard generation == state.generation, serverID == state.serverID else { return .none }
+        guard var pending = state.pendingDeletions[sessionID],
+          pending.operationID == operationID
+        else { return .none }
+        switch outcome {
+        case .absent:
+          state.pendingDeletions[sessionID] = nil
+          confirmDeleted(pending.backup, state: &state)
+          return .none
+        case .present:
+          if pending.isRunning {
+            // The DELETE may still be in flight. Presence is an intermediate state, not a failure.
+            pending.needsVerification = true
+            state.pendingDeletions[sessionID] = pending
+            return .none
+          }
+          state.pendingDeletions[sessionID] = nil
+          state.deletionTombstones[sessionID] = nil
+          restoreDeletion(pending.backup, state: &state)
+          state.notice = .couldNotDelete(title: pending.backup.session.title)
+          return noticeExpiryEffect()
+        case .inconclusive:
+          pending.needsVerification = true
+          state.pendingDeletions[sessionID] = pending
+          if !pending.isRunning {
+            state.notice = .couldNotVerifyDeletion(title: pending.backup.session.title)
+          }
+          return .none
         }
 
       case .noticeExpired:
@@ -1197,7 +1262,7 @@ public struct HomeFeature {
       state.attentionSessionIDs.remove(id)
       state.recentDeletedIDs.insert(id)
       state.deletionTombstones[id] = state.refreshRequest
-      state.inFlightDeletions[id] = nil
+      state.pendingDeletions[id] = nil
       if let deleted { purgeLocalRecords(deleted, state: &state) }
       return .none
     case .sessionArchiveChanged(let id, true):
@@ -1562,8 +1627,19 @@ public struct HomeFeature {
         neededAttention: false,
         wasListed: false
       )
-      state.inFlightDeletions[session.id] = backup
-      return deletionEffect(session: session, backup: backup, state: &state)
+      let operationID = uuid.uuid()
+      state.pendingDeletions[session.id] = State.PendingDeletion(
+        backup: backup,
+        operationID: operationID,
+        isRunning: true,
+        needsVerification: false
+      )
+      return deletionEffect(
+        session: session,
+        backup: backup,
+        operationID: operationID,
+        state: &state
+      )
     }
     let backup = State.DeletionBackup(
       session: session,
@@ -1576,40 +1652,58 @@ public struct HomeFeature {
     state.attentionSessionIDs.remove(session.id)
     state.search?.results.removeAll { $0.id == session.id }
     state.recentDeletedIDs.insert(session.id)
-    state.inFlightDeletions[session.id] = backup
-    return deletionEffect(session: session, backup: backup, state: &state)
+    let operationID = uuid.uuid()
+    state.pendingDeletions[session.id] = State.PendingDeletion(
+      backup: backup,
+      operationID: operationID,
+      isRunning: true,
+      needsVerification: false
+    )
+    return deletionEffect(
+      session: session,
+      backup: backup,
+      operationID: operationID,
+      state: &state
+    )
   }
 
   private func deletionEffect(
     session: OpenCodeSession,
     backup: State.DeletionBackup?,
+    operationID: UUID,
     state: inout State
   ) -> Effect<Action> {
     let server = state.server
     let serverID = state.serverID
     let client = client
-    let placeholder =
-      backup
-      ?? State.DeletionBackup(
-        session: session,
-        index: 0,
-        wasActive: false,
-        neededAttention: false,
-        wasListed: false
-      )
     return .run { send in
       do {
         try await client.deleteSession(server, session.id)
-        await send(.deletionFinished(serverID: serverID, backup: placeholder, result: .success(true)))
+        await send(
+          .deletionFinished(
+            serverID: serverID,
+            sessionID: session.id,
+            operationID: operationID,
+            result: .success(true)
+          )
+        )
       } catch is CancellationError {
         return
       } catch let error as OpenCodeClientError {
-        await send(.deletionFinished(serverID: serverID, backup: placeholder, result: .failure(error)))
+        await send(
+          .deletionFinished(
+            serverID: serverID,
+            sessionID: session.id,
+            operationID: operationID,
+            result: .failure(error)
+          )
+        )
       } catch {
         await send(
           .deletionFinished(
             serverID: serverID,
-            backup: placeholder,
+            sessionID: session.id,
+            operationID: operationID,
             result: .failure(OpenCodeClientError(.unreachable))
           )
         )
@@ -1640,42 +1734,101 @@ public struct HomeFeature {
     trimDeletionTombstones(&state)
   }
 
-  /// A delete whose call never settled while disconnected is settled by the first authoritative
-  /// read after reconnect: present means it failed and the row returns; absent means it succeeded.
-  private func reconcileDeletions(
-    _ fresh: [OpenCodeSession],
-    request: Int,
-    state: inout State
-  ) {
-    if state.reconcilesDeletionsOnRefresh {
-      state.reconcilesDeletionsOnRefresh = false
-      let freshIDs = Set(fresh.map(\.id))
-      for id in Array(state.inFlightDeletions.keys) {
-        guard let backup = state.inFlightDeletions[id] else { continue }
-        state.inFlightDeletions[id] = nil
-        if freshIDs.contains(id) {
-          state.deletionTombstones[id] = nil
-          restoreDeletion(backup, state: &state)
-          state.notice = .couldNotDelete(title: backup.session.title)
-        } else {
-          confirmDeleted(backup, state: &state)
-        }
-      }
-    }
-    for id in Array(state.deletionTombstones.keys) {
-      guard let epoch = state.deletionTombstones[id], epoch < request else { continue }
-      guard !fresh.contains(where: { $0.id == id }) else { continue }
-      state.deletionTombstones[id] = nil
-      state.recentDeletedIDs.remove(id)
-    }
-  }
-
   private func trimDeletionTombstones(_ state: inout State) {
     guard state.deletionTombstones.count > 200 else { return }
     let oldest = state.deletionTombstones.min { $0.value < $1.value }?.key
-    if let oldest {
-      state.deletionTombstones[oldest] = nil
+    if let oldest { state.deletionTombstones[oldest] = nil }
+  }
+
+  private enum DeletionFailureKind {
+    case confirmed
+    case failed
+    case uncertain
+  }
+
+  /// A 404 (other than a missing location) says the session is gone; a 4xx says the request was
+  /// refused; transport timeouts and 5xx leave the server outcome unknown.
+  private func deletionFailureKind(_ error: OpenCodeClientError) -> DeletionFailureKind {
+    if let status = error.statusCode {
+      if status == 404 { return error.isLocationMissing ? .uncertain : .confirmed }
+      if (400...499).contains(status), status != 408, status != 429 { return .failed }
+      return .uncertain
     }
+    switch error.failure {
+    case .transport(.notSent), .invalidURL, .unsupported:
+      return .failed
+    default:
+      return .uncertain
+    }
+  }
+
+  private func noticeExpiryEffect() -> Effect<Action> {
+    let clock = clock
+    return .run { send in
+      try? await clock.sleep(.seconds(5))
+      await send(.noticeExpired)
+    }
+    .cancellable(id: CancelID.notice, cancelInFlight: true)
+  }
+
+  /// On reconnect every unsettled delete gets one targeted session read. First-page presence or
+  /// absence is never used; an older session can simply be on a later page.
+  private func verifyPendingDeletions(_ state: inout State) -> Effect<Action> {
+    guard !state.isPinned else { return .none }
+    let pending = state.pendingDeletions
+      .filter { $0.value.needsVerification || $0.value.isRunning }
+      .prefix(8)
+    var effects: [Effect<Action>] = []
+    for (sessionID, deletion) in pending {
+      state.pendingDeletions[sessionID]?.needsVerification = true
+      effects.append(
+        verifyDeletion(
+          server: state.server,
+          serverID: state.serverID,
+          generation: state.generation,
+          sessionID: sessionID,
+          operationID: deletion.operationID
+        )
+      )
+    }
+    return effects.isEmpty ? .none : .merge(effects)
+  }
+
+  private func verifyDeletion(
+    server: OpenCodeServer,
+    serverID: String,
+    generation: Int,
+    sessionID: String,
+    operationID: UUID
+  ) -> Effect<Action> {
+    let client = client
+    return .run { send in
+      let outcome: DeletionVerification
+      do {
+        _ = try await client.getSession(server, sessionID)
+        outcome = .present
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        if error.statusCode == 404, !error.isLocationMissing {
+          outcome = .absent
+        } else {
+          outcome = .inconclusive(error)
+        }
+      } catch {
+        outcome = .inconclusive(OpenCodeClientError(.unreachable))
+      }
+      await send(
+        .deletionVerified(
+          generation: generation,
+          serverID: serverID,
+          sessionID: sessionID,
+          operationID: operationID,
+          outcome: outcome
+        )
+      )
+    }
+    .cancellable(id: CancelID.deletionVerification(sessionID), cancelInFlight: true)
   }
 
   /// A confirmed server delete also drops this phone's records for the session.

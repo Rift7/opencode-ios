@@ -256,7 +256,7 @@ struct HomeFeatureTests {
     #expect(!store.state.isLive)
   }
 
-  @Test("a failed delete restores the row at its place and reports it")
+  @Test("a definitively failed delete restores the row at its place and reports it")
   func deletionFailure() async {
     let failing = OpenCodeClient(
       health: { _ in throw OpenCodeClientError(.unsupported) },
@@ -265,7 +265,7 @@ struct HomeFeatureTests {
       sessionPage: { _, _, _ in throw OpenCodeClientError(.unsupported) },
       getSession: { _, _ in throw OpenCodeClientError(.unsupported) },
       activeSessionIDs: { _ in throw OpenCodeClientError(.unsupported) },
-      deleteSession: { _, _ in throw OpenCodeClientError(.status(500)) },
+      deleteSession: { _, _ in throw OpenCodeClientError(.status(400)) },
       events: { _, _ in
         AsyncThrowingStream { $0.finish(throwing: OpenCodeClientError(.unreachable)) }
       }
@@ -283,22 +283,18 @@ struct HomeFeatureTests {
     await store.send(.deleteConfirmed)
     #expect(store.state.sessions.map(\.id) == ["a", "c"])
 
-    let backup = HomeFeature.State.DeletionBackup(
-      session: session("b"),
-      index: 1,
-      wasActive: false,
-      neededAttention: false
-    )
     await store.receive(
       .deletionFinished(
         serverID: store.state.serverID,
-        backup: backup,
-        result: .failure(OpenCodeClientError(.status(500)))
+        sessionID: "b",
+        operationID: store.state.deletionOperationID("b")!,
+        result: .failure(OpenCodeClientError(.status(400)))
       )
     )
     #expect(store.state.sessions.map(\.id) == ["a", "b", "c"])
     #expect(store.state.notice == .couldNotDelete(title: "b"))
     #expect(!store.state.recentDeletedIDs.contains("b"))
+    #expect(!store.state.isDeletionInFlight("b"))
   }
 
   @Test("Catch Up puts waiting first, skips running and marks or keeps a card")
@@ -608,6 +604,12 @@ struct HomeFeatureTests {
     var all: [SessionPageRequest] { values.withLock { $0 } }
   }
 
+  private final class CallCounter: Sendable {
+    private let value = Mutex<Int>(0)
+    func increment() { value.withLock { $0 += 1 } }
+    var count: Int { value.withLock { $0 } }
+  }
+
   private final class Latch: Sendable {
     private let continuation: AsyncStream<Void>.Continuation
     private let stream: AsyncStream<Void>
@@ -857,16 +859,12 @@ struct HomeFeatureTests {
 
     await store.send(.deleteTapped("b"))
     await store.send(.deleteConfirmed)
-    let backup = HomeFeature.State.DeletionBackup(
-      session: session("b"),
-      index: 1,
-      wasActive: false,
-      neededAttention: false
-    )
+    let operationID = store.state.deletionOperationID("b")!
     await store.receive(
       .deletionFinished(
         serverID: store.state.serverID,
-        backup: backup,
+        sessionID: "b",
+        operationID: operationID,
         result: .success(true)
       )
     )
@@ -883,58 +881,238 @@ struct HomeFeatureTests {
       )
     )
     #expect(store.state.sessions.map(\.id) == ["a"])
+    #expect(store.state.isDeletionConfirmed("b"))
     #expect(!store.state.isDeletionInFlight("b"))
   }
 
-  @Test("a delete failure is reconciled by the first refresh after reconnect")
-  func deleteFailureReconcilesAfterReconnect() async {
-    let latch = Latch()
-    let listed = [session("a"), session("b")]
+  private func deletionPinsAndReadDate() -> (pins: [String], dates: [String: Date]) {
+    let key = "opencode|http://127.0.0.1:4110|older"
+    return ([key], [key: Date(timeIntervalSince1970: 1_600_000_000)])
+  }
+
+  @Test("a later-page delete with an unknown outcome is verified by a targeted read")
+  func laterPageDeleteUnknownOutcome() async {
+    var state = HomeFeature.State(
+      server: server,
+      sessions: [session("a"), session("older", updated: 1_000)],
+      hasLoaded: true
+    )
+    state.page.pagesLoaded = 1
+    state.pinnedKeys = deletionPinsAndReadDate().pins
+    state.readDates = deletionPinsAndReadDate().dates
+    let listed = [session("a")]
+    let older = session("older", updated: 1_000)
+    let check = Latch()
     let client = baseClient(
       sessionPage: { _, _, _ in SessionPage(sessions: listed, next: nil) },
+      getSession: { _, id in
+        guard id == "older" else { throw OpenCodeClientError(.status(404)) }
+        await check.wait()
+        return older
+      },
+      deleteSession: { _, _ in throw OpenCodeClientError(.transport(.timedOut)) }
+    )
+    let store = makeStore(state, client: client)
+
+    await store.send(.deleteTapped("older"))
+    await store.send(.deleteConfirmed)
+    await store.receive(
+      .deletionFinished(
+        serverID: store.state.serverID,
+        sessionID: "older",
+        operationID: store.state.deletionOperationID("older")!,
+        result: .failure(OpenCodeClientError(.transport(.timedOut)))
+      )
+    )
+
+    // The first page omits the older session. That is not evidence of deletion and must not
+    // purge its pins or read history.
+    await store.send(
+      .refreshed(
+        generation: store.state.generation,
+        request: store.state.refreshRequest,
+        result: .success(HomeRefresh(sessions: listed, next: nil, activeSessionIDs: []))
+      )
+    )
+    #expect(store.state.isDeletionInFlight("older"))
+    #expect(store.state.pinnedKeys == deletionPinsAndReadDate().pins)
+    #expect(store.state.readDates == deletionPinsAndReadDate().dates)
+
+    check.open()
+    await store.receive(
+      .deletionVerified(
+        generation: store.state.generation,
+        serverID: store.state.serverID,
+        sessionID: "older",
+        operationID: store.state.deletionOperationID("older")!,
+        outcome: .present
+      )
+    )
+
+    #expect(store.state.sessions.map(\.id) == ["a", "older"])
+    #expect(store.state.notice == .couldNotDelete(title: "older"))
+    #expect(store.state.pinnedKeys == deletionPinsAndReadDate().pins)
+    #expect(store.state.readDates == deletionPinsAndReadDate().dates)
+    #expect(!store.state.isDeletionConfirmed("older"))
+  }
+
+  @Test("a targeted absence confirms an older session's deletion before cleanup")
+  func laterPageDeleteConfirmedByTargetedRead() async {
+    var state = HomeFeature.State(
+      server: server,
+      sessions: [session("a"), session("older", updated: 1_000)],
+      hasLoaded: true
+    )
+    state.page.pagesLoaded = 1
+    state.pinnedKeys = deletionPinsAndReadDate().pins
+    state.readDates = deletionPinsAndReadDate().dates
+    let listed = [session("a")]
+    let check = Latch()
+    let client = baseClient(
+      sessionPage: { _, _, _ in SessionPage(sessions: listed, next: nil) },
+      getSession: { _, _ in
+        await check.wait()
+        throw OpenCodeClientError(.status(404))
+      },
+      deleteSession: { _, _ in throw OpenCodeClientError(.transport(.timedOut)) }
+    )
+    let store = makeStore(state, client: client)
+
+    await store.send(.deleteTapped("older"))
+    await store.send(.deleteConfirmed)
+    await store.receive(
+      .deletionFinished(
+        serverID: store.state.serverID,
+        sessionID: "older",
+        operationID: store.state.deletionOperationID("older")!,
+        result: .failure(OpenCodeClientError(.transport(.timedOut)))
+      )
+    )
+    check.open()
+    await store.receive(
+      .deletionVerified(
+        generation: store.state.generation,
+        serverID: store.state.serverID,
+        sessionID: "older",
+        operationID: store.state.deletionOperationID("older")!,
+        outcome: .absent
+      )
+    )
+
+    #expect(store.state.sessions.map(\.id) == ["a"])
+    #expect(store.state.pinnedKeys.isEmpty)
+    #expect(store.state.readDates.isEmpty)
+    #expect(store.state.isDeletionConfirmed("older"))
+    #expect(!store.state.isDeletionInFlight("older"))
+  }
+
+  @Test("an inconclusive targeted read preserves the backup and local records")
+  func inconclusiveDeletionVerification() async {
+    var state = HomeFeature.State(
+      server: server,
+      sessions: [session("a"), session("older", updated: 1_000)],
+      hasLoaded: true
+    )
+    state.page.pagesLoaded = 1
+    state.pinnedKeys = deletionPinsAndReadDate().pins
+    state.readDates = deletionPinsAndReadDate().dates
+    let listed = [session("a")]
+    let check = Latch()
+    let client = baseClient(
+      sessionPage: { _, _, _ in SessionPage(sessions: listed, next: nil) },
+      getSession: { _, _ in
+        await check.wait()
+        throw OpenCodeClientError(.status(401))
+      },
+      deleteSession: { _, _ in throw OpenCodeClientError(.transport(.timedOut)) }
+    )
+    let store = makeStore(state, client: client)
+
+    await store.send(.deleteTapped("older"))
+    await store.send(.deleteConfirmed)
+    await store.receive(
+      .deletionFinished(
+        serverID: store.state.serverID,
+        sessionID: "older",
+        operationID: store.state.deletionOperationID("older")!,
+        result: .failure(OpenCodeClientError(.transport(.timedOut)))
+      )
+    )
+    check.open()
+    await store.receive(
+      .deletionVerified(
+        generation: store.state.generation,
+        serverID: store.state.serverID,
+        sessionID: "older",
+        operationID: store.state.deletionOperationID("older")!,
+        outcome: .inconclusive(OpenCodeClientError(.status(401)))
+      )
+    )
+
+    #expect(store.state.sessions.map(\.id) == ["a"])
+    #expect(store.state.isDeletionInFlight("older"))
+    #expect(!store.state.isDeletionConfirmed("older"))
+    #expect(store.state.pinnedKeys == deletionPinsAndReadDate().pins)
+    #expect(store.state.readDates == deletionPinsAndReadDate().dates)
+    #expect(store.state.notice == .couldNotVerifyDeletion(title: "older"))
+  }
+
+  @Test("an existence check does not settle a delete that is still running")
+  func runningDeletionSurvivesExistenceCheck() async {
+    let latch = Latch()
+    var state = HomeFeature.State(
+      server: server,
+      sessions: [session("a"), session("older", updated: 1_000)],
+      hasLoaded: true
+    )
+    state.page.pagesLoaded = 1
+    state.pinnedKeys = deletionPinsAndReadDate().pins
+    state.readDates = deletionPinsAndReadDate().dates
+    let listed = [session("a")]
+    let older = session("older", updated: 1_000)
+    let checks = CallCounter()
+    let client = baseClient(
+      sessionPage: { _, _, _ in SessionPage(sessions: listed, next: nil) },
+      getSession: { _, _ in
+        checks.increment()
+        return older
+      },
       deleteSession: { _, _ in await latch.wait() }
     )
-    let store = makeStore(
-      HomeFeature.State(server: server, sessions: [session("a"), session("b")], hasLoaded: true),
-      client: client
-    )
+    let store = makeStore(state, client: client)
 
-    await store.send(.deleteTapped("b"))
+    await store.send(.deleteTapped("older"))
     await store.send(.deleteConfirmed)
-    #expect(store.state.isDeletionInFlight("b"))
-    #expect(store.state.sessions.map(\.id) == ["a"])
+    let operationID = store.state.deletionOperationID("older")!
 
     await store.send(.connectionChanged(isConnected: false))
-    #expect(!store.state.isLive)
     await store.send(.connectionChanged(isConnected: true))
     await store.receive(
       .refreshed(
         generation: store.state.generation,
         request: store.state.refreshRequest,
-        result: .success(
-          HomeRefresh(sessions: listed, next: nil, activeSessionIDs: [])
-        )
+        result: .success(HomeRefresh(sessions: listed, next: nil, activeSessionIDs: []))
       )
     )
+    await waitFor { checks.count == 1 }
 
-    #expect(store.state.sessions.map(\.id) == ["a", "b"])
-    #expect(!store.state.isDeletionInFlight("b"))
-    #expect(store.state.notice == .couldNotDelete(title: "b"))
+    #expect(store.state.isDeletionInFlight("older"))
+    #expect(store.state.notice == nil)
+    #expect(store.state.pinnedKeys == deletionPinsAndReadDate().pins)
+    #expect(store.state.readDates == deletionPinsAndReadDate().dates)
 
     latch.open()
     await store.receive(
       .deletionFinished(
         serverID: store.state.serverID,
-        backup: HomeFeature.State.DeletionBackup(
-          session: session("b"),
-          index: 1,
-          wasActive: false,
-          neededAttention: false
-        ),
+        sessionID: "older",
+        operationID: operationID,
         result: .success(true)
       )
     )
-    #expect(store.state.sessions.map(\.id) == ["a", "b"])
+    #expect(store.state.isDeletionConfirmed("older"))
+    #expect(!store.state.isDeletionInFlight("older"))
+    #expect(store.state.pinnedKeys.isEmpty)
   }
 
   @Test("a confirmed delete stays removed across disconnect and reconnect")
@@ -950,14 +1128,14 @@ struct HomeFeatureTests {
 
     await store.send(.deleteTapped("b"))
     await store.send(.deleteConfirmed)
-    let backup = HomeFeature.State.DeletionBackup(
-      session: session("b"),
-      index: 1,
-      wasActive: false,
-      neededAttention: false
-    )
+    let operationID = store.state.deletionOperationID("b")!
     await store.receive(
-      .deletionFinished(serverID: store.state.serverID, backup: backup, result: .success(true))
+      .deletionFinished(
+        serverID: store.state.serverID,
+        sessionID: "b",
+        operationID: operationID,
+        result: .success(true)
+      )
     )
     #expect(store.state.isDeletionConfirmed("b"))
 
@@ -967,14 +1145,12 @@ struct HomeFeatureTests {
       .refreshed(
         generation: store.state.generation,
         request: store.state.refreshRequest,
-        result: .success(
-          HomeRefresh(sessions: remaining, next: nil, activeSessionIDs: [])
-        )
+        result: .success(HomeRefresh(sessions: remaining, next: nil, activeSessionIDs: []))
       )
     )
 
-    #expect(!store.state.isDeletionConfirmed("b"))
     #expect(store.state.sessions.map(\.id) == ["a"])
+    #expect(store.state.isDeletionConfirmed("b"))
   }
 
   @Test("Home starts one refresh when it becomes eligible again")
@@ -1149,6 +1325,49 @@ struct HomeFeatureTests {
       )
     )
     #expect(calls.withLock { $0 } == 1)
+  }
+
+
+  @Test("a late delete result cannot reverse a targeted confirmation")
+  func lateDeleteResultIgnoredAfterVerification() async {
+    let latch = Latch()
+    var state = HomeFeature.State(
+      server: server,
+      sessions: [session("a"), session("older", updated: 1_000)],
+      hasLoaded: true
+    )
+    state.page.pagesLoaded = 1
+    state.pinnedKeys = deletionPinsAndReadDate().pins
+    state.readDates = deletionPinsAndReadDate().dates
+    let listed = [session("a")]
+    let client = baseClient(
+      sessionPage: { _, _, _ in SessionPage(sessions: listed, next: nil) },
+      getSession: { _, _ in throw OpenCodeClientError(.status(404)) },
+      deleteSession: { _, _ in await latch.wait() }
+    )
+    let store = makeStore(state, client: client)
+
+    await store.send(.deleteTapped("older"))
+    await store.send(.deleteConfirmed)
+
+    await store.send(.connectionChanged(isConnected: false))
+    await store.send(.connectionChanged(isConnected: true))
+    await store.receive(
+      .refreshed(
+        generation: store.state.generation,
+        request: store.state.refreshRequest,
+        result: .success(HomeRefresh(sessions: listed, next: nil, activeSessionIDs: []))
+      )
+    )
+    await waitFor { store.state.isDeletionConfirmed("older") }
+
+    latch.open()
+    try? await Task.sleep(for: .milliseconds(20))
+
+    #expect(store.state.isDeletionConfirmed("older"))
+    #expect(!store.state.isDeletionInFlight("older"))
+    #expect(store.state.sessions.map(\.id) == ["a"])
+    #expect(store.state.pinnedKeys.isEmpty)
   }
 
   private func waitFor(

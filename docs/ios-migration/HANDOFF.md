@@ -138,10 +138,10 @@ Useful entry points:
 
 ### P6 evidence
 
-- `swift test --package-path ios/OpenCodeKit`: 317 tests (161 server, 67 core, 58 app, 31 drawer).
+- `swift test --package-path ios/OpenCodeKit`: 321 tests (161 server, 67 core, 58 app, 35 drawer).
 - `ios/scripts/verify.sh`: 26 UI tests pass, including 8 P6 tests; app build and `OpenCodeTests` pass.
 - Screenshots: `docs/ios-migration/screens/p6-{home,drawer,catch-up}[-dark].png`.
-- Review corrections: paging retries, receipt-only watermarks, deletion tombstones/reconnect reconciliation, connection live gating and cold attention resolution are covered by the deterministic regressions named in `STATUS.md`.
+- Review corrections: paging retries, receipt-only watermarks, targeted deletion verification/tombstones (never first-page absence), connection live gating and cold attention resolution are covered by the deterministic regressions named in `STATUS.md`.
 - Scroll trace: 300-session fixture, iPhone 18 Pro Max simulator (iOS 27.2), 141–142 frames per
   iteration, p50/p95 16.7 ms, one 33.3 ms frame, deceleration 2.428 s average. Simulator measurement only.
 

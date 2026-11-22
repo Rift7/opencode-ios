@@ -93,6 +93,7 @@ public enum HomeNotice: Equatable, Sendable {
   case couldNotReadSnapshot(HomeSnapshotFailure)
   case couldNotSaveSnapshot(HomeSnapshotFailure)
   case couldNotDelete(title: String)
+  case couldNotVerifyDeletion(title: String)
   case couldNotMarkRead(title: String)
   case couldNotLoadSearch
   case couldNotLoadOlder
@@ -149,6 +150,13 @@ public struct HomeSnapshot: Codable, Equatable, Sendable {
 
   /// A snapshot for another build is not read, so a changed shape cannot be half-applied.
   public var isCurrent: Bool { version == Self.currentVersion }
+}
+
+/// What a targeted session read says about a deletion whose operation result was not definitive.
+public enum DeletionVerification: Equatable, Sendable {
+  case absent
+  case present
+  case inconclusive(OpenCodeClientError)
 }
 
 public enum HomeSnapshotFailure: Error, Equatable, Sendable {

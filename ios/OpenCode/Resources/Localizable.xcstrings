@@ -1639,6 +1639,17 @@
           }
         }
       }
+    },
+    "home.delete_unverified": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t confirm whether “%@” was deleted. Its pins and read history are safe."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

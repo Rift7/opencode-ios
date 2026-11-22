@@ -613,10 +613,11 @@ The P6 review corrections are recorded as semantics rather than patches:
   but a successful `POST /view` for A must not mark activity B read. `unreadFloors` records the watermark
   a deliberate unread or an Undo protects; a view event at or below it is stale, a newer one is real.
 - **Deletion has three states: in flight, confirmed and failed.** `recentDeletedIDs` hides the row,
-  `inFlightDeletions` survives disconnect, and `deletionTombstones` records the refresh counter at
-  confirmation. A refresh that started before confirmation cannot clear the tombstone; the first
-  refresh after a reconnect reconciles an unsettled delete by presence/absence. Delete results are
-  server-scoped, not generation-scoped, so a disconnect cannot strand a row.
+  `pendingDeletions` survives disconnect, and `deletionTombstones` records the refresh counter at
+  confirmation. A refresh that started before confirmation cannot clear the tombstone. An unsettled
+  delete is reconciled only by a targeted session read (D-49), never by its absence from the first
+  page. Delete results are server-scoped and operation-ID guarded, so a disconnect or late answer
+  cannot strand or reverse a row.
 - **Live means live.** Home may read only in front, online and after the shell has completed a
   connection. `ConnectionFeature` reports `available` after a handshake refresh and `unavailable` when
   the socket drops; `connectionResynchronized` replaces an earlier read with one authoritative read.
@@ -626,3 +627,26 @@ The P6 review corrections are recorded as semantics rather than patches:
   gets one coalesced Home refresh, and hint directories stay bounded at eight.
 
 Regressions are in `OpenCodeDrawerTests/HomeFeatureTests.swift` and `OpenCodeAppTests/AppFeatureTests.swift`.
+
+### D-49 Deletion verification is targeted, not inferred from a page
+A Home refresh returns only the newest 50 root sessions. Absence from that page cannot prove an older
+session was deleted, so deletion reconciliation never uses it.
+
+- A delete has three outcomes: **definitive success** (the DELETE succeeded, returned a non-location
+  404, or a targeted `GET /api/session/{id}` returned a non-location 404), **definitive failure**
+  (a 4xx refusal or a request that was never sent), and **uncertain** (timeout, interrupted transport,
+  429/5xx, unreachable, undecodable or a location-missing 404).
+- A definitive failure restores the row and keeps the tombstone cleared. A definitive success purges
+  local records and keeps a tombstone for the Home lifetime so a stale refresh cannot resurrect the row.
+- An uncertain outcome keeps the backup, the row hidden, and every local pin/read record. On reconnect,
+  each unsettled delete gets one targeted session read (bounded to eight concurrent checks). Absence
+  confirms success; presence fails the delete only when the DELETE is no longer running. Presence while
+  the DELETE is still in flight is intermediate and settles nothing.
+- An inconclusive read (401, connectivity, server error, location-missing 404) preserves the backup and
+  reports that verification could not be completed. It never destroys local history.
+- Every delete carries an operation id. A late result is applied only if it still matches the pending
+  operation, so a newer reconciliation cannot be reversed.
+
+Regressions: `laterPageDeleteUnknownOutcome`, `laterPageDeleteConfirmedByTargetedRead`,
+`inconclusiveDeletionVerification`, `runningDeletionSurvivesExistenceCheck`,
+`lateDeleteResultIgnoredAfterVerification`, `oldRefreshCannotResurrectDelete`.

@@ -909,6 +909,8 @@ private func noticeText(_ notice: HomeNotice) -> String {
     return AppCopy.text("home.snapshot_save_failed")
   case .couldNotDelete(let title):
     return AppCopy.format("home.delete_failed", title)
+  case .couldNotVerifyDeletion(let title):
+    return AppCopy.format("home.delete_unverified", title)
   case .couldNotMarkRead(let title):
     return AppCopy.format("home.mark_read_failed", title)
   case .couldNotLoadSearch:
