@@ -111,6 +111,19 @@ public struct HomeFeature {
     var isRefreshing: Bool
     var refreshQueued: Bool
     var readReceipts: [String: ReadReceipt]
+    /// Session ID -> idle watermark at or below which a delayed view event is stale for a
+    /// deliberate unread mark or an undone read.
+    var unreadFloors: [String: Int64]
+    /// Deletes whose server call has not settled. They survive disconnect and are reconciled by
+    /// the first authoritative refresh after reconnect.
+    var inFlightDeletions: [String: DeletionBackup]
+    /// Session ID -> the refresh counter at which the server confirmed deletion. A refresh that
+    /// started later and no longer lists the session clears the tombstone.
+    var deletionTombstones: [String: Int]
+    var reconcilesDeletionsOnRefresh: Bool
+    /// Directories a cold attention event taught us about; a later full attention read includes
+    /// them without scanning every project.
+    var attentionHints: [String]
 
     public struct SessionDeletion: Equatable, Sendable {
       public var session: OpenCodeSession
@@ -182,6 +195,11 @@ public struct HomeFeature {
       self.isRefreshing = false
       self.refreshQueued = false
       self.readReceipts = [:]
+      self.unreadFloors = [:]
+      self.inFlightDeletions = [:]
+      self.deletionTombstones = [:]
+      self.reconcilesDeletionsOnRefresh = false
+      self.attentionHints = []
     }
 
     /// Effect bookkeeping stays out of equality; tokens only guard late callbacks.
@@ -333,6 +351,14 @@ public struct HomeFeature {
       readReceipts[sessionID]?.id
     }
 
+    public func isDeletionInFlight(_ sessionID: String) -> Bool {
+      inFlightDeletions[sessionID] != nil
+    }
+
+    public func isDeletionConfirmed(_ sessionID: String) -> Bool {
+      deletionTombstones[sessionID] != nil
+    }
+
     public var drawerBadge: DrawerIndicator? {
       guard isLive else { return nil }
       for session in sessions where !session.isArchived && !isMuted(session.id) {
@@ -357,10 +383,18 @@ public struct HomeFeature {
     case snapshotWritten(generation: Int, result: Result<Bool, HomeSnapshotFailure>)
     case retryRefreshTapped
     case connectionChanged(isConnected: Bool)
+    case connectionResynchronized
     case projectsChanged([ServerProject])
     case serverEvent(ServerEvent)
 
     case attentionRefreshed(generation: Int, result: Result<Set<String>, OpenCodeClientError>)
+    case attentionEventResolved(
+      generation: Int,
+      askedID: String,
+      rootID: String,
+      directory: String,
+      result: Result<Set<String>, OpenCodeClientError>
+    )
 
     case loadMoreTapped
     case olderLoaded(generation: Int, cursor: String, result: Result<SessionPage, OpenCodeClientError>)
@@ -394,7 +428,7 @@ public struct HomeFeature {
     case deleteCancelled
     case deleteConfirmed
     case deletionFinished(
-      generation: Int,
+      serverID: String,
       backup: State.DeletionBackup,
       result: Result<Bool, OpenCodeClientError>
     )
@@ -454,9 +488,11 @@ public struct HomeFeature {
           return .none
         }
         let generation = state.generation
+        let refresh: Effect<Action> =
+          state.isRefreshing ? .none : startRefresh(&state, delay: .zero)
         return .merge(
           cacheEffect(serverID: state.serverID, generation: generation),
-          startRefresh(&state, delay: .zero)
+          refresh
         )
 
       case .localStateLoaded:
@@ -493,6 +529,7 @@ public struct HomeFeature {
           state.page.next = refresh.next
           state.page.failed = false
           state.notice = nil
+          reconcileDeletions(refresh.sessions, request: request, state: &state)
           reconcileCatchUp(&state)
           AppLog(category: .app).event(
             .connectionReady,
@@ -531,14 +568,29 @@ public struct HomeFeature {
         if isConnected {
           guard !state.isLive else { return .none }
           state.isLive = true
+          if !state.inFlightDeletions.isEmpty { state.reconcilesDeletionsOnRefresh = true }
           return startRefresh(&state, delay: .zero)
         }
-        guard state.isLive || state.isRefreshing else { return .none }
+        let hadWork =
+          state.isLive || state.isRefreshing || state.page.isLoading
+          || (state.search?.isLoading ?? false)
         state.isLive = false
         state.isRefreshing = false
         state.refreshQueued = false
+        state.page.isLoading = false
+        state.search?.isLoading = false
+        state.readReceipts = [:]
+        guard hadWork else { return .none }
         state.generation += 1
         return cancelServerWork()
+
+      case .connectionResynchronized:
+        state.isLive = true
+        guard !state.isPinned else { return .none }
+        // A fresh Home's first read started in .task already covers the handshake. Once data is
+        // shown, a reconnect replaces any read that started before it with one authoritative read.
+        if state.isRefreshing && !state.hasLoaded { return .none }
+        return startRefresh(&state, delay: .zero, replacingInFlight: true)
 
       case .projectsChanged(let projects):
         state.projects = projects
@@ -554,6 +606,22 @@ public struct HomeFeature {
           reconcileCatchUp(&state)
         }
         return .none
+
+      case .attentionEventResolved(let generation, _, let rootID, let directory, let result):
+        guard generation == state.generation, !state.isPinned else { return .none }
+        addAttentionHint(directory, state: &state)
+        switch result {
+        case .success(let ids):
+          state.attentionSessionIDs.formUnion(ids)
+          // A cold session's own directory may report it before the Home page lists it.
+          if ids.isEmpty { state.attentionSessionIDs.insert(rootID) }
+        case .failure:
+          // Keep the event's own answer rather than dropping the indicator on a read failure.
+          state.attentionSessionIDs.insert(rootID)
+        }
+        let needsRow = !state.sessions.contains { $0.id == rootID }
+        reconcileCatchUp(&state)
+        return needsRow ? startRefresh(&state, delay: .milliseconds(250)) : .none
 
       case .loadMoreTapped:
         return loadMore(&state)
@@ -634,14 +702,9 @@ public struct HomeFeature {
         state.readReceipts[sessionID] = nil
         switch result {
         case .success:
-          if let idle = state.session(sessionID)?.idleMilliseconds {
-            _ = idle
-          }
-          if let index = state.sessions.firstIndex(where: { $0.id == sessionID }),
-            let idle = state.sessions[index].idleMilliseconds
-          {
-            state.sessions[index].viewedMilliseconds = max(state.sessions[index].viewedMilliseconds ?? 0, idle)
-          }
+          // Acknowledge only the watermark this receipt carried. Newer activity that arrived
+          // while it was in flight must stay unread.
+          acknowledgeView(sessionID: sessionID, idle: receipt.idle, state: &state)
         case .failure(let error):
           restoreRead(receipt.backup, sessionID: sessionID, state: &state)
           let title = state.session(sessionID)?.title ?? ""
@@ -697,14 +760,18 @@ public struct HomeFeature {
       case .deleteConfirmed:
         return confirmDeletion(&state)
 
-      case .deletionFinished(let generation, let backup, let result):
-        guard generation == state.generation else { return .none }
+      case .deletionFinished(let serverID, let backup, let result):
+        guard serverID == state.serverID else { return .none }
+        // A refresh after reconnect may already have reconciled this delete; a late answer then
+        // has nothing left to settle.
+        guard state.inFlightDeletions[backup.session.id] != nil else { return .none }
+        state.inFlightDeletions[backup.session.id] = nil
         switch result {
         case .success:
-          purgeLocalRecords(backup.session, state: &state)
-          state.recentDeletedIDs.remove(backup.session.id)
+          confirmDeleted(backup, state: &state)
           return .none
         case .failure:
+          state.deletionTombstones[backup.session.id] = nil
           restoreDeletion(backup, state: &state)
           state.notice = .couldNotDelete(title: backup.session.title)
           let clock = clock
@@ -793,11 +860,18 @@ public struct HomeFeature {
 
   // MARK: Refresh
 
-  private func startRefresh(_ state: inout State, delay: Duration) -> Effect<Action> {
+  private func startRefresh(
+    _ state: inout State,
+    delay: Duration,
+    replacingInFlight: Bool = false
+  ) -> Effect<Action> {
     guard state.isLive, !state.isPinned else { return .none }
     if state.isRefreshing {
-      state.refreshQueued = true
-      return .none
+      if !replacingInFlight {
+        state.refreshQueued = true
+        return .none
+      }
+      state.refreshQueued = false
     }
     state.isRefreshing = true
     state.refreshRequest += 1
@@ -929,13 +1003,160 @@ public struct HomeFeature {
       }
       .sorted { $0.updatedAt > $1.updatedAt }
     var seen = Set<String>()
-    return hot.compactMap { session in
-      let directory = session.directory.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !directory.isEmpty, seen.insert(directory).inserted else { return nil }
+    let ordered =
+      hot.compactMap { session -> String? in
+        let directory = session.directory.trimmingCharacters(in: .whitespacesAndNewlines)
+        return directory.isEmpty ? nil : directory
+      }
+      + state.attentionHints
+    return ordered.compactMap { directory in
+      guard seen.insert(directory).inserted else { return nil }
       return directory
     }
     .prefix(8)
     .map { $0 }
+  }
+
+  /// A pending request for a cold root or subagent names a directory no current row covers. One
+  /// location read (and at most eight ancestry reads) resolves its root; no project scan happens.
+  private func resolveAttentionEvent(_ askedID: String, state: inout State) -> Effect<Action> {
+    let server = state.server
+    let generation = state.generation
+    let roots = state.sessions
+    let client = client
+
+    if let session = state.sessions.first(where: { $0.id == askedID }),
+      let rootID = knownRootID(for: session, state: state)
+    {
+      optimisticAttention(rootID: rootID, directory: session.directory, state: &state)
+      return directoryAttentionEffect(
+        server: server,
+        generation: generation,
+        roots: roots,
+        rootID: rootID,
+        directory: session.directory
+      )
+    }
+
+    return .run { send in
+      do {
+        var current = try await client.getSession(server, askedID)
+        let directory = current.directory
+        var rootID = current.id
+        var hops = 0
+        while let parent = current.parentID, hops < 8 {
+          rootID = parent
+          if roots.contains(where: { $0.id == parent }) { break }
+          current = try await client.getSession(server, parent)
+          hops += 1
+        }
+        let ids = try await client.attentionSessionIDs(server, roots, [directory])
+        await send(
+          .attentionEventResolved(
+            generation: generation,
+            askedID: askedID,
+            rootID: rootID,
+            directory: directory,
+            result: .success(ids)
+          )
+        )
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        await send(
+          .attentionEventResolved(
+            generation: generation,
+            askedID: askedID,
+            rootID: askedID,
+            directory: "",
+            result: .failure(error)
+          )
+        )
+      } catch {
+        await send(
+          .attentionEventResolved(
+            generation: generation,
+            askedID: askedID,
+            rootID: askedID,
+            directory: "",
+            result: .failure(OpenCodeClientError(.unreachable))
+          )
+        )
+      }
+    }
+    .cancellable(id: CancelID.attention, cancelInFlight: true)
+  }
+
+  private func directoryAttentionEffect(
+    server: OpenCodeServer,
+    generation: Int,
+    roots: [OpenCodeSession],
+    rootID: String,
+    directory: String
+  ) -> Effect<Action> {
+    let client = client
+    return .run { send in
+      do {
+        let ids = try await client.attentionSessionIDs(server, roots, [directory])
+        await send(
+          .attentionEventResolved(
+            generation: generation,
+            askedID: rootID,
+            rootID: rootID,
+            directory: directory,
+            result: .success(ids)
+          )
+        )
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        await send(
+          .attentionEventResolved(
+            generation: generation,
+            askedID: rootID,
+            rootID: rootID,
+            directory: directory,
+            result: .failure(error)
+          )
+        )
+      } catch {
+        await send(
+          .attentionEventResolved(
+            generation: generation,
+            askedID: rootID,
+            rootID: rootID,
+            directory: directory,
+            result: .failure(OpenCodeClientError(.unreachable))
+          )
+        )
+      }
+    }
+    .cancellable(id: CancelID.attention, cancelInFlight: true)
+  }
+
+  private func knownRootID(for session: OpenCodeSession, state: State) -> String? {
+    var current = session
+    var seen = Set<String>()
+    while let parent = current.parentID {
+      guard seen.insert(parent).inserted else { return nil }
+      guard let parentSession = state.sessions.first(where: { $0.id == parent }) else { return nil }
+      current = parentSession
+    }
+    return current.id
+  }
+
+  private func optimisticAttention(rootID: String, directory: String, state: inout State) {
+    state.attentionSessionIDs.insert(rootID)
+    addAttentionHint(directory, state: &state)
+  }
+
+  private func addAttentionHint(_ directory: String, state: inout State) {
+    let trimmed = directory.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, !state.attentionHints.contains(trimmed) else { return }
+    state.attentionHints.append(trimmed)
+    if state.attentionHints.count > 8 {
+      state.attentionHints.removeFirst(state.attentionHints.count - 8)
+    }
   }
 
   // MARK: Server events
@@ -959,17 +1180,25 @@ public struct HomeFeature {
       }
       return .none
     case .sessionViewChanged(let id, let idle):
-      if let index = state.sessions.firstIndex(where: { $0.id == id }) {
-        state.sessions[index].viewedMilliseconds = max(state.sessions[index].viewedMilliseconds ?? 0, idle)
-        state.manuallyUnreadKeys.remove(state.key(id))
-        _ = store.write(state.manuallyUnreadKeys, for: HomeSharedKeys.manuallyUnreadSessions)
+      let key = state.key(id)
+      if let floor = state.unreadFloors[id], idle <= floor {
+        // A view event at or below a deliberate unread mark or an undone read is stale.
+        return .none
       }
+      acknowledgeView(sessionID: id, idle: idle, state: &state)
+      state.manuallyUnreadKeys.remove(key)
+      state.unreadFloors[id] = nil
+      _ = store.write(state.manuallyUnreadKeys, for: HomeSharedKeys.manuallyUnreadSessions)
       return .none
     case .sessionDeleted(let id):
+      let deleted = state.sessions.first { $0.id == id }
       state.sessions.removeAll { $0.id == id }
       state.activeSessionIDs.remove(id)
       state.attentionSessionIDs.remove(id)
-      state.recentDeletedIDs.remove(id)
+      state.recentDeletedIDs.insert(id)
+      state.deletionTombstones[id] = state.refreshRequest
+      state.inFlightDeletions[id] = nil
+      if let deleted { purgeLocalRecords(deleted, state: &state) }
       return .none
     case .sessionArchiveChanged(let id, true):
       state.sessions.removeAll { $0.id == id }
@@ -982,8 +1211,9 @@ public struct HomeFeature {
     case .executionEnded(let id):
       state.activeSessionIDs.remove(id)
       return startRefresh(&state, delay: .milliseconds(250))
-    case .attentionChanged:
-      return attentionEffect(&state)
+    case .attentionChanged(let askedID):
+      guard let askedID else { return attentionEffect(&state) }
+      return resolveAttentionEvent(askedID, state: &state)
     case .projectUpdated(let project):
       if let index = state.projects.firstIndex(where: { $0.id == project.id }) {
         state.projects[index] = project
@@ -998,6 +1228,26 @@ public struct HomeFeature {
 
   // MARK: Read state
 
+  private func acknowledgeView(sessionID: String, idle: Int64, state: inout State) {
+    if let index = state.sessions.firstIndex(where: { $0.id == sessionID }) {
+      state.sessions[index].viewedMilliseconds = max(state.sessions[index].viewedMilliseconds ?? 0, idle)
+    }
+    if var search = state.search, let index = search.results.firstIndex(where: { $0.id == sessionID }) {
+      search.results[index].viewedMilliseconds = max(search.results[index].viewedMilliseconds ?? 0, idle)
+      state.search = search
+    }
+  }
+
+  private func setViewed(sessionID: String, viewed: Int64?, state: inout State) {
+    if let index = state.sessions.firstIndex(where: { $0.id == sessionID }) {
+      state.sessions[index].viewedMilliseconds = viewed
+    }
+    if var search = state.search, let index = search.results.firstIndex(where: { $0.id == sessionID }) {
+      search.results[index].viewedMilliseconds = viewed
+      state.search = search
+    }
+  }
+
   @discardableResult
   private func markRead(_ session: OpenCodeSession, state: inout State) -> (backup: CatchUpState.ReadBackup?, effect: Effect<Action>) {
     let key = state.key(session.id)
@@ -1005,14 +1255,14 @@ public struct HomeFeature {
       idleMilliseconds: session.idleMilliseconds,
       viewedMilliseconds: session.viewedMilliseconds,
       readDate: state.readDates[key],
-      wasManuallyUnread: state.manuallyUnreadKeys.contains(key)
+      wasManuallyUnread: state.manuallyUnreadKeys.contains(key),
+      unreadFloorMilliseconds: state.unreadFloors[session.id]
     )
     state.readDates[key] = max(state.readDates[key] ?? .distantPast, session.updatedAt)
     state.manuallyUnreadKeys.remove(key)
-    if let idle = session.idleMilliseconds, idle > 0,
-      let index = state.sessions.firstIndex(where: { $0.id == session.id })
-    {
-      state.sessions[index].viewedMilliseconds = max(state.sessions[index].viewedMilliseconds ?? 0, idle)
+    state.unreadFloors[session.id] = nil
+    if let idle = session.idleMilliseconds, idle > 0 {
+      acknowledgeView(sessionID: session.id, idle: idle, state: &state)
     }
     _ = store.write(state.readDates, for: HomeSharedKeys.sessionReadDates)
     _ = store.write(state.manuallyUnreadKeys, for: HomeSharedKeys.manuallyUnreadSessions)
@@ -1066,6 +1316,7 @@ public struct HomeFeature {
     let key = state.key(session.id)
     state.readDates[key] = session.updatedAt.addingTimeInterval(-1)
     state.manuallyUnreadKeys.insert(key)
+    state.unreadFloors[session.id] = session.idleMilliseconds ?? Int64.max
     state.readReceipts[session.id] = nil
     _ = store.write(state.readDates, for: HomeSharedKeys.sessionReadDates)
     _ = store.write(state.manuallyUnreadKeys, for: HomeSharedKeys.manuallyUnreadSessions)
@@ -1083,8 +1334,11 @@ public struct HomeFeature {
     } else {
       state.manuallyUnreadKeys.remove(key)
     }
-    if let index = state.sessions.firstIndex(where: { $0.id == sessionID }) {
-      state.sessions[index].viewedMilliseconds = backup.viewedMilliseconds
+    setViewed(sessionID: sessionID, viewed: backup.viewedMilliseconds, state: &state)
+    if let floor = backup.unreadFloorMilliseconds {
+      state.unreadFloors[sessionID] = floor
+    } else {
+      state.unreadFloors[sessionID] = nil
     }
     _ = store.write(state.readDates, for: HomeSharedKeys.sessionReadDates)
     _ = store.write(state.manuallyUnreadKeys, for: HomeSharedKeys.manuallyUnreadSessions)
@@ -1110,13 +1364,87 @@ public struct HomeFeature {
       $0.title.localizedCaseInsensitiveContains(query)
     }
     state.search = State.SearchState(query: query, results: kept, isLoading: true)
-    let server = state.server
-    let generation = state.generation
+    return firstSearchEffect(
+      server: state.server,
+      generation: state.generation,
+      query: query,
+      token: token,
+      delay: .milliseconds(250)
+    )
+  }
+
+  /// Loads the next page, or retries the footer's failed page. The footer's Try Again is the same
+  /// action: a failed search (first page or append) and a failed ordinary page each keep their
+  /// cursor so the retry asks for exactly the page that failed.
+  private func loadMore(_ state: inout State) -> Effect<Action> {
+    if let search = state.search {
+      guard !search.isLoading else { return .none }
+      if search.failed {
+        state.search?.failed = false
+        state.search?.isLoading = true
+        state.searchToken += 1
+        let token = state.searchToken
+        if let cursor = search.next {
+          return searchPageEffect(
+            server: state.server,
+            generation: state.generation,
+            query: search.query,
+            token: token,
+            cursor: cursor,
+            appending: true
+          )
+        }
+        return firstSearchEffect(
+          server: state.server,
+          generation: state.generation,
+          query: search.query,
+          token: token,
+          delay: .zero
+        )
+      }
+      guard let cursor = search.next else { return .none }
+      state.search?.isLoading = true
+      return searchPageEffect(
+        server: state.server,
+        generation: state.generation,
+        query: search.query,
+        token: state.searchToken,
+        cursor: cursor,
+        appending: true
+      )
+    }
+    guard state.searchText.isEmpty else { return .none }
+    if state.page.failed {
+      guard let cursor = state.page.next else { return .none }
+      state.page.failed = false
+      state.page.isLoading = true
+      return olderPageEffect(
+        server: state.server,
+        generation: state.generation,
+        cursor: cursor
+      )
+    }
+    guard let cursor = state.page.next, state.page.canLoad else { return .none }
+    state.page.isLoading = true
+    return olderPageEffect(
+      server: state.server,
+      generation: state.generation,
+      cursor: cursor
+    )
+  }
+
+  private func firstSearchEffect(
+    server: OpenCodeServer,
+    generation: Int,
+    query: String,
+    token: Int,
+    delay: Duration
+  ) -> Effect<Action> {
     let client = client
     let clock = clock
     return .run { send in
       do {
-        try await clock.sleep(.milliseconds(250))
+        if delay > .zero { try await clock.sleep(delay) }
         let page = try await client.sessionPage(server, .search(query), 50)
         await send(
           .searchLoaded(
@@ -1148,52 +1476,59 @@ public struct HomeFeature {
     .cancellable(id: CancelID.search, cancelInFlight: true)
   }
 
-  private func loadMore(_ state: inout State) -> Effect<Action> {
-    if let search = state.search, search.canLoad, let cursor = search.next {
-      state.search?.isLoading = true
-      let server = state.server
-      let generation = state.generation
-      let token = state.searchToken
-      let query = search.query
-      let client = client
-      return .run { send in
-        do {
-          let page = try await client.sessionPage(server, .after(cursor), 50)
-          await send(
-            .searchLoaded(
-              generation: generation,
-              query: query,
-              token: token,
-              appending: true,
-              result: .success(page)
-            )
+  private func searchPageEffect(
+    server: OpenCodeServer,
+    generation: Int,
+    query: String,
+    token: Int,
+    cursor: String,
+    appending: Bool
+  ) -> Effect<Action> {
+    let client = client
+    return .run { send in
+      do {
+        let page = try await client.sessionPage(server, .after(cursor), 50)
+        await send(
+          .searchLoaded(
+            generation: generation,
+            query: query,
+            token: token,
+            appending: appending,
+            result: .success(page)
           )
-        } catch is CancellationError {
-          return
-        } catch let error as OpenCodeClientError {
-          await send(
-            .searchLoaded(generation: generation, query: query, token: token, appending: true, result: .failure(error))
+        )
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        await send(
+          .searchLoaded(
+            generation: generation,
+            query: query,
+            token: token,
+            appending: appending,
+            result: .failure(error)
           )
-        } catch {
-          await send(
-            .searchLoaded(
-              generation: generation,
-              query: query,
-              token: token,
-              appending: true,
-              result: .failure(OpenCodeClientError(.unreachable))
-            )
+        )
+      } catch {
+        await send(
+          .searchLoaded(
+            generation: generation,
+            query: query,
+            token: token,
+            appending: appending,
+            result: .failure(OpenCodeClientError(.unreachable))
           )
-        }
+        )
       }
-      .cancellable(id: CancelID.searchPage, cancelInFlight: true)
     }
-    guard state.searchText.isEmpty, let cursor = state.page.next, state.page.canLoad else {
-      return .none
-    }
-    state.page.isLoading = true
-    let server = state.server
-    let generation = state.generation
+    .cancellable(id: CancelID.searchPage, cancelInFlight: true)
+  }
+
+  private func olderPageEffect(
+    server: OpenCodeServer,
+    generation: Int,
+    cursor: String
+  ) -> Effect<Action> {
     let client = client
     return .run { send in
       do {
@@ -1220,7 +1555,15 @@ public struct HomeFeature {
       // A search-only row is not in the list; drop it from results and delete on the server.
       state.search?.results.removeAll { $0.id == session.id }
       state.recentDeletedIDs.insert(session.id)
-      return deletionEffect(session: session, backup: nil, state: &state)
+      let backup = State.DeletionBackup(
+        session: session,
+        index: 0,
+        wasActive: false,
+        neededAttention: false,
+        wasListed: false
+      )
+      state.inFlightDeletions[session.id] = backup
+      return deletionEffect(session: session, backup: backup, state: &state)
     }
     let backup = State.DeletionBackup(
       session: session,
@@ -1233,6 +1576,7 @@ public struct HomeFeature {
     state.attentionSessionIDs.remove(session.id)
     state.search?.results.removeAll { $0.id == session.id }
     state.recentDeletedIDs.insert(session.id)
+    state.inFlightDeletions[session.id] = backup
     return deletionEffect(session: session, backup: backup, state: &state)
   }
 
@@ -1242,8 +1586,8 @@ public struct HomeFeature {
     state: inout State
   ) -> Effect<Action> {
     let server = state.server
+    let serverID = state.serverID
     let client = client
-    let generation = state.generation
     let placeholder =
       backup
       ?? State.DeletionBackup(
@@ -1256,14 +1600,18 @@ public struct HomeFeature {
     return .run { send in
       do {
         try await client.deleteSession(server, session.id)
-        await send(.deletionFinished(generation: generation, backup: placeholder, result: .success(true)))
+        await send(.deletionFinished(serverID: serverID, backup: placeholder, result: .success(true)))
       } catch is CancellationError {
         return
       } catch let error as OpenCodeClientError {
-        await send(.deletionFinished(generation: generation, backup: placeholder, result: .failure(error)))
+        await send(.deletionFinished(serverID: serverID, backup: placeholder, result: .failure(error)))
       } catch {
         await send(
-          .deletionFinished(generation: generation, backup: placeholder, result: .failure(OpenCodeClientError(.unreachable)))
+          .deletionFinished(
+            serverID: serverID,
+            backup: placeholder,
+            result: .failure(OpenCodeClientError(.unreachable))
+          )
         )
       }
     }
@@ -1283,6 +1631,51 @@ public struct HomeFeature {
     state.sessions.insert(backup.session, at: index)
     if backup.wasActive { state.activeSessionIDs.insert(backup.session.id) }
     if backup.neededAttention { state.attentionSessionIDs.insert(backup.session.id) }
+  }
+
+  private func confirmDeleted(_ backup: State.DeletionBackup, state: inout State) {
+    purgeLocalRecords(backup.session, state: &state)
+    state.recentDeletedIDs.insert(backup.session.id)
+    state.deletionTombstones[backup.session.id] = state.refreshRequest
+    trimDeletionTombstones(&state)
+  }
+
+  /// A delete whose call never settled while disconnected is settled by the first authoritative
+  /// read after reconnect: present means it failed and the row returns; absent means it succeeded.
+  private func reconcileDeletions(
+    _ fresh: [OpenCodeSession],
+    request: Int,
+    state: inout State
+  ) {
+    if state.reconcilesDeletionsOnRefresh {
+      state.reconcilesDeletionsOnRefresh = false
+      let freshIDs = Set(fresh.map(\.id))
+      for id in Array(state.inFlightDeletions.keys) {
+        guard let backup = state.inFlightDeletions[id] else { continue }
+        state.inFlightDeletions[id] = nil
+        if freshIDs.contains(id) {
+          state.deletionTombstones[id] = nil
+          restoreDeletion(backup, state: &state)
+          state.notice = .couldNotDelete(title: backup.session.title)
+        } else {
+          confirmDeleted(backup, state: &state)
+        }
+      }
+    }
+    for id in Array(state.deletionTombstones.keys) {
+      guard let epoch = state.deletionTombstones[id], epoch < request else { continue }
+      guard !fresh.contains(where: { $0.id == id }) else { continue }
+      state.deletionTombstones[id] = nil
+      state.recentDeletedIDs.remove(id)
+    }
+  }
+
+  private func trimDeletionTombstones(_ state: inout State) {
+    guard state.deletionTombstones.count > 200 else { return }
+    let oldest = state.deletionTombstones.min { $0.value < $1.value }?.key
+    if let oldest {
+      state.deletionTombstones[oldest] = nil
+    }
   }
 
   /// A confirmed server delete also drops this phone's records for the session.
@@ -1373,9 +1766,16 @@ public struct HomeFeature {
     return effect
   }
 
-  private func undoLastCatchUpCard(_ state: inout State) -> Effect<Action> {    guard var catchUp = state.catchUp, let undo = catchUp.lastUndo else { return .none }
+  private func undoLastCatchUpCard(_ state: inout State) -> Effect<Action> {
+    guard var catchUp = state.catchUp, let undo = catchUp.lastUndo else { return .none }
     if let backup = undo.backup {
       restoreRead(backup, sessionID: undo.sessionID, state: &state)
+      if let session = state.session(undo.sessionID), state.isUnread(session) {
+        state.unreadFloors[undo.sessionID] = max(
+          state.unreadFloors[undo.sessionID] ?? 0,
+          backup.idleMilliseconds ?? 0
+        )
+      }
       state.readReceipts[undo.sessionID] = nil
     }
     catchUp.handled.removeAll { $0.sessionID == undo.sessionID }

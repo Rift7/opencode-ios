@@ -53,6 +53,7 @@ struct ConnectionFeatureTests {
       $0.projects = TestServer.projects
     }
     await store.receive(.delegate(.projects(TestServer.server, TestServer.projects, TestServer.info)))
+    await store.receive(.delegate(.available(TestServer.server)))
 
     #expect(script.healthCalls.count == 1)
     #expect(script.projectCalls.count == 1)
@@ -184,6 +185,7 @@ struct ConnectionFeatureTests {
       $0.projects = TestServer.projects
     }
     await store.receive(.delegate(.projects(TestServer.server, TestServer.projects, TestServer.info)))
+    await store.receive(.delegate(.available(TestServer.server)))
     #expect(script.healthCalls.count == 1)
 
     await store.send(.scenePhaseChanged(isActive: false)) {
@@ -227,6 +229,7 @@ struct ConnectionFeatureTests {
       $0.projects = TestServer.projects
     }
     await store.receive(.delegate(.projects(TestServer.server, TestServer.projects, TestServer.info)))
+    await store.receive(.delegate(.available(TestServer.server)))
     await store.send(.scenePhaseChanged(isActive: false)) {
       $0.phase = .reconnecting
       $0.isInForeground = false
@@ -292,11 +295,13 @@ struct ConnectionFeatureTests {
       $0.projects = TestServer.projects
     }
     await store.receive(.delegate(.projects(TestServer.server, TestServer.projects, TestServer.info)))
+    await store.receive(.delegate(.available(TestServer.server)))
 
     events.push(.phase(.resynchronizing))
     await store.receive(.streamPhase(token: current, phase: .resynchronizing)) {
       $0.phase = .reconnecting
     }
+    await store.receive(.delegate(.unavailable(TestServer.server)))
     await store.receive(.streamResynchronized(token: current, result: .success(refreshed))) {
       $0.projects = refreshed
     }

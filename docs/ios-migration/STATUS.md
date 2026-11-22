@@ -78,6 +78,17 @@ in `origin/ios:ios/OpenCode/Resources/Localizable.xcstrings`, and the gate was c
 - Keep Unread moves the card without a server call and leaves the session unread. The last handled card
   closes Catch Up to the drawer, whose row reads **All Caught Up** until new work arrives.
 
+
+### Reviewed P6 corrections
+
+| Path | Correction | Regression |
+| --- | --- | --- |
+| Paging retry | The footer's Try Again now retries the failed page instead of being refused by `canLoad`. A failed first search re-issues the same query with a fresh token; a failed search append retries its cursor; a failed ordinary page retries its cursor. Each sets `failed = false` before starting so the spinner replaces the button. | `failedInitialSearchRetries`, `failedSearchPageRetries`, `failedOrdinaryPageRetries` |
+| Read watermark | A view receipt acknowledges only its own `idle` value. Newer activity B arriving while A is in flight stays unread. Explicit Mark Unread and Catch Up Undo record an unread floor; a delayed view event at or below it is ignored, while a genuinely newer view clears it. | `receiptAcknowledgesOnlyItsWatermark`, `delayedViewAfterMarkUnread`, `delayedViewAfterCatchUpUndo` |
+| Deletion | A confirmed delete leaves a tombstone, so a refresh that started before the delete cannot resurrect the row. In-flight deletes survive disconnect; the first authoritative refresh after reconnect reconciles presence (failure: restore the row and notice) or absence (success: purge and keep the tombstone until a later read). Late answers are ignored. | `oldRefreshCannotResurrectDelete`, `deleteFailureReconcilesAfterReconnect`, `deleteSuccessReconcilesAfterReconnect` |
+| Connection status | Home is live only when the app is in front, the path is usable and the shell phase is `connected`. Scene/path changes forward that fact; stream interruption marks Home unavailable; a handshake/overflow available signal resumes exactly one authoritative refresh, replacing any read that started before it. A fresh `.task` never starts a second read over a resync. | `homeStaysInactiveWhileAuthenticating`, `homeStaysInactiveWhileOffline`, `homeFollowsPathAndReconnect`, `homeStopsOnInterruption`, `connectionStatusResume`, `taskDoesNotDuplicateResyncRead` |
+| Attention events | A cold root or subagent event resolves at most eight ancestry hops, then reads only its own location directory. The root indicator updates without a project scan; a missing root row gets one coalesced Home refresh. Hint directories are bounded to eight for later full reads. | `attentionEventColdRoot`, `attentionEventSubagent` |
+
 ### Scroll trace (measured)
 
 | Item | Value |
@@ -95,7 +106,7 @@ intervals during the measured swipes; the p95 stays at one interval.
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | **300 tests pass**: 161 server, 67 core, 54 app, 18 drawer; live and loopback-opt-out suites behave as before |
+| `swift test --package-path ios/OpenCodeKit` | **317 tests pass**: 161 server, 67 core, 58 app, 31 drawer; live and loopback-opt-out suites behave as before |
 | `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; `OpenCodeTests` passes; **26 UI tests pass** (18 existing + 8 P6); package suites pass |
 
 ## Not verified

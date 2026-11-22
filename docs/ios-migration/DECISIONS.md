@@ -601,3 +601,28 @@ search field is dismissed by its sheet's Done action, also asserted.
   smoothness guarantee.
 - No custom animation is added in P6. Sheets, navigation, menus and the system press highlight provide the
   motion; Reduce Motion therefore inherits the platform behaviour and was not separately exercised.
+
+### D-48 Reviewed paths keep explicit causality, not just visible outcomes
+The P6 review corrections are recorded as semantics rather than patches:
+
+- **Paging retry is the same action as loading.** The footer's Try Again calls `loadMoreTapped`; a
+  failed first search, search append and ordinary page each keep the query/cursor that failed. A retry
+  starts with `failed = false` and, for search, a new token so a late answer from the failed attempt
+  cannot land.
+- **A read receipt acknowledges exactly its idle watermark.** Local optimistic read state is allowed,
+  but a successful `POST /view` for A must not mark activity B read. `unreadFloors` records the watermark
+  a deliberate unread or an Undo protects; a view event at or below it is stale, a newer one is real.
+- **Deletion has three states: in flight, confirmed and failed.** `recentDeletedIDs` hides the row,
+  `inFlightDeletions` survives disconnect, and `deletionTombstones` records the refresh counter at
+  confirmation. A refresh that started before confirmation cannot clear the tombstone; the first
+  refresh after a reconnect reconciles an unsettled delete by presence/absence. Delete results are
+  server-scoped, not generation-scoped, so a disconnect cannot strand a row.
+- **Live means live.** Home may read only in front, online and after the shell has completed a
+  connection. `ConnectionFeature` reports `available` after a handshake refresh and `unavailable` when
+  the socket drops; `connectionResynchronized` replaces an earlier read with one authoritative read.
+  The initial `.task` never starts a second read over a resync.
+- **Attention resolution is local to the event.** A cold root or subagent is resolved with at most eight
+  ancestry reads and one location-scoped request read. Projects are never scanned; a missing root row
+  gets one coalesced Home refresh, and hint directories stay bounded at eight.
+
+Regressions are in `OpenCodeDrawerTests/HomeFeatureTests.swift` and `OpenCodeAppTests/AppFeatureTests.swift`.

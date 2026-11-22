@@ -496,17 +496,21 @@ public struct CatchUpState: Equatable, Sendable {
     public var viewedMilliseconds: Int64?
     public var readDate: Date?
     public var wasManuallyUnread: Bool
+    /// A view event at or below this watermark must not clear a deliberate unread mark.
+    public var unreadFloorMilliseconds: Int64?
 
     public init(
       idleMilliseconds: Int64?,
       viewedMilliseconds: Int64?,
       readDate: Date?,
-      wasManuallyUnread: Bool
+      wasManuallyUnread: Bool,
+      unreadFloorMilliseconds: Int64? = nil
     ) {
       self.idleMilliseconds = idleMilliseconds
       self.viewedMilliseconds = viewedMilliseconds
       self.readDate = readDate
       self.wasManuallyUnread = wasManuallyUnread
+      self.unreadFloorMilliseconds = unreadFloorMilliseconds
     }
   }
 

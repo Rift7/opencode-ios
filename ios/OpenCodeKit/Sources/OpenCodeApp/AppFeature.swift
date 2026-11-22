@@ -369,6 +369,10 @@ public struct ConnectionFeature {
   public enum Delegate: Equatable, Sendable {
     case verified(OpenCodeServer, ServerInfo)
     case projects(OpenCodeServer, [ServerProject], ServerInfo?)
+    /// REST was re-read after a handshake, so Home can replace any read that started earlier.
+    case available(OpenCodeServer)
+    /// The socket dropped and the connection is reconnecting; Home must stop claiming live status.
+    case unavailable(OpenCodeServer)
     /// A reconnect or overflow completed and REST was re-read before the next socket.
     case resynchronized(OpenCodeServer)
     /// A session-scoped event the stream owner forwards to Home; the stream stays single-owner.
@@ -453,7 +457,10 @@ public struct ConnectionFeature {
             .connectionReady,
             [LogField("projects", .count(projects.count))]
           )
-          return .send(.delegate(.projects(state.server, projects, state.info)))
+          return .concatenate(
+            .send(.delegate(.projects(state.server, projects, state.info))),
+            .send(.delegate(.available(state.server)))
+          )
         case .failure(let error):
                 return .merge(.cancel(id: CancelID.stream), fail(&state, .from(error, isOffline: state.isOffline)))
         }
@@ -482,10 +489,14 @@ public struct ConnectionFeature {
           if state.phase != .failed {
             state.phase = .reconnecting
             state.failure = nil
+            return .send(.delegate(.unavailable(state.server)))
           }
           return .none
         case .resynchronizing:
-          if state.phase != .failed { state.phase = .reconnecting }
+          if state.phase != .failed {
+            state.phase = .reconnecting
+            return .send(.delegate(.unavailable(state.server)))
+          }
           return .none
         case .ended(let error):
           guard state.phase != .failed else { return .none }
@@ -890,12 +901,20 @@ public struct AppFeature {
         guard state.connection != nil else { return .none }
         let connection = Effect<Action>.send(.connection(.scenePhaseChanged(isActive: isActive)))
         guard state.home != nil else { return connection }
-        return .merge(connection, .send(.home(.connectionChanged(isConnected: isActive))))
+        return .merge(
+          connection,
+          .send(.home(.connectionChanged(isConnected: homeIsLive(state))))
+        )
 
       case .networkPathChanged(let path):
         state.networkPath = path
         guard state.connection != nil else { return .none }
-        return .send(.connection(.networkPathChanged(path)))
+        let connection = Effect<Action>.send(.connection(.networkPathChanged(path)))
+        guard state.home != nil else { return connection }
+        return .merge(
+          connection,
+          .send(.home(.connectionChanged(isConnected: homeIsLive(state))))
+        )
 
       case .restoreRetried:
         state.restore = .idle
@@ -1116,10 +1135,7 @@ public struct AppFeature {
 
       case .connection(.delegate(.projects(let server, let projects, let info))):
         _ = info
-        var effects: [Effect<Action>] = [
-          .send(.home(.projectsChanged(projects))),
-          .send(.home(.connectionChanged(isConnected: true))),
-        ]
+        var effects: [Effect<Action>] = [.send(.home(.projectsChanged(projects)))]
         if state.home?.serverID != server.persistenceID {
           state.home = HomeFeature.State(
             server: server,
@@ -1132,11 +1148,17 @@ public struct AppFeature {
         }
         return .merge(effects)
 
+      case .connection(.delegate(.available)):
+        guard state.home != nil else { return .none }
+        return .send(.home(.connectionResynchronized))
+
+      case .connection(.delegate(.unavailable)):
+        guard state.home != nil else { return .none }
+        return .send(.home(.connectionChanged(isConnected: false)))
+
       case .connection(.delegate(.resynchronized)):
-        return .merge(
-          .send(.home(.connectionChanged(isConnected: true))),
-          .send(.home(.retryRefreshTapped))
-        )
+        guard state.home != nil else { return .none }
+        return .send(.home(.connectionResynchronized))
 
       case .connection(.delegate(.sessionEvent(_, let event))):
         return .send(.home(.serverEvent(event)))
@@ -1204,6 +1226,14 @@ public struct AppFeature {
   }
 
   // MARK: Connecting
+
+  /// Home may read only while the app is in front, the path is usable and the shell has completed
+  /// a connection. `connecting`, `loading`, `reconnecting` and `failed` are not live.
+  private func homeIsLive(_ state: State) -> Bool {
+    state.isInForeground
+      && !state.networkPath.isOffline
+      && state.connection?.phase == .connected
+  }
 
   private func connect(to server: OpenCodeServer, state: inout State) -> Effect<Action> {
     let id = state.nextConnectionID
