@@ -1008,7 +1008,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Connected, but saved servers couldn’t be read. This server won’t be saved until you replace the unreadable data."
+            "value": "Saved servers couldn’t be read. This server won’t be saved until the read succeeds or you replace the unreadable data."
           }
         }
       }
