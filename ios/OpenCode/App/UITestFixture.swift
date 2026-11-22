@@ -37,6 +37,46 @@ import OpenCodeServer
       ]
     }
 
+    nonisolated static func familyMember(_ id: String, in roots: [OpenCodeSession]) -> OpenCodeSession? {
+      if id == "alpha-child" {
+        return OpenCodeSession(
+          id: "alpha-child",
+          serverTitle: "Explore the composer",
+          projectID: "p1",
+          directory: "/work/opencode",
+          updatedAt: Date(timeIntervalSince1970: 1_700_000_150),
+          idleMilliseconds: 500,
+          viewedMilliseconds: 500,
+          parentID: "alpha",
+          agent: "explore"
+        )
+      }
+      return roots.first { $0.id == id }
+    }
+
+    nonisolated static func family(
+      for server: OpenCodeServer,
+      root: OpenCodeSession
+    ) -> SessionFamily {
+      var sessions = [root]
+      if root.id == "alpha" {
+        sessions.append(
+          OpenCodeSession(
+            id: "alpha-child",
+            serverTitle: "Explore the composer",
+            projectID: "p1",
+            directory: "/work/opencode",
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_150),
+            idleMilliseconds: 500,
+            viewedMilliseconds: 500,
+            parentID: "alpha",
+            agent: "explore"
+          )
+        )
+      }
+      return SessionFamily(root: root, sessions: sessions, activeSessionIDs: [])
+    }
+
     nonisolated static func sessions(
       for server: OpenCodeServer,
       mode: String = "connected"
@@ -98,7 +138,22 @@ import OpenCodeServer
       ]
     }
 
+    actor RequestState {
+      private var settled: Set<String> = []
+      private var failedOnce = false
+
+      func isSettled(_ id: String) -> Bool { settled.contains(id) }
+      func settle(_ id: String) { settled.insert(id) }
+
+      func shouldFailFirst() -> Bool {
+        if failedOnce { return false }
+        failedOnce = true
+        return true
+      }
+    }
+
     static func make(mode: String = "connected") -> Fixture {
+      let requestState = RequestState()
       let storage = SharedStore(
         defaults: InMemoryStorage(),
         keychain: InMemoryStorage()
@@ -130,6 +185,103 @@ import OpenCodeServer
         attentionSessionIDs: { _, _, _ in [] },
         viewSession: { _, _, _ in },
         deleteSession: { _, _ in },
+        interruptSession: { _, _ in true },
+        sessionIsActive: { _, _ in false },
+        sessionFamily: { requested, root in
+          family(for: requested, root: root)
+        },
+        pendingRequests: { _, session, _ in
+          guard session.id == "alpha" else { return PendingRequests() }
+          let wantsForm = mode == "connected-form"
+          var result = PendingRequests()
+          if wantsForm {
+            if await !requestState.isSettled("form-alpha") {
+              result.forms = [
+                FormRequest(
+                  id: "form-alpha",
+                  sessionID: "alpha",
+                  title: "Deploy settings",
+                  fields: [
+                    FormField(
+                      key: "environment",
+                      type: .string,
+                      title: "Environment",
+                      required: true,
+                      options: [
+                        FormOption(value: "staging", label: "Staging"),
+                        FormOption(value: "production", label: "Production"),
+                      ]
+                    ),
+                    FormField(
+                      key: "confirm",
+                      type: .boolean,
+                      title: "Confirm deploy",
+                      required: true
+                    ),
+                  ]
+                )
+              ]
+            }
+          } else if await !requestState.isSettled("perm-alpha") {
+            result.permissions = [
+              PermissionRequest(
+                id: "perm-alpha",
+                sessionID: "alpha",
+                action: "bash",
+                resources: ["rm -rf build"],
+                save: ["bash"]
+              )
+            ]
+          }
+          return result
+        },
+        replyPermission: { _, _, id, _, _ in
+          if mode == "connected-request-failure", await requestState.shouldFailFirst() {
+            throw OpenCodeClientError(.status(500))
+          }
+          await requestState.settle(id)
+        },
+        replyForm: { _, _, id, _, _ in
+          await requestState.settle(id)
+          return .settled
+        },
+        cancelForm: { _, _, id, _, _ in
+          await requestState.settle(id)
+          return .settled
+        },
+        formState: { _, _, _, _ in FormState(status: .pending) },
+        pendingInputs: { _, sessionID in
+          guard sessionID == "alpha" else { return [] }
+          return [PendingInput(id: "input-alpha", text: "Also check the logs.", delivery: .steer)]
+        },
+        setPendingInputDelivery: { _, _, _, _ in },
+        runningShells: { _, directory in
+          directory == "/work/opencode"
+            ? [ServerShell(id: "shell-alpha", command: "swift test", sessionID: "alpha", isListed: true)]
+            : []
+        },
+        shell: { _, _, id in
+          ServerShell(id: id, command: "swift test", sessionID: "alpha", isListed: true)
+        },
+        shellOutput: { _, _, _, cursor, limit in
+          let output = "Test Suite started\nAll tests passed\n"
+          let size = output.utf8.count
+          return ShellOutputPage(output: output, cursor: size, size: size)
+        },
+        stopShell: { _, _, _ in },
+        runningJobs: { _, sessionID in
+          sessionID == "alpha"
+            ? [
+              ServerJob(
+                id: "job-alpha",
+                kind: .codemode,
+                sessionID: "alpha",
+                isRunning: true
+              )
+            ]
+            : []
+        },
+        cancelJob: { _, _ in },
         events: { _, onPhase in
           AsyncThrowingStream { continuation in
             let task = Task {

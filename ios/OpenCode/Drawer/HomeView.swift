@@ -233,7 +233,17 @@ private struct HomeDrawer: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(store.catchUpFinished ? "drawer-all-caught-up" : "drawer-catch-up")
-        .disabled(store.catchUpSessions.isEmpty || store.catchUpFinished)
+        .disabled(store.catchUpSessions.isEmpty && !store.canMarkAllRead)
+        .contextMenu {
+          if store.canMarkAllRead {
+            Button(AppCopy.text("home.mark_all_read")) {
+              store.send(.markAllReadTapped)
+            }
+          }
+        }
+        .accessibilityAction(named: Text(AppCopy.text("home.mark_all_read"))) {
+          store.send(.markAllReadTapped)
+        }
 
         if store.showsWhatsNewRow {
           Button {
@@ -295,6 +305,18 @@ private struct HomeDrawer: View {
     .navigationTitle(AppCopy.text("home.sessions"))
     .navigationBarTitleDisplayMode(.large)
     .toolbar {
+      ToolbarItem(placement: .topBarLeading) {
+        Menu {
+          Button(AppCopy.text("home.mark_all_read")) {
+            store.send(.markAllReadTapped)
+          }
+          .disabled(!store.canMarkAllRead)
+        } label: {
+          Image(systemName: "ellipsis.circle")
+        }
+        .accessibilityLabel(AppCopy.text("home.sessions"))
+        .accessibilityIdentifier("drawer-more")
+      }
       ToolbarItem(placement: .topBarTrailing) {
         Button(AppCopy.text("common.done")) {
           store.send(.drawerDismissed)

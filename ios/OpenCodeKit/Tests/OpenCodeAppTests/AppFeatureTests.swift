@@ -70,6 +70,82 @@ struct AppFeatureTests {
     #expect(store.state.savedServer == TestServer.server)
   }
 
+
+  @Test("opening a session creates the child and a replacement gets a new identity")
+  func sessionOwnership() async {
+    let home = HomeFeature.State(
+      server: TestServer.server,
+      sessions: [
+        OpenCodeSession(
+          id: "a", serverTitle: "A", projectID: "p1", directory: "/work/opencode",
+          updatedAt: Date(timeIntervalSince1970: 1_700_000_000)),
+        OpenCodeSession(
+          id: "b", serverTitle: "B", projectID: "p1", directory: "/work/opencode",
+          updatedAt: Date(timeIntervalSince1970: 1_700_000_100)),
+      ],
+      hasLoaded: true
+    )
+    let store = TestStore(
+      initialState: AppFeature.State(home: home)
+    ) {
+      AppFeature()
+    } withDependencies: {
+      $0.sharedStore = self.storage()
+      $0.networkPath = self.quietPath()
+      $0.openCodeClient = .testValue
+    }
+    store.exhaustivity = .off
+
+    let first = SessionSelection(
+      serverID: TestServer.server.persistenceID, sessionID: "a", intent: .catchUpCard
+    )
+    await store.send(.home(.delegate(.openSession(first))))
+    let firstID = store.state.session?.id
+    #expect(firstID != nil)
+    #expect(store.state.session?.selection.intent == .catchUpCard)
+    #expect(store.state.session?.root?.id == "a")
+
+    let second = SessionSelection(
+      serverID: TestServer.server.persistenceID, sessionID: "b", intent: .browse
+    )
+    await store.send(.home(.delegate(.openSession(second))))
+    #expect(store.state.session?.id != firstID)
+    #expect(store.state.session?.root?.id == "b")
+    #expect(store.state.sessionDestination == second)
+
+    await store.send(.sessionDestinationDismissed)
+    #expect(store.state.session == nil)
+    #expect(store.state.sessionDestination == nil)
+  }
+
+  @Test("a selection from another server cannot open a session here")
+  func sessionServerIsolation() async {
+    let home = HomeFeature.State(server: TestServer.server, hasLoaded: true)
+    let store = TestStore(initialState: AppFeature.State(home: home)) {
+      AppFeature()
+    } withDependencies: {
+      $0.sharedStore = self.storage()
+      $0.networkPath = self.quietPath()
+      $0.openCodeClient = .testValue
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .home(
+        .delegate(
+          .openSession(
+            SessionSelection(
+              serverID: TestServer.other.persistenceID,
+              sessionID: "a",
+              intent: .browse
+            )
+          )
+        )
+      )
+    )
+    #expect(store.state.session == nil)
+  }
+
   @Test("a valid saved server and its launch cache restore together")
   func restoredServerAndCache() {
     let store = storage()

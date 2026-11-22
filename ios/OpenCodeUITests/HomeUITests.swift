@@ -38,9 +38,27 @@ final class HomeUITests: XCTestCase {
 
     XCTAssertTrue(app.descendants(matching: .any)["root-phase-session"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.staticTexts["Alpha release notes"].exists)
-    XCTAssertTrue(app.staticTexts["The session screen arrives in a later phase."].exists)
-    app.buttons["session-placeholder-done"].tap()
+    XCTAssertTrue(app.staticTexts["The transcript arrives in Phase 8."].exists)
+    app.buttons["session-done"].tap()
     XCTAssertTrue(app.descendants(matching: .any)["root-phase-connected"].waitForExistence(timeout: 10))
+  }
+
+  func testMarkAllReadFromTheCatchUpMenu() {
+    let app = launch()
+    openDrawer(app)
+    let more = app.buttons["drawer-more"]
+    XCTAssertTrue(more.waitForExistence(timeout: 10))
+    more.tap()
+    let markAll = app.buttons["Mark All as Read"]
+    XCTAssertTrue(markAll.waitForExistence(timeout: 10))
+    markAll.tap()
+    let catchUp = app.buttons["drawer-catch-up"]
+    XCTAssertTrue(catchUp.waitForExistence(timeout: 10))
+    let disabled = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "enabled == false"),
+      object: catchUp
+    )
+    XCTAssertEqual(XCTWaiter().wait(for: [disabled], timeout: 10), .completed)
   }
 
   func testSwitchingSavedServersLoadsTheOtherServer() {

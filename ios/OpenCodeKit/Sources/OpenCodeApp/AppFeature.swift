@@ -3,6 +3,7 @@ import Foundation
 import OpenCodeCore
 import OpenCodeDrawer
 import OpenCodeServer
+import OpenCodeSession
 
 // MARK: - Shared app-shell values
 
@@ -678,6 +679,7 @@ public struct AppFeature {
     public var restore: AppRestore
     public var connection: ConnectionFeature.State?
     public var home: HomeFeature.State?
+    public var session: SessionFeature.State?
     public var sessionDestination: SessionSelection?
     public var savedServer: OpenCodeServer?
     public var savedServers: [OpenCodeServer]
@@ -697,11 +699,13 @@ public struct AppFeature {
     var pendingSave: OpenCodeServer?
     var nextConnectionID = 1
     var nextPairingAttempt = 1
+    var nextSessionID = 1
 
     public init(
       restore: AppRestore = .idle,
       connection: ConnectionFeature.State? = nil,
       home: HomeFeature.State? = nil,
+      session: SessionFeature.State? = nil,
       sessionDestination: SessionSelection? = nil,
       savedServer: OpenCodeServer? = nil,
       savedServers: [OpenCodeServer] = [],
@@ -720,6 +724,7 @@ public struct AppFeature {
       self.restore = restore
       self.connection = connection
       self.home = home
+      self.session = session
       self.sessionDestination = sessionDestination
       self.savedServer = savedServer
       self.savedServers = savedServers
@@ -740,6 +745,7 @@ public struct AppFeature {
       lhs.restore == rhs.restore
         && lhs.connection == rhs.connection
         && lhs.home == rhs.home
+        && lhs.session == rhs.session
         && lhs.sessionDestination == rhs.sessionDestination
         && lhs.savedServer == rhs.savedServer
         && lhs.savedServers == rhs.savedServers
@@ -793,6 +799,7 @@ public struct AppFeature {
     )
     case connection(ConnectionFeature.Action)
     case home(HomeFeature.Action)
+    case session(SessionFeature.Action)
   }
 
   enum CancelID: Hashable {
@@ -899,22 +906,24 @@ public struct AppFeature {
       case .scenePhaseChanged(let isActive):
         state.isInForeground = isActive
         guard state.connection != nil else { return .none }
-        let connection = Effect<Action>.send(.connection(.scenePhaseChanged(isActive: isActive)))
-        guard state.home != nil else { return connection }
-        return .merge(
-          connection,
-          .send(.home(.connectionChanged(isConnected: homeIsLive(state))))
-        )
+        let live = homeIsLive(state)
+        var effects: [Effect<Action>] = [
+          .send(.connection(.scenePhaseChanged(isActive: isActive)))
+        ]
+        if state.home != nil { effects.append(.send(.home(.connectionChanged(isConnected: live)))) }
+        if state.session != nil { effects.append(.send(.session(.connectionChanged(isConnected: live)))) }
+        return .merge(effects)
 
       case .networkPathChanged(let path):
         state.networkPath = path
         guard state.connection != nil else { return .none }
-        let connection = Effect<Action>.send(.connection(.networkPathChanged(path)))
-        guard state.home != nil else { return connection }
-        return .merge(
-          connection,
-          .send(.home(.connectionChanged(isConnected: homeIsLive(state))))
-        )
+        let live = homeIsLive(state)
+        var effects: [Effect<Action>] = [
+          .send(.connection(.networkPathChanged(path)))
+        ]
+        if state.home != nil { effects.append(.send(.home(.connectionChanged(isConnected: live)))) }
+        if state.session != nil { effects.append(.send(.session(.connectionChanged(isConnected: live)))) }
+        return .merge(effects)
 
       case .restoreRetried:
         state.restore = .idle
@@ -932,6 +941,7 @@ public struct AppFeature {
         state.restore = .ready
         state.connection = nil
         state.home = nil
+        state.session = nil
         state.sessionDestination = nil
         state.notice = nil
         return .none
@@ -1094,6 +1104,7 @@ public struct AppFeature {
       case .disconnectTapped:
         state.connection = nil
         state.home = nil
+        state.session = nil
         state.sessionDestination = nil
         state.pairingAttempt = nil
         state.pendingPairing = nil
@@ -1101,6 +1112,7 @@ public struct AppFeature {
         return .cancel(id: CancelID.pairing)
 
       case .sessionDestinationDismissed:
+        state.session = nil
         state.sessionDestination = nil
         return .none
 
@@ -1153,38 +1165,72 @@ public struct AppFeature {
         return .send(.home(.connectionResynchronized))
 
       case .connection(.delegate(.unavailable)):
-        guard state.home != nil else { return .none }
-        return .send(.home(.connectionChanged(isConnected: false)))
+        var effects: [Effect<Action>] = []
+        if state.home != nil { effects.append(.send(.home(.connectionChanged(isConnected: false)))) }
+        if state.session != nil { effects.append(.send(.session(.connectionChanged(isConnected: false)))) }
+        return .merge(effects)
 
       case .connection(.delegate(.resynchronized)):
-        guard state.home != nil else { return .none }
-        return .send(.home(.connectionResynchronized))
+        var effects: [Effect<Action>] = []
+        if state.home != nil { effects.append(.send(.home(.connectionResynchronized))) }
+        if state.session != nil { effects.append(.send(.session(.connectionResynchronized))) }
+        return .merge(effects)
 
       case .connection(.delegate(.sessionEvent(_, let event))):
-        return .send(.home(.serverEvent(event)))
+        var effects: [Effect<Action>] = [.send(.home(.serverEvent(event)))]
+        if state.session != nil { effects.append(.send(.session(.serverEvent(event)))) }
+        return .merge(effects)
 
       case .connection(.delegate(.failed)):
-        guard state.home != nil else { return .none }
-        return .send(.home(.connectionChanged(isConnected: false)))
+        var effects: [Effect<Action>] = []
+        if state.home != nil { effects.append(.send(.home(.connectionChanged(isConnected: false)))) }
+        if state.session != nil { effects.append(.send(.session(.connectionChanged(isConnected: false)))) }
+        return .merge(effects)
 
       case .connection:
         return .none
 
       case .home(.delegate(.openSession(let selection))):
         state.sessionDestination = selection
-        return .none
+        guard let home = state.home, home.serverID == selection.serverID else { return .none }
+        if state.session?.selection.id == selection.id,
+          state.session?.server.persistenceID == selection.serverID
+        {
+          return .none
+        }
+        let id = state.nextSessionID
+        state.nextSessionID += 1
+        state.session = SessionFeature.State(
+          id: id,
+          server: home.server,
+          selection: selection,
+          session: home.session(selection.sessionID),
+          isLive: homeIsLive(state),
+          isPinned: state.isPinnedForUITest
+        )
+        return .send(.session(.task))
 
       case .home(.delegate(.switchServer(let server))):
+        state.session = nil
         state.sessionDestination = nil
         return connect(to: server, state: &state)
 
       case .home(.delegate(.disconnect)):
         state.connection = nil
         state.home = nil
+        state.session = nil
         state.sessionDestination = nil
         return .none
 
       case .home:
+        return .none
+
+      case .session(.delegate(.dismiss)):
+        state.session = nil
+        state.sessionDestination = nil
+        return .none
+
+      case .session:
         return .none
       }
     }
@@ -1193,6 +1239,9 @@ public struct AppFeature {
     }
     .ifLet(\.home, action: \.home) {
       HomeFeature()
+    }
+    .ifLet(\.session, action: \.session) {
+      SessionFeature()
     }
   }
 
@@ -1241,6 +1290,7 @@ public struct AppFeature {
     state.pairingProblem = nil
     state.pasteProblem = nil
     state.home = nil
+    state.session = nil
     state.sessionDestination = nil
     let cached = cachedSummaries()[server.persistenceID]
     state.connection = ConnectionFeature.State(

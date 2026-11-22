@@ -548,7 +548,8 @@ tells Home that a reconnect/overflow re-read REST before the next socket.
   reconnect does not collapse the list under the reader.
 - Session selection is a value: `SessionSelection(serverID, sessionID, intent)`. It crosses the App → Home →
   Session boundary instead of a bare ID, and the intent is explicit (`browse`, `catchUpCard`,
-  `whatsNewDraft`). P6 renders a labeled placeholder; P7 owns the destination.
+  `whatsNewDraft`). P6 rendered a labeled placeholder; P7's `SessionFeature` now consumes the same value
+  (D-50, D-53).
 - Rejected: adding a Home-local stream, a view model, or a second navigation model.
 
 ### D-44 Home persistence is versioned, bounded and server-scoped
@@ -576,8 +577,8 @@ card's read state and reports on the stack. The last handled card closes Catch U
   animation, so Reduce Motion needs no special case.
 - The empty state is a drawer row because that is where the audited app returns after the last card; the
   Catch Up page also keeps a plain All Caught Up view for a stack that opens empty.
-- Mark All is **not** in P6. It needs a receipt fan-out with per-session backups and belongs with P7's
-  request review/read receipts; P6 exposes row-level Mark Read/Unread only.
+- Mark All was **not** in P6. P7 delivers it as a receipt fan-out with per-session backups (D-55); P6
+  exposed row-level Mark Read/Unread only.
 
 ### D-46 What's New ships the mechanism, not the historical catalogue
 P6 implements the drawer row, unseen dot, page routing and `whats-new-seen` persistence. The catalogue in
@@ -650,3 +651,83 @@ session was deleted, so deletion reconciliation never uses it.
 Regressions: `laterPageDeleteUnknownOutcome`, `laterPageDeleteConfirmedByTargetedRead`,
 `inconclusiveDeletionVerification`, `runningDeletionSurvivesExistenceCheck`,
 `lateDeleteResultIgnoredAfterVerification`, `oldRefreshCannotResurrectDelete`.
+
+### D-50 Session refresh is one identified queue, never a cancel-in-flight read
+`SessionFeature` carries the audited `RefreshReason` cases and one `SessionRefresh` (request ID, reason,
+one follow-up, bounded raced events). A lifecycle duplicate coalesces into the read already in flight; a
+content/run invalidation earns one follow-up. The effect is `.cancellable(id:)` **without**
+`cancelInFlight`, and only a connection loss or leaving the screen abandons it. This preserves the
+newest-request-wins semantics rather than replacing them with a generic debounce or a view model.
+
+- A response is accepted only for the session and request ID that started it. Events that arrived during
+  the read are replayed after the snapshot; execution and request events also schedule one follow-up.
+- The message/page transcript scope is not ported yet: a settlement read waits the audited 200 ms window,
+  then reads session/request/background state. P8 adds the transcript payload to the same read identity.
+- The five-second home-level notice expiry is reused; no motion is added.
+
+### D-51 Stop owns its ambiguity, and a resumed run is a success
+`interruptTapped` supersedes the previous run generation and captures the steering IDs the server holds.
+The interrupt loop owns `RetryPolicy.request`; after any failure that may have reached the server it reads
+`/api/session/active` and the inbox before trying again. A finished run settles Stop; a steering message
+missing from the inbox means the next run took it (`interruptResumed`); a still-running run retries. Once
+acknowledged, the stop reads at 1, 2, 4 and 8 seconds. A failure keeps the run running and shows definite
+copy (“Couldn’t stop session”), never a stuck spinner.
+
+- Cancellation identity is per generation: `interrupt`, `interruptSettle`, `runEndCheck` and
+  `strandedSteer` all carry the generation, so a new run or a replacement session cannot receive old work.
+- Stranded steering queues before it steers when the server still holds the message as steer, then checks
+  the run after 1.5 s. The P9 composer will call this action; P7 exposes the model and a minimal row.
+
+### D-52 Request review is a native sheet with typed settlement
+Permission and form models decode strictly, with `default` → `defaultValue`, external steps defaulting
+false, progressive visibility and hidden answers dropped. Validation returns a typed problem and the
+active-field index; the view owns the sentence.
+
+- One submission per request: the request is marked responding before the effect, completed IDs cannot be
+  actioned again, and a late response for a non-responding request is ignored.
+- A form reply or dismissal sends once, reads the form state after an ambiguous failure or `409`, accepts
+  a matching state, resends once only while the form is still pending, and turns a settled-other-way
+  response into a typed conflict. A `404` is “no longer waiting”.
+- A conflict removes the request and keeps the reason visible. A transport failure keeps the request and
+  the answer so Retry can send it again. “Always Allow” is offered only when the server supplied save
+  patterns; only a denial carries a reason.
+- The composer dock (fold, question pages, answer bar) is P9. P7 uses the same reducer state so the dock
+  can be presentation-only later.
+
+### D-53 Subagent pages are a logical stack in one session store
+The root session owns the family, requests and background state. A subagent page is an identity plus a
+session ID; opening one saves the current request selection, pushes the page and reads with `resume`.
+Popping restores the saved selection and reads the uncovered session. Pushing the same page again pops to
+it rather than duplicating it. The P6 `subagentStack` of independent session stores is not imported: it
+would duplicate request and shell ownership that this phase now has.
+
+- The family store keeps previously discovered children when a narrower family response arrives, so a
+  temporary failure or a race cannot make a known subagent disappear.
+- Family discovery keeps the audited bounds (six child pages in flight, 100-session cap, visited set,
+  queue-order commit) and bounded running ancestry (24 metadata lookups).
+
+### D-54 Background work is tailed, bounded and stoppable
+The panel lists running shells and running jobs; shell rows open a captured output sheet. Output reads
+64 KiB pages from at most the last 256 KiB, retains 1 MiB, and Load Earlier can grow the window to 4 MiB
+at a line boundary. The sheet polls every second, backs off to 3 s on failure (then 3/6/12/24/30 s in the
+audited model), marks a 404 unavailable and stops. Stop drains the remaining bytes before `DELETE`.
+`shellOutputTapped` is the only way a poll starts; closing the sheet cancels it.
+
+- Job cancel is optimistic (stopping set) and idempotent; a failure keeps the row and reports a typed
+  problem.
+- Shell copy/share and background subagent stop are P9/P10 because they depend on the composer/export
+  surfaces; the panel does not pretend they exist.
+
+### D-55 Mark All is a receipt fan-out over the Home read records
+Mark All reads the shared Home state, not the session child. Only rows whose indicator is `unread` are
+eligible; attention and running rows keep their state. Each receipt records the exact read backup, marks
+the row read locally, and runs four at a time. A failed receipt restores the row rather than leaving an
+optimistic read. Keys remain `serverPersistenceID|sessionID`, so a switch cannot acknowledge another
+server. The menu is exposed both as the Catch Up row's menu and as a drawer toolbar menu; the Android
+card flights are not ported.
+
+### D-56 The colour provider is nonisolated
+A P7 UI test found a latent crash from the first form sheet: `OpenCodeColors.color` was `@MainActor`, but
+its dynamic `UIColor` provider runs when SwiftUI resolves a colour, sometimes off the main queue, and a
+Swift 6 executor assertion trapped. The provider now resolves through a nonisolated entry point over the
+`Sendable` palette. This is a correctness fix, not a visual change; typography remains SF/SF Mono (D-1).

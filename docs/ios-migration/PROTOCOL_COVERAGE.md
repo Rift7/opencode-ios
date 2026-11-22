@@ -49,32 +49,40 @@ uses: unknown keys ignored, absent optionals nil, a present wrong type rejects t
 | GET | `/api/project` | `live/LiveFamily.kt` | `Operations.projects`, `ProjectPayload` | implemented + tested: bare array, display-name and repository-slug rules |
 | GET | `/api/session` | `live/LiveSessions.kt` `requestSessionPage`, `requestRootSessions` (`8566441f`, 2026-11-17) | `Operations.sessionPage` | implemented + tested: first page (`limit,parentID=null,archived=false,order=desc`), `search`, cursor page, archived/child filter, empty-page end |
 | GET | `/api/session/{id}` | same | `Operations.getSession` | implemented + tested: `time.updated` ms, title placeholder, archive, revert, notification metadata |
-| GET | `/api/session/active` | `live/LiveSessions.kt`, `live/LiveFamily.kt` | `Operations.activeSessionIDs` | implemented + tested: map envelope |
+| GET | `/api/session/active` | `live/LiveSessions.kt`, `live/LiveFamily.kt` | `Operations.activeSessionIDs`, `Operations.sessionIsActive` | implemented + tested: map envelope; the single-session check is the Stop settlement read |
 | GET | `/api/event` | `live/LiveEvents.kt` (`4c1e0054`, 2026-11-20) | `EventStream`, `EventStreamRunner` | implemented + tested: SSE, batching, watchdog, 401 stop, reconnect |
 | GET | `/api/session/{id}/message?order=desc&limit=N` | `live/LiveTranscript.kt` | — | deferred to P8 (transcript) |
 | GET | `/api/session/{id}/message?limit=N&cursor=…` | same | — | deferred to P8 |
 | GET | `/api/session/{id}/message/{messageID}` | same | — | deferred to P8 |
 | POST | `/api/session/{id}/prompt` (30 s, idempotent by message id) | `live/LivePrompts.kt` | `PromptBody` (core fields only) | modelled + encoded in tests; call site deferred to P9 (composer) |
-| POST | `/api/session/{id}/interrupt?resume=true` | `live/LiveSessions.kt` `requestInterrupt` | — | deferred to P7 |
-| POST | `/api/session` (create; idempotent only with a client id) | `live/LiveSessions.kt` `requestCreateSession` | — | deferred to P7 (What's New Try It is P11) |
-| PATCH | `/api/session/{id}` (rename; empty title is unsafe, 60 s) | same `requestRenameSession` | — | deferred to P7 (session menu; Home P6 does not rename) |
-| PATCH | `/api/session/{id}` (archive/unarchive, idempotent) | same `requestSetArchived` | — | deferred to P7/P11 (the Android archived page is not inherited) |
+| POST | `/api/session/{id}/interrupt?resume=true` | `live/LiveSessions.kt` `requestInterrupt` | `Operations.interruptSession` | implemented + tested: `{interrupted}`, unsafe, one attempt per caller-owned retry; ambiguity reads active/inbox before another try |
+| POST | `/api/session` (create; idempotent only with a client id) | `live/LiveSessions.kt` `requestCreateSession` | — | deferred to P11 (What's New Try It) |
+| PATCH | `/api/session/{id}` (rename; empty title is unsafe, 60 s) | same `requestRenameSession` | — | deferred to P9 (session menu) |
+| PATCH | `/api/session/{id}` (archive/unarchive, idempotent) | same `requestSetArchived` | — | deferred to P11 (the Android archived page is not inherited) |
 | DELETE | `/api/session/{id}` | same `requestDeleteSession` | `Operations.deleteSession` | implemented + tested (P6 Home delete; unsafe by default, one call) |
-| POST | `/api/session/{id}/move` (unsafe, 15 s) | same `requestMoveSession` | — | deferred to P7 |
+| POST | `/api/session/{id}/move` (unsafe, 15 s) | same `requestMoveSession` | — | deferred (not in P7 scope) |
 | POST | `/api/session/{id}/view` (idempotent watermark) | same `requestViewSession` | `Operations.viewSession` | implemented + tested (P6 read receipts; body `{idle}`, idempotent, one retry layer) |
-| POST | `/api/session/{id}/fork` | same `requestForkSession` | — | deferred to P7 |
-| POST | `/api/session/{id}/compact` | same `requestCompactSession` | — | deferred to P7 |
-| POST | `/api/session/{id}/revert/stage`, `DELETE …/revert` | same | — | deferred to P7 |
-| POST | `/api/session/{id}/background` | same | — | deferred to P7 |
-| GET | `/api/experimental/session/{id}/export` (60 s) | same `requestExportSession` | — | deferred to P7 |
-| POST | `/api/experimental/session/{id}/wait` (25 s poll, idempotent) | same `requestWaitForIdle` | — | deferred to P7 (the wait loop owns its retries) |
-| GET | `/api/session/{id}/inbox` | `live/LivePrompts.kt` | — | deferred to P7 |
-| PATCH | `/api/session/{id}/inbox/{inputID}` (unsafe; 409 or read-back settles) | same | — | deferred to P7 |
-| DELETE | `/api/session/{id}/inbox/{inputID}` (idempotent) | same | — | deferred to P7 |
-| GET | `/api/permission/request`, `/api/form` (60 s, location-scoped) | `live/LiveRequests.kt` | `Operations.attentionSessionIDs` | implemented for Home attention only: at most 8 directories, both routes concurrently, loose `sessionID` extraction and root resolution; full request models/replies are P7 |
-| POST | `…/permission/{requestID}/reply`, `…/form/{formID}/reply` | same | — | deferred to P7 |
-| GET | `/api/shell`, `/api/shell/{id}`, `/api/shell/{id}/output`, `DELETE /api/shell/{id}` | same | `ShellInfoPayload`, `ServerShell` | modelled + decoded in tests; call sites deferred to P7 |
-| GET | `/api/experimental/job`, `POST …/{jobID}/cancel` | same | `JobInfoPayload`, `ServerJob` | modelled + decoded in tests (event); call sites deferred to P7 |
+| POST | `/api/session/{id}/fork` | same `requestForkSession` | — | deferred (not in P7 scope) |
+| POST | `/api/session/{id}/compact` | same `requestCompactSession` | — | deferred (not in P7 scope) |
+| POST | `/api/session/{id}/revert/stage`, `DELETE …/revert` | same | — | deferred (not in P7 scope) |
+| POST | `/api/session/{id}/background` | same | — | deferred (not in P7 scope) |
+| GET | `/api/experimental/session/{id}/export` (60 s) | same `requestExportSession` | — | deferred (not in P7 scope) |
+| POST | `/api/experimental/session/{id}/wait` (25 s poll, idempotent) | same `requestWaitForIdle` | — | deferred to P8 (the transcript wait loop owns its retries) |
+| GET | `/api/session?parentID={id}&order=desc&limit=100` | `live/LiveFamily.kt` `requestSessionFamily` | `Operations.sessionFamily` | implemented + tested: BFS, six pages in flight, 100-session cap, cycle/dedupe, bounded running ancestry |
+| GET | `/api/session/{id}/inbox` | `live/LivePrompts.kt` | `Operations.pendingInputs` | implemented + tested: user/synthetic/compaction rows, delivery steer/queue. The composer sheet is P9 |
+| PATCH | `/api/session/{id}/inbox/{inputID}` (unsafe; 409 or read-back settles) | same | `Operations.setPendingInputDelivery` | implemented + tested: reads the inbox back after ambiguity or 409; stranded steer queues then steers |
+| DELETE | `/api/session/{id}/inbox/{inputID}` (idempotent) | same | — | deferred to P9 (the composer owns cancel) |
+| GET | `/api/permission/request`, `/api/form` (60 s, location-scoped) | `live/LiveRequests.kt` | `Operations.attentionSessionIDs`, `Operations.pendingRequests` | implemented + tested: Home keeps the loose root read; P7 decodes full models, filters by family, keeps `global` forms, and treats a failed read as a failed snapshot |
+| POST | `/api/session/{id}/permission/{requestID}/reply` | same | `Operations.replyPermission` | implemented + tested: `{decision, message?}`, only a denial carries a reason, Always requires save patterns |
+| POST | `/api/session/{id}/form/{formID}/reply` | same | `Operations.replyForm` | implemented + tested: validates only active answers, read-back after ambiguous/409, one resend while pending, typed conflict |
+| DELETE | `/api/session/{id}/form/{formID}` | same | `Operations.cancelForm` | implemented + tested: optional reason, same settlement rules |
+| GET | `/api/session/{id}/form/{formID}` | same | `Operations.formState` | implemented + tested: `{data:{state}}`, status/answer/message |
+| GET | `/api/shell?location[directory]` | `live/LiveRequests.kt` | `Operations.runningShells` | implemented + tested: running only, location-scoped |
+| GET | `/api/shell/{id}` | same | `Operations.shell` | implemented + tested: one shell, unknown status reads as exited |
+| GET | `/api/shell/{id}/output?cursor&limit` (20 s) | same | `Operations.shellOutput` | implemented + tested: 64 KiB pages, absolute cursors, 404 marks unavailable |
+| DELETE | `/api/shell/{id}` | same | `Operations.stopShell` | implemented + tested: drains output first, unsafe |
+| GET | `/api/experimental/job?sessionID&descendants=true&status=running` | same | `Operations.runningJobs` | implemented + tested: running jobs only |
+| POST | `/api/experimental/job/{jobID}/cancel` | same | `Operations.cancelJob` | implemented + tested: idempotent |
 | GET | `/api/model`, `/api/model/default` | `live/LiveCatalog.kt` | `ModelRef` only | deferred to P9/P11 |
 | GET | `/api/agent`, `/api/skill`, `/api/command`, `/api/plugin`, `/api/mcp`, `/api/integration` | `live/LiveCatalog.kt` | — | deferred to P9/P11 |
 | GET | `/api/fs/list`, `/api/fs/find`, `/api/fs/read/{rel}` | `live/LiveFiles.kt` | — | deferred to P9/P10 |
@@ -124,7 +132,7 @@ types skipped without decoding data, `_tag` frames fail the connection, EOF is a
 | `session.renamed`, `deleted`, `archived`, `unarchived` | `.sessionRenamed`, `.sessionDeleted`, `.sessionArchiveChanged` | implemented + tested |
 | `session.moved` | `.sessionMoved`, else `.messageInvalidated` | implemented + tested |
 | `session.viewed` | `.sessionViewChanged` (ms) | implemented + tested |
-| `session.inbox.enqueued`/`delivery.changed`/`delivered`/`cancelled` | `.inputEnqueued`, `.inputQueueChanged`, `.inputCancelled` | implemented + tested; the admitted inbox **row** is deferred to P7 (the identity is carried) |
+| `session.inbox.enqueued`/`delivery.changed`/`delivered`/`cancelled` | `.inputEnqueued`, `.inputQueueChanged`, `.inputCancelled` | implemented + tested; P7 re-reads the inbox and the session screen shows steering/queued rows. The composer sheet is P9 |
 | `session.step.*`, `text.*`, `reasoning.*`, `tool.input.*`, `tool.*` | `.contentBatch` with `LiveContentEvent` | implemented + tested (delta coalescing, durable boundaries, part identity) |
 | `session.message.content.updated`, `session.synthetic`, `session.instructions.updated`, `session.agent.selected`, `session.model.selected`, `session.permissions`, `session.retry.scheduled`, `session.compaction.*`, `session.shell.*` | `.messageInvalidated` | implemented + tested |
 | `session.revert.staged`/`cleared`/`committed` | `.revertChanged` | implemented + tested |
@@ -164,7 +172,8 @@ audited contract. A connection attempt that lands on an HTML page now fails as
 
 P5 uses `health` (`/api/info`), `projects` (`/api/project`) and `events` (`/api/event`). P6 adds
 `/api/session`, `/api/session/active`, `/api/session/{id}/view`, `DELETE /api/session/{id}` and the two
-attention reads. A compatible fixture serves the connection routes through the real `URLSession` stack in
+attention reads. P7 adds the child family page, interrupt, the full request models/replies, inbox delivery,
+shells/output/stop and jobs/cancel. A compatible fixture serves the connection routes through the real `URLSession` stack in
 `LocalFixtureServerTests.compatibleFixtureConnection`; Home runs against the deterministic in-app fixture
 because no live V2 build with `/api/info` and `/api/project` was available. That incompatible outcome is
 preserved, not remapped.

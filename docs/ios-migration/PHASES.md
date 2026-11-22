@@ -14,8 +14,8 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | P3 | Core: store, dependencies, sharing, tokens, logging, haptics | done — merged into `ios` as `d0fdf2f5` (PR #2) | checklist below |
 | P4 | Server: transport, retry, models, SSE, pairing | done — merged into `ios` as `5f143ea7` (PR #3, tree `2326a49b`) | `PROTOCOL_COVERAGE.md`, `STATUS.md` |
 | P5 | App shell: launch, connection, pairing, reconnect | done — merged into `ios` as `3b34932c` (PR #4) | `STATUS.md`, `PARITY.md` App shell, `ConnectionFeatureTests`, UI tests |
-| **P6** | **Home, drawer, projects, Catch Up, What's New** | **done on `ios-home`** (PR #5, draft) | `STATUS.md` Phase 6, `PARITY.md` Home, `HomeFeatureTests`, 8 UI tests, screenshots, scroll trace |
-| P7 | Session, subagents, background work, request review | not started | folders only |
+| P6 | Home, drawer, projects, Catch Up, What's New | done — merged into `ios` as `7966dcfe` (PR #5, tree `25b6d297`) | `STATUS.md` Phase 6, `PARITY.md` Home, `HomeFeatureTests`, 8 UI tests, screenshots, scroll trace |
+| **P7** | **Session, subagents, background work, request review** | **done on `ios-session`** (draft PR) | `STATUS.md` Phase 7, `PARITY.md` Session, `SessionFeatureTests`, request-model and family tests, 5 UI tests, screenshots |
 | P8 | Transcript | not started | folders only |
 | P9 | Composer | not started | folders only |
 | P10 | Media | not started | folders only |
@@ -74,18 +74,23 @@ leaving the parent to clear the presented state.
 - **Previews.** Preview support is enabled, two launch-state previews exist, and the dependency context under
   Xcode previews resolves inert values, so a preview cannot reach the network and cannot play a haptic.
 
-## Roadmap after P6
+## Roadmap after P7
 
-P6 (Home) is complete on `ios-home` and is the phase P7 follows. P6 branched from `3b34932c`, the PR #4
-merge, never from a task branch.
+P7 (Session) is complete on `ios-session`. It branched from `ios` at `7966dcfe`, the P6 squash merge;
+the merged P6 tree is byte-identical to the reviewed `eff8b45f` tree (`25b6d297`), verified before work
+started.
 
-P7 starts from `ios` once P6 is merged. Prerequisites:
+P7 consumes `SessionSelection(serverID, sessionID, intent)` from Home; the P6 placeholder is gone. The
+session screen shows metadata, the run's Stop, subagent pages, permission/form review, pending inputs and
+the shell/background panel. It deliberately does **not** render transcript rows or a composer.
 
-1. **`ios-home` reviewed and merged into `ios`.** The merge is the hand-off.
-2. P7 consumes `SessionSelection(serverID, sessionID, intent)` from Home instead of adding a second
-   navigation model; the current `SessionPlaceholderView` is deliberately not a session screen.
-3. P7 owns the request-review models behind Home's attention read (`GET /api/permission/request`,
-   `GET /api/form` are read loosely here for root IDs only).
+P8 starts from `ios` once P7 is merged. Prerequisites:
+
+1. **`ios-session` reviewed and merged into `ios`.** The merge is the hand-off.
+2. P8 consumes the session's refresh identity (`SessionRefresh.id`, `RefreshReason`) rather than adding a
+   second authoritative-read queue; transcript windows and settlement reads extend the same read plan.
+3. P9 owns composer editing, drafts, sends and queued-input presentation. P7 exposes the inbox model and
+   `strandedSteerTapped`; it does not claim the composer.
 4. Production identifiers (bundle id, App Group) must be settled before a distributed build stores real
    credentials; the Keychain service derives from the configured bundle id (D-32).
 5. The haptics live path, camera QR scanning, VoiceOver on device and the local-network prompt need

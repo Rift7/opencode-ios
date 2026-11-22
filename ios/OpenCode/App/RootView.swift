@@ -3,6 +3,7 @@ import OpenCodeApp
 import OpenCodeCore
 import OpenCodeDrawer
 import OpenCodeServer
+import OpenCodeSession
 import SwiftUI
 
 enum AppCopy {
@@ -12,6 +13,10 @@ enum AppCopy {
 
   static func format(_ key: String, _ arguments: CVarArg...) -> String {
     String(format: text(key), arguments: arguments)
+  }
+
+  static func count(_ key: String, _ value: Int) -> String {
+    format("\(key).\(value == 1 ? "one" : "other")", value)
   }
 }
 
@@ -81,14 +86,9 @@ struct RootView: View {
       Text(AppCopy.text("saved_data.confirm.message"))
     }
     .fullScreenCover(isPresented: sessionDestinationPresented) {
-      SessionPlaceholderView(
-        selection: store.sessionDestination,
-        session: store.sessionDestination.flatMap { selection in
-          store.home?.session(selection.sessionID)
-        },
-        projectName: projectName(for: store.sessionDestination),
-        dismiss: { store.send(.sessionDestinationDismissed) }
-      )
+      if let sessionStore = store.scope(state: \.session, action: \.session) {
+        SessionView(store: sessionStore)
+      }
     }
   }
 
@@ -179,7 +179,7 @@ struct RootView: View {
 
   private var sessionDestinationPresented: Binding<Bool> {
     Binding(
-      get: { store.sessionDestination != nil },
+      get: { store.session != nil },
       set: { isPresented in
         if !isPresented { store.send(.sessionDestinationDismissed) }
       }
@@ -200,61 +200,6 @@ struct RootView: View {
       action,
       pending.replacedServerNames.joined(separator: ", ")
     )
-  }
-}
-
-// MARK: - Session destination
-
-/// P6 carries a selection to a real destination boundary; the transcript, composer and session
-/// work belong to P7 and are not claimed here.
-private struct SessionPlaceholderView: View {
-  let selection: SessionSelection?
-  let session: OpenCodeSession?
-  let projectName: String?
-  let dismiss: () -> Void
-
-  var body: some View {
-    NavigationStack {
-      ScrollView {
-        VStack(alignment: .leading, spacing: OpenCodeSpacing.s16) {
-          if let session {
-            Text(session.title)
-              .font(OpenCodeFonts.font(.title2))
-              .foregroundStyle(OpenCodeColors.color(.textStrong))
-          }
-          if let projectName {
-            Text(projectName)
-              .font(OpenCodeFonts.font(.footnote))
-              .foregroundStyle(OpenCodeColors.color(.textWeak))
-          }
-          if selection?.intent == .catchUpCard {
-            Text(AppCopy.text("session.from_catch_up"))
-              .font(OpenCodeFonts.font(.footnote))
-              .foregroundStyle(OpenCodeColors.color(.textWeak))
-          }
-          Text(AppCopy.text("session.later"))
-            .font(OpenCodeFonts.font(.body))
-            .foregroundStyle(OpenCodeColors.color(.textBody))
-          Text(AppCopy.text("session.later_detail"))
-            .font(OpenCodeFonts.font(.footnote))
-            .foregroundStyle(OpenCodeColors.color(.textWeak))
-          Button(AppCopy.text("common.done"), action: dismiss)
-            .font(OpenCodeFonts.font(.headline))
-            .padding(.top, OpenCodeSpacing.s8)
-            .accessibilityIdentifier("session-placeholder-done")
-        }
-        .padding(OpenCodeSpacing.s24)
-        .frame(maxWidth: .infinity, alignment: .leading)
-      }
-      .navigationTitle(AppCopy.text("session.title"))
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .confirmationAction) {
-          Button(AppCopy.text("common.done"), action: dismiss)
-        }
-      }
-    }
-    .accessibilityIdentifier("root-phase-session")
   }
 }
 

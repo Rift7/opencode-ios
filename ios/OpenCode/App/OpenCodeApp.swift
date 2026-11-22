@@ -54,10 +54,19 @@ struct OpenCodeApp: App {
     #endif
   }
 
+  private var preferredColorScheme: ColorScheme? {
+    switch configuration.uiTestAppearance {
+    case "dark": .dark
+    case "light": .light
+    default: nil
+    }
+  }
+
   var body: some Scene {
     WindowGroup {
       ZStack {
         RootView(store: store)
+          .preferredColorScheme(preferredColorScheme)
         if let keychainSelfTest {
           Text(keychainSelfTest)
             .font(.caption2)
