@@ -150,12 +150,14 @@ bounded at 128; falling behind ends the connection with `EventStreamOverflow` so
 hydrates from REST, rather than silently losing a delta. `EventStreamRunner.onResynchronize` is that
 hand-off; recovery is bounded (D-27).
 
-P8 adopts the pressure policy (D-61) as **coalescing, not shedding**: `EventBatcher` merges adjacent deltas
-for one part per 75 ms flush, the downstream buffer stays bounded (overflow reconnects and rehydrates), and
-Markdown parses only visible rows off the main actor into a bounded cache (256 entries / 4 MiB) cleared on a
-memory warning. No delta is dropped, so the stream tail and durable content are never silently lost. The
-transcript extends the session's one authoritative read (D-54); `session.message.content.updated` and the
-other invalidating events now trigger that read rather than being ignored.
+P8 adopts the pressure policy (D-61) as **coalescing, bounded replay and explicit recovery**:
+`EventBatcher` merges adjacent deltas for one part per 75 ms flush, the downstream buffer stays bounded
+(overflow reconnects and rehydrates), and Markdown parses only visible rows off the main actor into a
+bounded cache (256 entries / 4 MiB) cleared on a memory warning. Events racing an authoritative read are
+retained up to 512 separate batches; crossing that bound discards the partial replay, marks
+`racedEventsIncomplete` and requires one follow-up authoritative read. The projection is never published as
+complete after that signal, and durable REST remains the source of truth. `session.message.content.updated`
+and the other invalidating events trigger that same read rather than being ignored.
 
 ## Compatible server requirements
 

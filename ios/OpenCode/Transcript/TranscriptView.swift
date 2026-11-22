@@ -17,6 +17,7 @@ struct TranscriptView: View {
   @State private var isFollowing: Bool
   @State private var pendingEarlierAnchor: String?
   @State private var restoreTask: Task<Void, Never>?
+  @State private var readerIsScrolling = false
   @State private var frameProbe = ScrollFrameProbe()
 
   init(store: StoreOf<SessionFeature>, transcript: TranscriptState, isRunning: Bool) {
@@ -51,6 +52,13 @@ struct TranscriptView: View {
           if isRunning {
             workingRow
           }
+          #if DEBUG
+          Text("tail")
+            .font(.caption2)
+            .foregroundStyle(.clear)
+            .frame(width: 1, height: 1)
+            .accessibilityIdentifier("transcript-tail")
+          #endif
         }
         .scrollTargetLayout()
         .padding(.horizontal, OpenCodeSpacing.screenHorizontal)
@@ -59,19 +67,10 @@ struct TranscriptView: View {
       .scrollPosition(id: $position)
       .accessibilityIdentifier("transcript-list")
       .defaultScrollAnchor(.bottom)
-      .onScrollGeometryChange(for: Bool.self) { geometry in
-        let distance = geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height
-        return distance < 96
-      } action: { _, atEnd in
-        guard isFollowing != atEnd else { return }
-        isFollowing = atEnd
-        store.send(
-          .transcriptFollowChanged(
-            sessionID: transcript.sessionID,
-            isFollowing: atEnd,
-            anchorID: position ?? transcript.scrollAnchorID
-          )
-        )
+      .onScrollGeometryChange(for: TranscriptScrollMetrics.self) { geometry in
+        TranscriptScrollMetrics(geometry)
+      } action: { old, new in
+        handleScroll(from: old, to: new, proxy: proxy)
       }
       .onChange(of: transcript.items.count) { _, _ in
         if let pendingEarlierAnchor, entries.contains(where: { $0.id == pendingEarlierAnchor }) {
@@ -108,23 +107,24 @@ struct TranscriptView: View {
           }
         }
       }
+      .onScrollPhaseChange { _, phase in
+        readerIsScrolling =
+          phase == .tracking || phase == .interacting || phase == .decelerating
+        #if DEBUG
+        frameProbe.isScrolling = phase != .idle
+        #endif
+        if phase == .idle, !isFollowing {
+          sendFollowChanged(false)
+        }
+      }
       .onDisappear {
-        store.send(
-          .transcriptFollowChanged(
-            sessionID: transcript.sessionID,
-            isFollowing: isFollowing,
-            anchorID: position ?? transcript.scrollAnchorID
-          )
-        )
+        sendFollowChanged(isFollowing)
       }
       .environment(\.openURL, OpenURLAction { url in
         store.send(.transcriptLinkTapped(url.absoluteString))
         return .handled
       })
       #if DEBUG
-      .onScrollPhaseChange { _, phase in
-        frameProbe.isScrolling = phase != .idle
-      }
       .overlay(alignment: .topLeading) {
         Text(frameProbe.summary)
           .font(.caption2)
@@ -132,8 +132,65 @@ struct TranscriptView: View {
           .frame(width: 1, height: 1)
           .accessibilityIdentifier("transcript-frame-probe")
       }
+      .overlay(alignment: .topLeading) {
+        Text(isFollowing ? "following" : "browsing")
+          .font(.caption2)
+          .foregroundStyle(.clear)
+          .frame(width: 1, height: 1)
+          .accessibilityIdentifier("transcript-follow-state")
+      }
       #endif
     }
+  }
+
+  private func handleScroll(
+    from old: TranscriptScrollMetrics,
+    to new: TranscriptScrollMetrics,
+    proxy: ScrollViewProxy
+  ) {
+    let atEnd = new.distanceToEnd < 96
+    if atEnd {
+      if !isFollowing, readerIsScrolling || new.offsetY > old.offsetY + 0.5 {
+        setFollowing(true)
+      }
+      return
+    }
+    // While browsing, content growth must never pull the reader back to the end.
+    guard isFollowing else { return }
+    if readerIsScrolling {
+      setFollowing(false)
+      return
+    }
+    if new.contentHeight > old.contentHeight + 0.5 {
+      // Text, tool output and async Markdown layout can grow the tail without a row identity
+      // change. Re-pin only when the person was already following.
+      pinToLatest(proxy)
+      return
+    }
+    if new.offsetY < old.offsetY - 0.5 {
+      setFollowing(false)
+    }
+  }
+
+  private func pinToLatest(_ proxy: ScrollViewProxy) {
+    guard let lastEntryID else { return }
+    withAnimation(nil) { proxy.scrollTo(lastEntryID, anchor: .bottom) }
+  }
+
+  private func setFollowing(_ value: Bool) {
+    guard isFollowing != value else { return }
+    isFollowing = value
+    sendFollowChanged(value)
+  }
+
+  private func sendFollowChanged(_ value: Bool) {
+    store.send(
+      .transcriptFollowChanged(
+        sessionID: transcript.sessionID,
+        isFollowing: value,
+        anchorID: position ?? transcript.scrollAnchorID
+      )
+    )
   }
 
   private var earlierHistoryRow: some View {
@@ -284,5 +341,21 @@ enum TranscriptCopy {
   static func fileSize(_ bytes: Int?) -> String? {
     guard let bytes, bytes > 0 else { return nil }
     return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+  }
+}
+
+private struct TranscriptScrollMetrics: Equatable {
+  var offsetY: CGFloat
+  var contentHeight: CGFloat
+  var containerHeight: CGFloat
+
+  init(_ geometry: ScrollGeometry) {
+    offsetY = geometry.contentOffset.y
+    contentHeight = geometry.contentSize.height
+    containerHeight = geometry.containerSize.height
+  }
+
+  var distanceToEnd: CGFloat {
+    contentHeight - offsetY - containerHeight
   }
 }

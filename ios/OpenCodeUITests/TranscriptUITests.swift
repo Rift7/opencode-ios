@@ -187,4 +187,40 @@ final class TranscriptUITests: XCTestCase {
     XCTAssertTrue(copy.waitForExistence(timeout: 10))
     copy.tap()
   }
+
+  func testFollowingSurvivesTailGrowthAndBrowsingHoldsItsAnchor() {
+    let app = launch(mode: "connected-transcript-growth")
+    openAlpha(app)
+    let window = app.windows.firstMatch
+    let follow = app.descendants(matching: .any)["transcript-follow-state"]
+    let tail = app.descendants(matching: .any)["transcript-tail"]
+    XCTAssertTrue(follow.waitForExistence(timeout: 10))
+    XCTAssertEqual(follow.label, "following")
+    XCTAssertTrue(tail.waitForExistence(timeout: 10))
+    XCTAssertLessThan(tail.frame.minY, window.frame.maxY)
+
+    // One stable row grows past the viewport through text deltas and Markdown layout.
+    Thread.sleep(forTimeInterval: 3)
+    XCTAssertEqual(follow.label, "following")
+    XCTAssertTrue(tail.exists)
+    XCTAssertLessThan(tail.frame.minY, window.frame.maxY)
+
+    let marker = app.staticTexts["Anchor Marker"]
+    for _ in 0..<30 where !marker.exists || !marker.isHittable {
+      app.swipeDown()
+    }
+    XCTAssertTrue(marker.waitForExistence(timeout: 10))
+    let browsing = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "label == 'browsing'"),
+      object: follow
+    )
+    XCTAssertEqual(XCTWaiter().wait(for: [browsing], timeout: 10), .completed)
+    XCTAssertTrue(app.buttons["transcript-jump"].waitForExistence(timeout: 10))
+    let anchorY = marker.frame.minY
+
+    Thread.sleep(forTimeInterval: 3)
+    XCTAssertEqual(follow.label, "browsing")
+    XCTAssertTrue(app.buttons["transcript-jump"].exists)
+    XCTAssertEqual(marker.frame.minY, anchorY, accuracy: 12)
+  }
 }

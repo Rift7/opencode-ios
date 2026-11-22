@@ -293,24 +293,42 @@ import OpenCodeServer
             let task = Task {
               await onPhase(.connected)
               continuation.yield(.connected)
-              if mode == "connected-transcript-stream" {
-                continuation.yield(.executionStarted(sessionID: "alpha"))
+              if mode == "connected-transcript-stream" || mode == "connected-transcript-growth" {
+                if mode == "connected-transcript-stream" {
+                  continuation.yield(.executionStarted(sessionID: "alpha"))
+                }
+                let messageID = mode == "connected-transcript-growth" ? "growth-live" : "stream-live"
                 continuation.yield(
                   .contentBatch(
                     sessionID: "alpha",
-                    events: [.textStarted(messageID: "stream-live", ordinal: 0)]
+                    events: [.textStarted(messageID: messageID, ordinal: 0)]
                   )
                 )
-                for index in 0..<600 {
+                let count = mode == "connected-transcript-growth" ? 2_000 : 600
+                for index in 0..<count {
                   guard !Task.isCancelled else { return }
+                  let token: String
+                  if mode == "connected-transcript-growth" {
+                    if index == 400 {
+                      token = "\n\n### Anchor Marker\n\n"
+                    } else if index > 0, index.isMultiple(of: 80) {
+                      token = "\n\n## Section \(index / 80)\n"
+                    } else if index > 0, index.isMultiple(of: 40) {
+                      token = "\n\n- point \(index)\n"
+                    } else {
+                      token = "token\(index) "
+                    }
+                  } else {
+                    token = "token\(index) "
+                  }
                   continuation.yield(
                     .contentBatch(
                       sessionID: "alpha",
                       events: [
                         .textDelta(
-                          messageID: "stream-live",
+                          messageID: messageID,
                           ordinal: 0,
-                          delta: "token\(index) ",
+                          delta: token,
                           accumulatedText: nil
                         )
                       ]
@@ -318,7 +336,9 @@ import OpenCodeServer
                   )
                   try? await Task.sleep(for: .milliseconds(20))
                 }
-                continuation.yield(.executionEnded(sessionID: "alpha"))
+                if mode == "connected-transcript-stream" {
+                  continuation.yield(.executionEnded(sessionID: "alpha"))
+                }
               }
               try? await Task.sleep(for: .seconds(3_600))
             }
@@ -384,6 +404,10 @@ import OpenCodeServer
       case "connected-transcript-stream":
         return TranscriptPage(
           items: [.userText(id: "stream-user", text: "Stream six hundred tokens.", source: nil, quotes: [])]
+        )
+      case "connected-transcript-growth":
+        return TranscriptPage(
+          items: [.userText(id: "growth-user", text: "Stream many tokens.", source: nil, quotes: [])]
         )
       default:
         return TranscriptPage(items: richTranscriptItems())

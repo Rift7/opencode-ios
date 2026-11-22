@@ -272,8 +272,8 @@ buffered into a completed response and is never replaced by polling.
 
 ### D-23 Event batching adopts ordering and bounds; transcript pressure shedding waits for P8
 
-_Superseded in P8 by D-61: the pressure policy is batched coalescing plus on-demand Markdown parsing, with
-no delta shedding._
+_Superseded in P8 by D-61: the pressure policy is batched coalescing plus on-demand Markdown parsing; a
+raced-event overflow is explicit and rehydrates rather than silently dropping or truncating._
 `EventBatcher` adopts the audited flush (`75 ms` or 256 pending mutations), delta coalescing, per-session
 order, the non-content flush barrier and the bounded downstream (`128`, overflow ends the connection).
 
@@ -803,19 +803,27 @@ and no bundled font.
 - Remote images are link cards. Nothing fetches an image, executes HTML, or runs a command from server text.
 - Quotes from `metadata.comments` are display-only cards; the composer action is P9.
 
-### D-61 Pressure is coalescing plus bounded on-demand parsing, never shedding
+### D-61 Pressure is coalescing, bounded replay and explicit recovery
 The stream keeps the P4 bound: adjacent deltas for one part coalesce per 75 ms flush (or 256 mutations), the
-downstream buffer is 128, and overflow ends the connection so REST rehydrates. P8 does not add a second
-shedding layer; it makes the consumer cheap instead.
+downstream buffer is 128, and overflow ends the connection so REST rehydrates. P8's consumer is cheap by
+design, and its raced-event replay is explicit about its bound.
 
-- Only visible Markdown rows request parsing. Parsing runs off the main actor through
-  `MarkdownBlockCache`, which keeps at most 256 entries and 4 MiB of source, evicts least-recently used
-  entries, and clears on a memory warning.
+- Only visible Markdown rows request parsing. A publication carries a revision: a newer text or a
+  disappeared row fences every older parse, so a late result cannot replace what is displayed. Parsing runs
+  off the main actor through `MarkdownBlockCache`, which keeps at most 256 entries and 4 MiB of source,
+  evicts least-recently used entries, and clears on a memory warning.
+- Events that race one authoritative read are retained up to 512 separate batches and replayed in order.
+  Crossing that bound **discards the partial replay** and sets `racedEventsIncomplete`; the view never
+  receives that buffer as a complete projection. The refresh coordinator then takes one follow-up
+  authoritative read, which is the durable source of truth. This is recovery, not a silent truncation or a
+  larger buffer.
+- Durable boundaries and invalidations still set the follow-up reason under pressure; `.settlement` and
+  `.invalidation` both read through the same coordinator.
 - Item and stream buffers stay bounded by the P4 transport/frame limits and the 20,000-byte tool-text bound.
-  The transcript itself keeps loaded pages until the person leaves the session; earlier pages are only
-  loaded on request, so loading is bounded by user action rather than an undocumented truncation.
-- Recording a limit: the server transcript window is 30 rows and an older page is 80; the UI lazily draws
-  whatever is loaded.
+  The transcript keeps loaded pages until the person leaves the session; earlier pages are only loaded on
+  request, so loading is bounded by user action rather than an undocumented truncation.
+- Recorded limits: the server transcript window is 30 rows and an older page is 80; raced replay is 512
+  batches; the UI lazily draws whatever is loaded.
 
 ### D-62 Server content cannot open or fetch anything by itself
 A Markdown link or image card routes to `SessionFeature` as a typed URL. The confirmation sheet offers

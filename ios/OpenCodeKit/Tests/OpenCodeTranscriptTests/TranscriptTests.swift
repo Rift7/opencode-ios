@@ -421,6 +421,62 @@ struct MarkdownTests {
     #expect(text.contains("| A |"))
   }
 
+  @MainActor
+  @Test("only the current content revision can publish Markdown blocks")
+  func latestParseWins() async {
+    let parser = ControlledMarkdownParser()
+    let presenter = MarkdownBlockPresenter(
+      cache: MarkdownBlockCache(),
+      parser: MarkdownParserClient { await parser.parse($0) }
+    )
+    presenter.load(key: "A", text: "A")
+    await parser.waitUntilStarted("A")
+    presenter.load(key: "B", text: "B")
+    await parser.waitUntilStarted("B")
+    await parser.complete("B", [.paragraph("B")])
+    #expect(await eventually { presenter.blocks == [.paragraph("B")] })
+    await parser.complete("A", [.paragraph("A")])
+    #expect(await eventually { presenter.blocks == [.paragraph("B")] })
+  }
+
+  @MainActor
+  @Test("changing content clears stale blocks until the new parse lands")
+  func staleBlocksClear() async {
+    let parser = ControlledMarkdownParser()
+    let presenter = MarkdownBlockPresenter(
+      cache: MarkdownBlockCache(),
+      parser: MarkdownParserClient { await parser.parse($0) }
+    )
+    presenter.load(key: "A", text: "A")
+    await parser.waitUntilStarted("A")
+    await parser.complete("A", [.paragraph("A")])
+    #expect(await eventually { presenter.blocks == [.paragraph("A")] })
+
+    presenter.load(key: "B", text: "B")
+    await parser.waitUntilStarted("B")
+    #expect(presenter.blocks == nil)
+    await parser.complete("A", [.paragraph("late A")])
+    await parser.complete("B", [.paragraph("B")])
+    #expect(await eventually { presenter.blocks == [.paragraph("B")] })
+  }
+
+  @MainActor
+  @Test("a disappeared or replaced row cannot publish a late parse")
+  func disappearanceFencesPublication() async {
+    let parser = ControlledMarkdownParser()
+    let presenter = MarkdownBlockPresenter(
+      cache: MarkdownBlockCache(),
+      parser: MarkdownParserClient { await parser.parse($0) }
+    )
+    presenter.load(key: "A", text: "A")
+    await parser.waitUntilStarted("A")
+    presenter.clear()
+    await parser.complete("A", [.paragraph("A")])
+    try? await Task.sleep(for: .milliseconds(50))
+    #expect(presenter.blocks == nil)
+    #expect(presenter.displayedKey == nil)
+  }
+
   @Test("the block cache is bounded and clears")
   func cacheBounds() async {
     let cache = MarkdownBlockCache(maximumEntries: 2, maximumCharacters: 1_000)
@@ -432,4 +488,44 @@ struct MarkdownTests {
     #expect(await cache.count == 0)
     #expect(await cache.characterCount == 0)
   }
+}
+
+private actor ControlledMarkdownParser {
+  private var started: Set<String> = []
+  private var startWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+  private var parseWaiters: [String: [CheckedContinuation<[MarkdownBlock], Never>]] = [:]
+
+  func parse(_ text: String) async -> [MarkdownBlock] {
+    await withCheckedContinuation { continuation in
+      parseWaiters[text, default: []].append(continuation)
+      started.insert(text)
+      for waiter in startWaiters[text] ?? [] { waiter.resume() }
+      startWaiters[text] = nil
+    }
+  }
+
+  func waitUntilStarted(_ text: String) async {
+    if started.contains(text) { return }
+    await withCheckedContinuation { continuation in
+      startWaiters[text, default: []].append(continuation)
+    }
+  }
+
+  func complete(_ text: String, _ blocks: [MarkdownBlock]) {
+    for waiter in parseWaiters[text] ?? [] { waiter.resume(returning: blocks) }
+    parseWaiters[text] = nil
+  }
+}
+
+@MainActor
+private func eventually(
+  timeout: Duration = .seconds(1),
+  _ condition: () -> Bool
+) async -> Bool {
+  let deadline = ContinuousClock.now + timeout
+  while ContinuousClock.now < deadline {
+    if condition() { return true }
+    try? await Task.sleep(for: .milliseconds(10))
+  }
+  return condition()
 }

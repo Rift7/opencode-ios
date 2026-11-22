@@ -12,11 +12,11 @@ struct MarkdownBlocksView: View {
   let onLink: (String) -> Void
   let onCopy: (String) -> Void
 
-  @State private var blocks: [MarkdownBlock]?
+  @State private var presenter = MarkdownBlockPresenter()
 
   var body: some View {
     VStack(alignment: .leading, spacing: OpenCodeSpacing.s10) {
-      if let blocks {
+      if let blocks = presenter.blocks {
         ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
           MarkdownBlockView(block: block, isSecondary: isSecondary, onLink: onLink, onCopy: onCopy)
         }
@@ -29,15 +29,10 @@ struct MarkdownBlocksView: View {
       }
     }
     .task(id: cacheKey) {
-      if let cached = await MarkdownBlockCache.shared.cached(cacheKey) {
-        blocks = cached
-        return
-      }
-      let parsed = await Task.detached(priority: .userInitiated) {
-        MarkdownParser.parse(text)
-      }.value
-      _ = await MarkdownBlockCache.shared.blocks(for: cacheKey, text: text) { _ in parsed }
-      blocks = parsed
+      presenter.load(key: cacheKey, text: text)
+    }
+    .onDisappear {
+      presenter.clear()
     }
   }
 

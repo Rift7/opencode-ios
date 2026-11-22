@@ -122,7 +122,14 @@ message or file content.
 - Markdown parses off the main actor into `MarkdownBlockCache` (256 entries / 4 MiB, cleared on memory
   warning). Remote images and links are inert until the person confirms; no web view.
 - The list is a SwiftUI `ScrollView` + `LazyVStack`. Do not reintroduce the UIKit follower, send flights or
-  row growth. Reduce Motion replaces the jump glide with the shared reduced fade.
+  row growth. Following survives tail height changes while the reader was at the end; only a reader drag
+  stops it, and browsing never re-pins. Reduce Motion replaces the jump glide with the shared reduced fade.
+- Markdown publication carries a revision. A newer text or a disappeared row fences every older parse;
+  `MarkdownBlockPresenter` is the only publisher and the cache stays bounded. Do not assign parse results
+  straight into view state.
+- Events racing a read are replayed up to 512 batches. Crossing the bound is explicit: the partial replay is
+  discarded, `racedEventsIncomplete` is set, and the refresh coordinator performs one authoritative re-read.
+  Do not silently drop, truncate, or raise the buffer without changing that policy and its tests.
 - Media, file opening, math/Mermaid typesetting and composer quote actions belong to P9/P10.
 
 ## Test conventions

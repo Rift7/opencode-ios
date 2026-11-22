@@ -80,17 +80,22 @@ public struct SessionRefresh: Equatable, Sendable {
   public var followup: RefreshReason?
   /// Events received while this read was in flight, replayed onto its result.
   public var racedEvents: [ServerEvent]
+  /// Too many events arrived to replay them safely. The buffer is discarded and a follow-up
+  /// authoritative read is required; the projection is never presented as complete.
+  public var racedEventsIncomplete: Bool
 
   public init(
     id: Int,
     reason: RefreshReason,
     followup: RefreshReason? = nil,
-    racedEvents: [ServerEvent] = []
+    racedEvents: [ServerEvent] = [],
+    racedEventsIncomplete: Bool = false
   ) {
     self.id = id
     self.reason = reason
     self.followup = followup
     self.racedEvents = racedEvents
+    self.racedEventsIncomplete = racedEventsIncomplete
   }
 }
 

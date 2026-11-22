@@ -1019,7 +1019,9 @@ extension SessionFeature {
         .sessionRefreshFailed,
         [LogField("status", .status(error.statusCode ?? 0))]
       )
-      apply(raced: inFlight.racedEvents, state: &state)
+      if !inFlight.racedEventsIncomplete {
+        apply(raced: inFlight.racedEvents, state: &state)
+      }
       applyTranscriptFailure(
         .from(error, isOffline: !state.isLive),
         for: sessionID,
@@ -1030,6 +1032,13 @@ extension SessionFeature {
       } else {
         state.notice = .couldNotRefresh(.from(error, isOffline: !state.isLive))
       }
+      if inFlight.racedEventsIncomplete {
+        AppLog(category: .app).event(
+          .sessionRefreshIncomplete,
+          [LogField("rehydrate", .flag(true))]
+        )
+        return .send(.refreshRequested(.invalidation))
+      }
       return .none
     case .success(let snapshot):
       state.refresh = nil
@@ -1037,7 +1046,14 @@ extension SessionFeature {
       state.loadProblem = nil
       state.notice = nil
       apply(snapshot: snapshot, for: sessionID, state: &state)
-      apply(raced: inFlight.racedEvents, state: &state)
+      if inFlight.racedEventsIncomplete {
+        AppLog(category: .app).event(
+          .sessionRefreshIncomplete,
+          [LogField("rehydrate", .flag(true))]
+        )
+      } else {
+        apply(raced: inFlight.racedEvents, state: &state)
+      }
       AppLog(category: .app).event(
         .sessionRefreshed,
         [
@@ -1047,7 +1063,9 @@ extension SessionFeature {
         ]
       )
       var followup = inFlight.followup
-      if inFlight.racedEvents.contains(where: { event in
+      if inFlight.racedEventsIncomplete {
+        followup = .invalidation
+      } else if inFlight.racedEvents.contains(where: { event in
         switch event {
         case .executionStarted, .executionEnded, .attentionChanged: true
         default: false
@@ -1151,25 +1169,7 @@ extension SessionFeature {
       return .none
     }
     if var inFlight = state.refresh {
-      inFlight.racedEvents.append(event)
-      if inFlight.racedEvents.count > 512 {
-        inFlight.racedEvents.removeFirst(inFlight.racedEvents.count - 512)
-      }
-      if inFlight.followup != .runState {
-        switch event {
-        case .executionStarted, .executionEnded:
-          inFlight.followup = .runState
-        case .attentionChanged, .inputEnqueued, .inputQueueChanged, .inputCancelled,
-          .sessionCreated:
-          inFlight.followup = inFlight.followup ?? .invalidation
-        case .contentBatch(_, let events):
-          if let durable = events.last(where: \.isDurableBoundary) {
-            inFlight.followup = inFlight.followup ?? .settlement(messageID: durable.messageID)
-          }
-        default:
-          break
-        }
-      }
+      recordRaced(event, in: &inFlight)
       state.refresh = inFlight
       return .none
     }
@@ -1182,12 +1182,42 @@ extension SessionFeature {
     state: inout State
   ) -> Effect<Action> {
     if var inFlight = state.refresh {
-      inFlight.racedEvents.append(event)
+      recordRaced(event, in: &inFlight)
       if inFlight.followup != .runState { inFlight.followup = reason }
       state.refresh = inFlight
       return .none
     }
     return apply(event, state: &state)
+  }
+
+  /// Bounded replay for events that race one authoritative read. The buffer is a safety bound,
+  /// not a lossy queue: crossing it marks the projection incomplete, discards the partial replay
+  /// and makes the refresh coordinator take another authoritative read after this one.
+  private func recordRaced(_ event: ServerEvent, in inFlight: inout SessionRefresh) {
+    if !inFlight.racedEventsIncomplete {
+      if inFlight.racedEvents.count >= 512 {
+        inFlight.racedEventsIncomplete = true
+        inFlight.racedEvents.removeAll(keepingCapacity: false)
+      } else {
+        inFlight.racedEvents.append(event)
+      }
+    }
+    guard inFlight.followup != .runState else { return }
+    switch event {
+    case .executionStarted, .executionEnded:
+      inFlight.followup = .runState
+    case .messageInvalidated:
+      inFlight.followup = inFlight.followup ?? .invalidation
+    case .attentionChanged, .inputEnqueued, .inputQueueChanged, .inputCancelled,
+      .sessionCreated:
+      inFlight.followup = inFlight.followup ?? .invalidation
+    case .contentBatch(_, let events):
+      if let durable = events.last(where: \.isDurableBoundary) {
+        inFlight.followup = inFlight.followup ?? .settlement(messageID: durable.messageID)
+      }
+    default:
+      break
+    }
   }
 
   private func apply(raced events: [ServerEvent], state: inout State) {

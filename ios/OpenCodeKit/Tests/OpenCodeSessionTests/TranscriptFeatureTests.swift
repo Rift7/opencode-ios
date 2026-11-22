@@ -540,6 +540,194 @@ struct TranscriptFeatureTests {
     #expect(store.state.pendingLink == nil)
   }
 
+  @Test("a message invalidation racing a read earns one coalesced follow-up")
+  func invalidationRacingRead() async {
+    let gate = Gate()
+    let reads = CallCounter()
+    let stale = TranscriptPage(items: [reply("a-old")])
+    let fresh = TranscriptPage(items: [user("u-new"), reply("a-new")])
+    let store = makeStore(
+      state(),
+      client: client(
+        getSession: { _, _ in self.root() },
+        transcript: { _, _, _ in
+          let count = await reads.count("reads")
+          await reads.increment("reads")
+          if count == 0 {
+            await gate.wait()
+            return stale
+          }
+          return fresh
+        }
+      )
+    )
+    await store.send(.task)
+    #expect(await waitUntil { store.state.refresh != nil && store.state.transcripts["root"] != nil })
+    #expect(await waitUntil { await reads.count("reads") == 1 })
+
+    await store.send(.serverEvent(.messageInvalidated(sessionID: "root")))
+    await store.send(.serverEvent(.messageInvalidated(sessionID: "root")))
+    #expect(store.state.refresh?.followup == .invalidation)
+
+    await gate.open()
+    await settle(store)
+    #expect(await reads.count("reads") == 2)
+    #expect(store.state.activeTranscript?.items.map(\.id) == ["u-new", "a-new"])
+    #expect(store.state.activeTranscript?.items.contains(where: { $0.id == "a-old" }) == false)
+  }
+
+  @Test("raced-event pressure marks the projection incomplete and rehydrates")
+  func racedOverflowRehydrates() async {
+    let gate = Gate()
+    let reads = CallCounter()
+    let fresh = TranscriptPage(
+      items: [
+        user("u1"),
+        .assistantMarkdown(id: "m-text-0", text: "authoritative", inProgress: false),
+        .tool(
+          id: "m-tool-t1",
+          call: TranscriptToolCall(
+            callID: "t1",
+            messageID: "m",
+            name: "read",
+            status: .completed,
+            input: .object(["path": .string("a")]),
+            output: ["final"]
+          )
+        ),
+      ]
+    )
+    let store = makeStore(
+      state(),
+      client: client(
+        getSession: { _, _ in self.root() },
+        transcript: { _, _, _ in
+          let count = await reads.count("reads")
+          await reads.increment("reads")
+          if count == 0 {
+            await gate.wait()
+            return TranscriptPage(items: [user("u1")])
+          }
+          return fresh
+        }
+      )
+    )
+    await store.send(.task)
+    #expect(await waitUntil { store.state.refresh != nil })
+    #expect(await waitUntil { await reads.count("reads") == 1 })
+
+    for index in 0..<300 {
+      await store.send(
+        .serverEvent(
+          .contentBatch(
+            sessionID: "root",
+            events: [
+              .textDelta(
+                messageID: "m",
+                ordinal: 0,
+                delta: "t\(index) ",
+                accumulatedText: nil
+              )
+            ]
+          )
+        )
+      )
+    }
+    for index in 0..<300 {
+      await store.send(
+        .serverEvent(
+          .contentBatch(
+            sessionID: "root",
+            events: [.toolInputDelta(messageID: "m", toolID: "t1", delta: "x\(index)")]
+          )
+        )
+      )
+    }
+    await store.send(.serverEvent(.messageInvalidated(sessionID: "root")))
+    #expect(store.state.refresh?.racedEventsIncomplete == true)
+    #expect(store.state.refresh?.followup == .invalidation)
+
+    await gate.open()
+    await settle(store)
+    #expect(await reads.count("reads") >= 2)
+    #expect(store.state.activeTranscript?.items.map(\.id) == ["u1", "m-text-0", "m-tool-t1"])
+    guard case .assistantMarkdown(_, let text, _)? =
+      store.state.activeTranscript?.items.first(where: { $0.id == "m-text-0" })
+    else {
+      Issue.record("expected authoritative markdown")
+      return
+    }
+    #expect(text == "authoritative")
+    guard case .tool(_, let call)? =
+      store.state.activeTranscript?.items.first(where: { $0.id == "m-tool-t1" })
+    else {
+      Issue.record("expected authoritative tool")
+      return
+    }
+    #expect(call.status == .completed)
+    #expect(call.output == ["final"])
+    #expect(!store.state.activeTranscript!.items.contains { item in
+      if case .assistantMarkdown(_, let text, _) = item { return text.contains("t0") }
+      return false
+    })
+  }
+
+  @Test("a durable boundary after raced overflow still schedules rehydration")
+  func racedOverflowKeepsDurableBoundary() async {
+    let gate = Gate()
+    let reads = CallCounter()
+    let store = makeStore(
+      state(),
+      client: client(
+        getSession: { _, _ in self.root() },
+        transcript: { _, _, _ in
+          let count = await reads.count("reads")
+          await reads.increment("reads")
+          if count == 0 {
+            await gate.wait()
+            return TranscriptPage(items: [])
+          }
+          return TranscriptPage(
+            items: [.assistantMarkdown(id: "m-text-0", text: "settled", inProgress: false)]
+          )
+        }
+      )
+    )
+    await store.send(.task)
+    #expect(await waitUntil { store.state.refresh != nil })
+    #expect(await waitUntil { await reads.count("reads") == 1 })
+    for index in 0..<513 {
+      await store.send(
+        .serverEvent(
+          .contentBatch(
+            sessionID: "root",
+            events: [.textDelta(messageID: "m", ordinal: 0, delta: "\(index)", accumulatedText: nil)]
+          )
+        )
+      )
+    }
+    await store.send(
+      .serverEvent(
+        .contentBatch(
+          sessionID: "root",
+          events: [.textEnded(messageID: "m", ordinal: 0, text: "settled")]
+        )
+      )
+    )
+    #expect(store.state.refresh?.racedEventsIncomplete == true)
+    #expect(store.state.refresh?.followup == .settlement(messageID: "m"))
+    await gate.open()
+    await settle(store)
+    #expect(await reads.count("reads") >= 2)
+    guard case .assistantMarkdown(_, let text, _)? =
+      store.state.activeTranscript?.items.first(where: { $0.id == "m-text-0" })
+    else {
+      Issue.record("expected settled row")
+      return
+    }
+    #expect(text == "settled")
+  }
+
   @Test("six hundred streamed tokens retain their tail through settlement")
   func streamTailGate() async {
     let reads = CallCounter()

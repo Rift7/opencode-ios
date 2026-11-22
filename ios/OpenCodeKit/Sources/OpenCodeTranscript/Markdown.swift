@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SwiftUI
 
 /// A Markdown block the transcript can draw without a web view. Unsupported constructs stay as
@@ -295,6 +296,83 @@ public enum MarkdownParser {
     if line.hasPrefix(">") || listItem(line) != nil || image(line) != nil { return true }
     if line.hasPrefix("$$") || line.hasPrefix("\\[") { return true }
     return false
+  }
+}
+
+/// The parsing boundary. The live client parses synchronously off the main actor; tests replace it
+/// with a controlled async parser to prove publication order.
+public struct MarkdownParserClient: Sendable {
+  public var parse: @Sendable (String) async -> [MarkdownBlock]
+
+  public init(parse: @escaping @Sendable (String) async -> [MarkdownBlock]) {
+    self.parse = parse
+  }
+
+  public static let live = MarkdownParserClient { text in
+    MarkdownParser.parse(text)
+  }
+}
+
+/// Owns one Markdown row's publication. A request carries a revision; only the current revision can
+/// publish, so an older parse that finishes late cannot replace newer text. Changing content clears
+/// the stale blocks and falls back to the view's plain text until the current parse lands.
+@MainActor
+@Observable
+public final class MarkdownBlockPresenter {
+  public private(set) var blocks: [MarkdownBlock]?
+  public private(set) var displayedKey: String?
+  @ObservationIgnored private var revision = 0
+  @ObservationIgnored private var task: Task<Void, Never>?
+  private let cache: MarkdownBlockCache
+  private let parser: MarkdownParserClient
+
+  public init(
+    cache: MarkdownBlockCache = .shared,
+    parser: MarkdownParserClient = .live
+  ) {
+    self.cache = cache
+    self.parser = parser
+  }
+
+  public func load(key: String, text: String) {
+    revision += 1
+    let revision = revision
+    task?.cancel()
+    if displayedKey != key {
+      blocks = nil
+      displayedKey = nil
+    }
+    let cache = cache
+    let parser = parser
+    task = Task { [weak self] in
+      if let cached = await cache.cached(key) {
+        guard let self, !Task.isCancelled, revision == self.revision else { return }
+        self.publish(cached, key: key, revision: revision)
+        return
+      }
+      let parsed = await Task.detached(priority: .userInitiated) {
+        await parser.parse(text)
+      }.value
+      guard let self, !Task.isCancelled, revision == self.revision else { return }
+      _ = await cache.blocks(for: key, text: text) { _ in parsed }
+      guard !Task.isCancelled, revision == self.revision else { return }
+      self.publish(parsed, key: key, revision: revision)
+    }
+  }
+
+  /// The row disappeared or was replaced: no older parse may publish after this.
+  public func clear() {
+    revision += 1
+    task?.cancel()
+    task = nil
+    blocks = nil
+    displayedKey = nil
+  }
+
+  private func publish(_ blocks: [MarkdownBlock], key: String, revision: Int) {
+    guard revision == self.revision else { return }
+    self.blocks = blocks
+    displayedKey = key
   }
 }
 
