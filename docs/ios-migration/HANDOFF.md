@@ -128,8 +128,11 @@ message or file content.
   `MarkdownBlockPresenter` is the only publisher and the cache stays bounded. Do not assign parse results
   straight into view state.
 - Events racing a read are replayed up to 512 batches. Crossing the bound is explicit: the partial replay is
-  discarded, `racedEventsIncomplete` is set, and the refresh coordinator performs one authoritative re-read.
-  Do not silently drop, truncate, or raise the buffer without changing that policy and its tests.
+  discarded, persistent `SessionRecovery` is set, and the refresh coordinator runs a bounded recovery. A
+  durable boundary stored with it keeps the 200 ms settlement delay; failure keeps the requirement; only a
+  successful authoritative transcript with no new overflow clears it. One immediate attempt plus one delayed
+  retry, then a recoverable failure. Do not silently drop, truncate, or raise the buffer without changing that
+  policy and its tests.
 - Media, file opening, math/Mermaid typesetting and composer quote actions belong to P9/P10.
 
 ## Test conventions

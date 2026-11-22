@@ -39,6 +39,7 @@ public enum LogEvent: String, Sendable, CaseIterable {
   case sessionRefreshed = "session.refreshed"
   case sessionRefreshFailed = "session.refresh.failed"
   case sessionRefreshIncomplete = "session.refresh.incomplete"
+  case sessionRecovered = "session.recovered"
   case sessionInterrupt = "session.interrupt"
   case requestReplied = "request.replied"
   case shellOutputLoaded = "shell.output.loaded"

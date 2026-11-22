@@ -129,9 +129,11 @@ intervals during the measured swipes; the p95 stays at one interval.
   `cancelInFlight`).
 - Responses are fenced by session ID and request ID. Events received while a read is in flight are queued
   (bounded at 512 separate batches), then replayed onto the snapshot; execution, request, invalidation and
-  durable-boundary events also schedule one follow-up. Crossing the bound discards the partial replay,
-  marks it incomplete and requires one follow-up authoritative read; no truncated projection is published.
-  A settlement read sleeps the audited 200 ms coalescing window first.
+  durable-boundary events also schedule one follow-up. Crossing the bound discards the partial replay and
+  stores a persistent recovery requirement; no truncated projection is published. The recovery read keeps
+  a durable boundary's audited 200 ms delay, survives failures, and clears only when the authoritative
+  transcript succeeds with no new overflow. It is bounded to one immediate attempt plus one delayed retry;
+  after that a manual retry/reconnect uses the same coordinator. A settlement read still sleeps 200 ms.
 - Stop increments a run generation and cancels the previous interrupt, settle, run-end and stranded-steer
   work. An ambiguous interrupt reads `/api/session/active` and the inbox before trying again: a finished run
   or a resumed steering message is settled, never interrupted twice. An acknowledged stop polls at 1, 2, 4
@@ -190,8 +192,8 @@ created from that commit; no branch was reset or overwritten.
 | Transcript routes: newest descending window, older cursor page (20 s, 80 messages), one message | `.../OpenCodeServer/Client/{OpenCodeClient,TranscriptOperations}.swift` | request-shape tests in `TranscriptDecodingTests` |
 | Grouping, stable entry identity, window/entry-start rules, newest/older reconciliation, live delta and tool projection | `OpenCodeKit/Sources/OpenCodeTranscript/{TranscriptGrouping,TranscriptProjection}.swift` | `TranscriptGroupingTests` — 17 cases, `MarkdownTests` — 9, including 600-token tail and 1,000-row identity |
 | Native Markdown blocks and inline text; revision-fenced publication; bounded parse cache; no remote image fetch | `.../OpenCodeTranscript/Markdown.swift` | `MarkdownTests` — 9 cases including controlled out-of-order parse completion, replacement and disappearance; cache bound/clear tested |
-| Per-session transcript state, earlier-cursor chain, page/session/generation fencing, disclosure and scroll view state | `.../OpenCodeSession/TranscriptState.swift` | `TranscriptFeatureTests` — 17 cases |
-| The transcript joins the existing authoritative refresh (one request identity, same 200 ms settlement window); live content applies in order; invalidations race a read safely; >512 raced batches mark the projection incomplete and rehydrate | `.../OpenCodeSession/{SessionFeature,SessionModels}.swift` | read-plan, race, invalidation, reconnect, settlement and overflow tests |
+| Per-session transcript state, earlier-cursor chain, page/session/generation fencing, disclosure and scroll view state | `.../OpenCodeSession/TranscriptState.swift` | `TranscriptFeatureTests` — 19 cases |
+| The transcript joins the existing authoritative refresh; live content applies in order; invalidations race a read safely; >512 raced batches mark a persistent recovery that keeps settlement delay, survives failure and clears only on coherent success | `.../OpenCodeSession/{SessionFeature,SessionModels}.swift` | read-plan, race, invalidation, reconnect, settlement and bounded-recovery tests (`overflowSettlementDelaysRecovery`, `failedRecoveryStaysRequired`, `repeatedOverflowDuringRecovery`) |
 | Transcript surface: user bubbles, quotes, files, assistant Markdown, tool groups, compaction, notices, run errors/retries, run-end Copy, disclosure, growth-safe follow, Jump to Latest, earlier-history states | `ios/OpenCode/Transcript/{TranscriptView,TranscriptRows,MarkdownViews}.swift`; `ios/OpenCode/Session/SessionView.swift` | `TranscriptUITests` — 9 journeys |
 | Link routing boundary and explicit link opener | `OpenCodeCore/Dependencies/OpenURLClient.swift`, transcript link confirmation | reducer + UI link-confirmation tests |
 | Memory-warning clearing for the parse cache | `ios/OpenCode/App/OpenCodeApp.swift` | cache clear exercised at the actor; the notification is a thin hand-off |
@@ -256,14 +258,14 @@ paths are synthetic. The October iOS screenshots remain historical evidence only
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | **419 tests pass**: 185 server, 67 core, 61 app, 38 drawer, 42 session, 26 transcript; live and loopback opt-outs unchanged |
+| `swift test --package-path ios/OpenCodeKit` | **421 tests pass**: 185 server, 67 core, 61 app, 38 drawer, 44 session, 26 transcript; live and loopback opt-outs unchanged |
 | `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **46 UI tests pass**; package suites pass (exit 0) |
 | `xcodebuild ... -only-testing:OpenCodeUITests/TranscriptUITests` | 9 journeys: Markdown/tools, disclosure restoration across a subagent page, native text selection, copy, link confirmation, growth-safe following, Jump to Latest, Load Earlier anchor, Dynamic Type + dark + Reduce Motion launch flag |
 | `xcodebuild ... -only-testing:OpenCodeUITests/TranscriptScrollTraceUITests` | 1,000-row scroll and 600-delta streaming traces; results in the performance table above |
 | `xcodebuild ... -only-testing:OpenCodeUITests/HomeUITests` | 8 tests; the drawer journey now asserts a real transcript row instead of the P7 placeholder |
 | Screenshots | `docs/ios-migration/screens/p8-{transcript,transcript-dark,transcript-tools,transcript-tools-dark,transcript-jump,transcript-jump-dark}.png` |
 
-The 419 package tests are the sum of the six target runs the package runner printed; the gate log is in
+The 421 package tests are the sum of the six target runs the package runner printed; the gate log is in
 `ios/.build-results/`.
 
 ## Not verified

@@ -154,9 +154,11 @@ P8 adopts the pressure policy (D-61) as **coalescing, bounded replay and explici
 `EventBatcher` merges adjacent deltas for one part per 75 ms flush, the downstream buffer stays bounded
 (overflow reconnects and rehydrates), and Markdown parses only visible rows off the main actor into a
 bounded cache (256 entries / 4 MiB) cleared on a memory warning. Events racing an authoritative read are
-retained up to 512 separate batches; crossing that bound discards the partial replay, marks
-`racedEventsIncomplete` and requires one follow-up authoritative read. The projection is never published as
-complete after that signal, and durable REST remains the source of truth. `session.message.content.updated`
+retained up to 512 separate batches; crossing that bound discards the partial replay and stores persistent
+`SessionRecovery`. Its authoritative read preserves a durable boundary's 200 ms settlement delay, survives
+failed attempts and clears only after a coherent transcript read. Recovery is bounded to one immediate
+attempt plus one delayed retry, then a manual retry/reconnect through the same coordinator. The projection is
+never published as complete after that signal, and durable REST remains the source of truth. `session.message.content.updated`
 and the other invalidating events trigger that same read rather than being ignored.
 
 ## Compatible server requirements

@@ -43,6 +43,9 @@ public enum RefreshReason: Equatable, Sendable {
   case settlement(messageID: String)
   case watchdog
   case snapshot
+  /// Rehydrate a projection whose raced-event replay overflowed. A durable message keeps the
+  /// audited settlement delay; otherwise the read is immediate.
+  case recovery(messageID: String?)
 
   public var label: String {
     switch self {
@@ -54,22 +57,51 @@ public enum RefreshReason: Equatable, Sendable {
     case .settlement: "settlement"
     case .watchdog: "watchdog"
     case .snapshot: "snapshot"
+    case .recovery: "recovery"
     }
   }
 
   public var messageID: String? {
-    if case .settlement(let id) = self { return id }
-    return nil
+    switch self {
+    case .settlement(let id): return id
+    case .recovery(let id): return id
+    default: return nil
+    }
   }
 
   /// A content or run invalidation may have raced a read that started earlier, so it earns one
   /// follow-up. Lifecycle duplicates coalesce into the read already in flight.
   public var requiresFollowup: Bool {
     switch self {
-    case .invalidation, .settlement, .runState: true
+    case .invalidation, .settlement, .runState, .recovery: true
     default: false
     }
   }
+}
+
+/// A projection that is no longer complete because raced-event replay overflowed. It survives a
+/// failed recovery read and clears only after a coherent authoritative read.
+public struct SessionRecovery: Equatable, Sendable {
+  public static let maximumAttempts = 2
+
+  /// The session whose projection overflowed.
+  public var sessionID: String
+  /// The durable boundary seen during overflow; its recovery read waits the settlement window.
+  public var settlementMessageID: String?
+  /// Recovery reads started. A failed read schedules at most one delayed retry.
+  public var attempts: Int
+
+  public init(
+    sessionID: String,
+    settlementMessageID: String? = nil,
+    attempts: Int = 0
+  ) {
+    self.sessionID = sessionID
+    self.settlementMessageID = settlementMessageID
+    self.attempts = attempts
+  }
+
+  public var canRetryAutomatically: Bool { attempts < Self.maximumAttempts }
 }
 
 /// The authoritative read in flight. Its id rejects the response of any read abandoned before it.
@@ -83,19 +115,23 @@ public struct SessionRefresh: Equatable, Sendable {
   /// Too many events arrived to replay them safely. The buffer is discarded and a follow-up
   /// authoritative read is required; the projection is never presented as complete.
   public var racedEventsIncomplete: Bool
+  /// A durable boundary observed during overflow, merged into `State.recovery` at finish.
+  public var recoverySettlementMessageID: String?
 
   public init(
     id: Int,
     reason: RefreshReason,
     followup: RefreshReason? = nil,
     racedEvents: [ServerEvent] = [],
-    racedEventsIncomplete: Bool = false
+    racedEventsIncomplete: Bool = false,
+    recoverySettlementMessageID: String? = nil
   ) {
     self.id = id
     self.reason = reason
     self.followup = followup
     self.racedEvents = racedEvents
     self.racedEventsIncomplete = racedEventsIncomplete
+    self.recoverySettlementMessageID = recoverySettlementMessageID
   }
 }
 

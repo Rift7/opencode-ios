@@ -814,11 +814,15 @@ design, and its raced-event replay is explicit about its bound.
   evicts least-recently used entries, and clears on a memory warning.
 - Events that race one authoritative read are retained up to 512 separate batches and replayed in order.
   Crossing that bound **discards the partial replay** and sets `racedEventsIncomplete`; the view never
-  receives that buffer as a complete projection. The refresh coordinator then takes one follow-up
-  authoritative read, which is the durable source of truth. This is recovery, not a silent truncation or a
-  larger buffer.
-- Durable boundaries and invalidations still set the follow-up reason under pressure; `.settlement` and
-  `.invalidation` both read through the same coordinator.
+  receives that buffer as a complete projection.
+- The requirement moves into persistent `SessionRecovery` state. It survives a failed read and carries the
+  durable boundary seen during overflow, so the actual recovery read uses
+  `RefreshReason.recovery(messageID:)` and waits the audited 200 ms. A recovery is complete only when the
+  authoritative transcript read succeeds and no new overflow occurred; then the requirement clears.
+- Recovery is bounded: one immediate attempt after the overflowing read, then at most one delayed automatic
+  retry (two recovery reads total). After that the app keeps the requirement and exposes the existing
+  refresh failure; a manual retry, reconnect or later event uses the same coordinator and can still recover.
+  A failed attempt never marks the projection synchronized.
 - Item and stream buffers stay bounded by the P4 transport/frame limits and the 20,000-byte tool-text bound.
   The transcript keeps loaded pages until the person leaves the session; earlier pages are only loaded on
   request, so loading is bounded by user action rather than an undocumented truncation.

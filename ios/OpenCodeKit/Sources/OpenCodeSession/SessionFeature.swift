@@ -31,6 +31,8 @@ public struct SessionFeature: Sendable {
     public var inspectedFile: TranscriptFile?
 
     public var refresh: SessionRefresh?
+    /// Set when a raced-event overflow made the projection incomplete. Survives failed reads.
+    public var recovery: SessionRecovery?
     var nextRefreshID: Int
     var nextPageID: Int
     var selectionByPage: [Int: String?]
@@ -63,6 +65,7 @@ public struct SessionFeature: Sendable {
       self.pendingLink = nil
       self.inspectedFile = nil
       self.refresh = nil
+      self.recovery = nil
       self.nextRefreshID = 0
       self.nextPageID = 1
       self.selectionByPage = [0: nil]
@@ -92,6 +95,7 @@ public struct SessionFeature: Sendable {
         && lhs.transcripts == rhs.transcripts
         && lhs.pendingLink == rhs.pendingLink
         && lhs.inspectedFile == rhs.inspectedFile
+        && lhs.recovery == rhs.recovery
     }
 
     // MARK: Derived
@@ -204,6 +208,7 @@ public struct SessionFeature: Sendable {
     case jobCancelFinished(jobID: String, error: OpenCodeClientError?)
     case backgroundProblemDismissed
 
+    case recoveryRetry
     case transcriptEarlierTapped
     case transcriptEarlierFinished(
       sessionID: String,
@@ -244,6 +249,7 @@ public struct SessionFeature: Sendable {
     case shellEarlier(String)
     case shellStop(String)
     case job(String)
+    case recoveryRetry
     case transcriptEarlier
     case notice
   }
@@ -281,6 +287,10 @@ public struct SessionFeature: Sendable {
       case .retryTapped:
         return requestRefresh(.open, state: &state)
 
+      case .recoveryRetry:
+        guard state.recovery?.sessionID == state.activeSessionID else { return .none }
+        return requestRefresh(.recovery(messageID: state.recovery?.settlementMessageID), state: &state)
+
       case .connectionChanged(let isConnected):
         let wasLive = state.isLive
         state.isLive = isConnected
@@ -308,6 +318,7 @@ public struct SessionFeature: Sendable {
           .cancel(id: CancelID.interruptSettle(state.run.generation)),
           .cancel(id: CancelID.runEndCheck(state.run.generation)),
           .cancel(id: CancelID.transcriptEarlier),
+          .cancel(id: CancelID.recoveryRetry),
         ]
         if let sessionID = state.activeSessionID, var transcript = state.transcripts[sessionID],
           case .loading(let cursor, let reached) = transcript.earlier
@@ -868,11 +879,20 @@ public struct SessionSnapshot: Equatable, Sendable {
 extension SessionFeature {
   // MARK: Refresh
 
-  private func requestRefresh(_ reason: RefreshReason, state: inout State) -> Effect<Action> {
+  private func requestRefresh(_ requestedReason: RefreshReason, state: inout State) -> Effect<Action> {
     guard state.isLive, !state.isPinned else { return .none }
     guard let sessionID = state.activeSessionID ?? Optional(state.selection.sessionID) else {
       return .none
     }
+    if var recovery = state.recovery, recovery.sessionID == sessionID,
+      let messageID = requestedReason.messageID
+    {
+      recovery.settlementMessageID = messageID
+      state.recovery = recovery
+    }
+    let reason: RefreshReason = state.recovery?.sessionID == sessionID
+      ? .recovery(messageID: state.recovery?.settlementMessageID)
+      : requestedReason
 
     if var inFlight = state.refresh {
       if inFlight.followup == .runState { return .none }
@@ -904,6 +924,10 @@ extension SessionFeature {
     state.nextRefreshID = requestID
     if state.transcripts[sessionID] == nil {
       state.transcripts[sessionID] = TranscriptState(sessionID: sessionID)
+    }
+    if case .recovery = reason, var recovery = state.recovery {
+      recovery.attempts += 1
+      state.recovery = recovery
     }
     state.refresh = SessionRefresh(id: requestID, reason: reason)
     if state.root == nil { state.isLoading = true }
@@ -1010,6 +1034,8 @@ extension SessionFeature {
       state.refresh = nil
       return .none
     }
+    let wasRecovery: Bool
+    if case .recovery = inFlight.reason { wasRecovery = true } else { wasRecovery = false }
 
     switch result {
     case .failure(let error):
@@ -1033,26 +1059,52 @@ extension SessionFeature {
         state.notice = .couldNotRefresh(.from(error, isOffline: !state.isLive))
       }
       if inFlight.racedEventsIncomplete {
-        AppLog(category: .app).event(
-          .sessionRefreshIncomplete,
-          [LogField("rehydrate", .flag(true))]
-        )
-        return .send(.refreshRequested(.invalidation))
+        mergeRecovery(from: inFlight, for: sessionID, state: &state)
       }
-      return .none
+      guard state.recovery?.sessionID == sessionID else { return .none }
+      AppLog(category: .app).event(
+        .sessionRefreshIncomplete,
+        [LogField("rehydrate", .flag(true))]
+      )
+      return scheduleRecovery(for: sessionID, wasRecovery: wasRecovery, state: &state)
+
     case .success(let snapshot):
       state.refresh = nil
       state.isLoading = false
       state.loadProblem = nil
       state.notice = nil
       apply(snapshot: snapshot, for: sessionID, state: &state)
+      let transcriptFailed: Bool
+      if case .failure = snapshot.transcript { transcriptFailed = true } else { transcriptFailed = false }
+
       if inFlight.racedEventsIncomplete {
+        mergeRecovery(from: inFlight, for: sessionID, state: &state)
         AppLog(category: .app).event(
           .sessionRefreshIncomplete,
           [LogField("rehydrate", .flag(true))]
         )
-      } else {
-        apply(raced: inFlight.racedEvents, state: &state)
+        return scheduleRecovery(for: sessionID, wasRecovery: wasRecovery, state: &state)
+      }
+
+      if wasRecovery, transcriptFailed {
+        // The recovery attempt started but the transcript did not read: keep the requirement.
+        AppLog(category: .app).event(
+          .sessionRefreshIncomplete,
+          [LogField("rehydrate", .flag(true))]
+        )
+        return scheduleRecovery(for: sessionID, wasRecovery: true, state: &state)
+      }
+
+      apply(raced: inFlight.racedEvents, state: &state)
+      var effects: [Effect<Action>] = []
+      if wasRecovery {
+        let attempts = state.recovery?.attempts ?? 0
+        state.recovery = nil
+        effects.append(.cancel(id: CancelID.recoveryRetry))
+        AppLog(category: .app).event(
+          .sessionRecovered,
+          [LogField("attempts", .count(attempts))]
+        )
       }
       AppLog(category: .app).event(
         .sessionRefreshed,
@@ -1063,9 +1115,7 @@ extension SessionFeature {
         ]
       )
       var followup = inFlight.followup
-      if inFlight.racedEventsIncomplete {
-        followup = .invalidation
-      } else if inFlight.racedEvents.contains(where: { event in
+      if inFlight.racedEvents.contains(where: { event in
         switch event {
         case .executionStarted, .executionEnded, .attentionChanged: true
         default: false
@@ -1073,8 +1123,51 @@ extension SessionFeature {
       }) {
         followup = followup == .runState ? .runState : (followup ?? .runState)
       }
-      return followup.map { .send(.refreshRequested($0)) } ?? .none
+      if let followup {
+        effects.append(.send(.refreshRequested(followup)))
+      }
+      return effects.isEmpty ? .none : .merge(effects)
     }
+  }
+
+  private func mergeRecovery(
+    from inFlight: SessionRefresh,
+    for sessionID: String,
+    state: inout State
+  ) {
+    var recovery: SessionRecovery
+    if let existing = state.recovery, existing.sessionID == sessionID {
+      recovery = existing
+    } else {
+      recovery = SessionRecovery(sessionID: sessionID)
+    }
+    if let settled = inFlight.recoverySettlementMessageID ?? inFlight.followup?.messageID {
+      recovery.settlementMessageID = settled
+    }
+    state.recovery = recovery
+  }
+
+  /// One immediate recovery after the overflowing read, then at most one delayed automatic retry.
+  /// A failed recovery leaves `state.recovery` set so a manual retry or reconnect can try again.
+  private func scheduleRecovery(
+    for sessionID: String,
+    wasRecovery: Bool,
+    state: inout State
+  ) -> Effect<Action> {
+    guard let recovery = state.recovery, recovery.sessionID == sessionID else { return .none }
+    if !wasRecovery {
+      return .send(.refreshRequested(.recovery(messageID: recovery.settlementMessageID)))
+    }
+    guard recovery.canRetryAutomatically else {
+      if state.notice == nil { state.notice = .couldNotRefresh(.unknown) }
+      return .none
+    }
+    let clock = clock
+    return .run { send in
+      do { try await clock.sleep(.seconds(1)) } catch { return }
+      await send(.recoveryRetry)
+    }
+    .cancellable(id: CancelID.recoveryRetry, cancelInFlight: true)
   }
 
   private func apply(snapshot: SessionSnapshot, for sessionID: String, state: inout State) {
@@ -1198,6 +1291,9 @@ extension SessionFeature {
       if inFlight.racedEvents.count >= 512 {
         inFlight.racedEventsIncomplete = true
         inFlight.racedEvents.removeAll(keepingCapacity: false)
+        if inFlight.recoverySettlementMessageID == nil {
+          inFlight.recoverySettlementMessageID = inFlight.followup?.messageID
+        }
       } else {
         inFlight.racedEvents.append(event)
       }
@@ -1213,6 +1309,9 @@ extension SessionFeature {
       inFlight.followup = inFlight.followup ?? .invalidation
     case .contentBatch(_, let events):
       if let durable = events.last(where: \.isDurableBoundary) {
+        if inFlight.racedEventsIncomplete {
+          inFlight.recoverySettlementMessageID = durable.messageID
+        }
         inFlight.followup = inFlight.followup ?? .settlement(messageID: durable.messageID)
       }
     default:
@@ -1387,7 +1486,7 @@ extension RefreshReason {
   /// change can affect.
   var readsFamily: Bool {
     switch self {
-    case .open, .resume, .reconnect, .watchdog, .snapshot: true
+    case .open, .resume, .reconnect, .watchdog, .snapshot, .recovery: true
     case .runState, .invalidation, .settlement: false
     }
   }
@@ -1440,7 +1539,8 @@ extension SessionFeature {
     }
     return .merge(
       .cancel(id: CancelID.refresh),
-      .cancel(id: CancelID.transcriptEarlier)
+      .cancel(id: CancelID.transcriptEarlier),
+      .cancel(id: CancelID.recoveryRetry)
     )
   }
 

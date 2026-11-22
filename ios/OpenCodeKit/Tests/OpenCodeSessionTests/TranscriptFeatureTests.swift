@@ -124,6 +124,21 @@ struct TranscriptFeatureTests {
     return await condition()
   }
 
+  private func waitUntilPumping(
+    _ store: TestStoreOf<SessionFeature>,
+    timeout: Duration = .seconds(3),
+    _ condition: @escaping () async -> Bool
+  ) async -> Bool {
+    let deadline = ContinuousClock.now + timeout
+    while ContinuousClock.now < deadline {
+      await store.skipReceivedActions(strict: false)
+      if await condition() { return true }
+      try? await Task.sleep(for: .milliseconds(10))
+    }
+    await store.skipReceivedActions(strict: false)
+    return await condition()
+  }
+
   nonisolated private func user(_ id: String) -> TranscriptItem {
     .userText(id: id, text: id, source: nil, quotes: [])
   }
@@ -645,11 +660,11 @@ struct TranscriptFeatureTests {
     }
     await store.send(.serverEvent(.messageInvalidated(sessionID: "root")))
     #expect(store.state.refresh?.racedEventsIncomplete == true)
-    #expect(store.state.refresh?.followup == .invalidation)
 
     await gate.open()
     await settle(store)
     #expect(await reads.count("reads") >= 2)
+    #expect(store.state.recovery == nil)
     #expect(store.state.activeTranscript?.items.map(\.id) == ["u1", "m-text-0", "m-tool-t1"])
     guard case .assistantMarkdown(_, let text, _)? =
       store.state.activeTranscript?.items.first(where: { $0.id == "m-text-0" })
@@ -672,10 +687,15 @@ struct TranscriptFeatureTests {
     })
   }
 
-  @Test("a durable boundary after raced overflow still schedules rehydration")
-  func racedOverflowKeepsDurableBoundary() async {
+  @Test("a durable boundary during overflow keeps its settlement delay")
+  func overflowSettlementDelaysRecovery() async {
     let gate = Gate()
+    let clock = ClockClient.gate()
     let reads = CallCounter()
+    let settled = TranscriptPage(
+      items: [.assistantMarkdown(id: "m-text-0", text: "settled", inProgress: false)]
+    )
+    let stale = TranscriptPage(items: [])
     let store = makeStore(
       state(),
       client: client(
@@ -685,27 +705,18 @@ struct TranscriptFeatureTests {
           await reads.increment("reads")
           if count == 0 {
             await gate.wait()
-            return TranscriptPage(items: [])
+            return stale
           }
-          return TranscriptPage(
-            items: [.assistantMarkdown(id: "m-text-0", text: "settled", inProgress: false)]
-          )
+          // The read must happen after the 200 ms settlement wait.
+          return clock.elapsed >= .milliseconds(200) ? settled : stale
         }
-      )
+      ),
+      clock: clock.client
     )
     await store.send(.task)
     #expect(await waitUntil { store.state.refresh != nil })
     #expect(await waitUntil { await reads.count("reads") == 1 })
-    for index in 0..<513 {
-      await store.send(
-        .serverEvent(
-          .contentBatch(
-            sessionID: "root",
-            events: [.textDelta(messageID: "m", ordinal: 0, delta: "\(index)", accumulatedText: nil)]
-          )
-        )
-      )
-    }
+    await sendTextBatches(store, count: 513, prefix: "overflow")
     await store.send(
       .serverEvent(
         .contentBatch(
@@ -716,16 +727,165 @@ struct TranscriptFeatureTests {
     )
     #expect(store.state.refresh?.racedEventsIncomplete == true)
     #expect(store.state.refresh?.followup == .settlement(messageID: "m"))
+
     await gate.open()
+    #expect(
+      await waitUntilPumping(store) {
+        clock.pendingCount == 1 && store.state.recovery?.settlementMessageID == "m"
+      }
+    )
+    #expect(await reads.count("reads") == 1)
+    #expect(clock.requestedWaits.contains(.milliseconds(200)))
+
+    clock.releaseNext()
+    #expect(await waitUntilPumping(store) { await reads.count("reads") >= 2 })
     await settle(store)
-    #expect(await reads.count("reads") >= 2)
+    #expect(store.state.recovery == nil)
     guard case .assistantMarkdown(_, let text, _)? =
       store.state.activeTranscript?.items.first(where: { $0.id == "m-text-0" })
     else {
-      Issue.record("expected settled row")
+      Issue.record("expected settled row after the delay")
       return
     }
     #expect(text == "settled")
+  }
+
+  @Test("a failed recovery read stays required until a later retry succeeds")
+  func failedRecoveryStaysRequired() async {
+    let gate = Gate()
+    let clock = ClockClient.gate()
+    let reads = CallCounter()
+    let good = TranscriptPage(
+      items: [.assistantMarkdown(id: "m-text-0", text: "recovered", inProgress: false)]
+    )
+    let store = makeStore(
+      state(),
+      client: client(
+        getSession: { _, _ in self.root() },
+        transcript: { _, _, _ in
+          let count = await reads.count("reads")
+          await reads.increment("reads")
+          switch count {
+          case 0:
+            await gate.wait()
+            return TranscriptPage(items: [])
+          case 1:
+            throw OpenCodeClientError(.transport(.timedOut))
+          default:
+            return good
+          }
+        }
+      ),
+      clock: clock.client
+    )
+    await store.send(.task)
+    #expect(await waitUntil { store.state.refresh != nil })
+    #expect(await waitUntil { await reads.count("reads") == 1 })
+    await sendTextBatches(store, count: 513, prefix: "failed")
+    await gate.open()
+
+    let failedRecoveryReady = await waitUntilPumping(store) {
+      store.state.refresh == nil && store.state.recovery != nil && clock.pendingCount == 1
+    }
+    if !failedRecoveryReady {
+      Issue.record(
+        "recovery state: refresh=\(String(describing: store.state.refresh)) recovery=\(String(describing: store.state.recovery)) pending=\(clock.pendingCount) reads=\(await reads.count("reads"))"
+      )
+    }
+    #expect(failedRecoveryReady)
+    #expect(await reads.count("reads") == 2)
+    #expect(store.state.activeTranscript?.items.contains(where: { $0.id == "m-text-0" }) == false)
+
+    await store.send(.retryTapped)
+    #expect(await waitUntilPumping(store) { store.state.recovery == nil })
+    #expect(await reads.count("reads") == 3)
+    guard case .assistantMarkdown(_, let text, _)? =
+      store.state.activeTranscript?.items.first(where: { $0.id == "m-text-0" })
+    else {
+      Issue.record("expected recovered row")
+      return
+    }
+    #expect(text == "recovered")
+
+    clock.releaseNext()
+    await settle(store)
+    #expect(await reads.count("reads") == 3)
+    #expect(store.state.recovery == nil)
+  }
+
+  @Test("overflow during a recovery read remains bounded and then recovers")
+  func repeatedOverflowDuringRecovery() async {
+    let initialGate = Gate()
+    let recoveryGate = Gate()
+    let reads = CallCounter()
+    let good = TranscriptPage(
+      items: [.assistantMarkdown(id: "m-text-0", text: "recovered", inProgress: false)]
+    )
+    let store = makeStore(
+      state(),
+      client: client(
+        getSession: { _, _ in self.root() },
+        transcript: { _, _, _ in
+          let count = await reads.count("reads")
+          await reads.increment("reads")
+          switch count {
+          case 0:
+            await initialGate.wait()
+            return TranscriptPage(items: [])
+          case 1:
+            await recoveryGate.wait()
+            return TranscriptPage(items: [])
+          default:
+            return good
+          }
+        }
+      )
+    )
+    await store.send(.task)
+    #expect(await waitUntil { store.state.refresh != nil })
+    #expect(await waitUntil { await reads.count("reads") == 1 })
+    await sendTextBatches(store, count: 513, prefix: "first")
+    await initialGate.open()
+    #expect(await waitUntilPumping(store) { await reads.count("reads") == 2 })
+
+    await sendTextBatches(store, count: 600, prefix: "recovery")
+    #expect(store.state.refresh?.racedEventsIncomplete == true)
+    await recoveryGate.open()
+    await settle(store)
+
+    #expect(await reads.count("reads") == 3)
+    #expect(store.state.recovery == nil)
+    guard case .assistantMarkdown(_, let text, _)? =
+      store.state.activeTranscript?.items.first(where: { $0.id == "m-text-0" })
+    else {
+      Issue.record("expected recovered row")
+      return
+    }
+    #expect(text == "recovered")
+  }
+
+  private func sendTextBatches(
+    _ store: TestStoreOf<SessionFeature>,
+    count: Int,
+    prefix: String
+  ) async {
+    for index in 0..<count {
+      await store.send(
+        .serverEvent(
+          .contentBatch(
+            sessionID: "root",
+            events: [
+              .textDelta(
+                messageID: "m",
+                ordinal: 0,
+                delta: "\(prefix)\(index) ",
+                accumulatedText: nil
+              )
+            ]
+          )
+        )
+      )
+    }
   }
 
   @Test("six hundred streamed tokens retain their tail through settlement")
