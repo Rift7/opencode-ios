@@ -129,10 +129,10 @@ final class TranscriptUITests: XCTestCase {
     let app = launch(mode: "connected-transcript-long")
     openAlpha(app)
 
-    for _ in 0..<6 {
-      app.swipeDown()
-    }
     let jump = app.buttons["transcript-jump"]
+    for _ in 0..<16 where !jump.exists {
+      app.swipeDown(velocity: .fast)
+    }
     XCTAssertTrue(jump.waitForExistence(timeout: 10))
     jump.tap()
     let gone = XCTNSPredicateExpectation(
