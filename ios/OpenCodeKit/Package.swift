@@ -31,6 +31,7 @@ let package = Package(
       name: "OpenCodeApp",
       dependencies: [
         "OpenCodeCore",
+        "OpenCodeServer",
         .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
       ]
     ),
@@ -40,7 +41,7 @@ let package = Package(
     ),
     .testTarget(
       name: "OpenCodeAppTests",
-      dependencies: ["OpenCodeApp", "OpenCodeCore"]
+      dependencies: ["OpenCodeApp", "OpenCodeCore", "OpenCodeServer", "OpenCodeTestSupport"]
     ),
     .testTarget(
       name: "OpenCodeCoreTests",

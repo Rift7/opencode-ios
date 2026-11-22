@@ -1,32 +1,149 @@
 import Foundation
+import OpenCodeCore
+import OpenCodeServer
 
-/// Launch-time state, overridable from the command line so UI tests can pin a phase. The override
-/// is only honoured when the process was started by a test runner.
+/// Launch-time state, overridable from the command line so UI tests can pin a screen. Overrides are
+/// honoured only when the process was started by a test runner.
 public struct AppLaunchConfiguration: Sendable {
-  public enum UITestPhase: String, Sendable {
+  public enum UITestScenario: String, Sendable, CaseIterable {
     case disconnected
+    case connecting
     case loading
-    case failed
     case connected
+    case reconnecting
+    case failedAuth = "failed-auth"
+    case failedIncompatible = "failed-incompatible"
+    case failedOffline = "failed-offline"
+    case failedUnreachable = "failed-unreachable"
+    case storageUnavailable = "storage-unavailable"
+    case corruptSaved = "corrupt-saved"
+    case pairingConfirm = "pairing-confirm"
   }
 
-  public let uiTestPhase: UITestPhase?
+  public let uiTestScenario: UITestScenario?
+  public let uiTestOpenURL: String?
+  public let uiTestClipboard: String?
 
-  public init(uiTestPhase: UITestPhase? = nil) {
-    self.uiTestPhase = uiTestPhase
+  public init(
+    uiTestScenario: UITestScenario? = nil,
+    uiTestOpenURL: String? = nil,
+    uiTestClipboard: String? = nil
+  ) {
+    self.uiTestScenario = uiTestScenario
+    self.uiTestOpenURL = uiTestOpenURL
+    self.uiTestClipboard = uiTestClipboard
   }
 
   public var initialState: AppFeature.State {
-    switch uiTestPhase {
-    case .disconnected, nil:
-      AppFeature.State(phase: .disconnected)
+    guard let uiTestScenario else { return AppFeature.State() }
+    switch uiTestScenario {
+    case .disconnected:
+      return AppFeature.State(isPinnedForUITest: true)
+    case .connecting:
+      return AppFeature.State(
+        restore: .ready,
+        connection: pinnedConnection(phase: .connecting),
+        isPinnedForUITest: true
+      )
     case .loading:
-      AppFeature.State(phase: .loading)
-    case .failed:
-      AppFeature.State(phase: .failed(.unreachable))
+      return AppFeature.State(
+        restore: .ready,
+        connection: pinnedConnection(phase: .loading),
+        isPinnedForUITest: true
+      )
     case .connected:
-      AppFeature.State(phase: .connected)
+      return AppFeature.State(
+        restore: .ready,
+        connection: pinnedConnection(phase: .connected),
+        savedServer: pinnedServer,
+        savedServers: [pinnedServer],
+        isPinnedForUITest: true
+      )
+    case .reconnecting:
+      return AppFeature.State(
+        restore: .ready,
+        connection: pinnedConnection(phase: .reconnecting),
+        savedServer: pinnedServer,
+        savedServers: [pinnedServer],
+        isPinnedForUITest: true
+      )
+    case .failedAuth:
+      return failure(.credentialsRejected)
+    case .failedIncompatible:
+      return failure(.incompatibleAPI(feature: "server info"))
+    case .failedOffline:
+      return failure(.offline)
+    case .failedUnreachable:
+      return failure(.unreachable)
+    case .storageUnavailable:
+      return AppFeature.State(restore: .storageUnavailable(.unavailable), isPinnedForUITest: true)
+    case .corruptSaved:
+      return AppFeature.State(restore: .corruptSavedServers, isPinnedForUITest: true)
+    case .pairingConfirm:
+      let link = PairingLink(
+        origin: "https://studio.invalid",
+        code: "Pair-123_xyz",
+        alternateOrigins: ["https://studio.ts.net"]
+      )
+      return AppFeature.State(
+        restore: .ready,
+        pendingPairing: PairingConfirmation(
+          id: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+          link: link,
+          replacedServerNames: []
+        ),
+        isPinnedForUITest: true
+      )
     }
+  }
+
+  private var pinnedServer: OpenCodeServer {
+    OpenCodeServer(
+      url: "https://studio.invalid",
+      username: "opencode",
+      password: "",
+      name: "Studio"
+    )
+  }
+
+  private var pinnedInfo: ServerInfo {
+    ServerInfo(version: "0.0.0-fixture", pid: 1)
+  }
+
+  private var pinnedProjects: [ServerProject] {
+    [
+      ServerProject(id: "p1", name: "OpenCode", directory: "/work/opencode"),
+      ServerProject(id: "p2", name: "Design", directory: "/work/design"),
+    ]
+  }
+
+  private func pinnedConnection(phase: ConnectionFeature.State.Phase) -> ConnectionFeature.State {
+    ConnectionFeature.State(
+      id: 1,
+      server: pinnedServer,
+      phase: phase,
+      info: pinnedInfo,
+      projects: pinnedProjects,
+      isPinned: true
+    )
+  }
+
+  private func failure(_ failure: ConnectionFailure) -> AppFeature.State {
+    AppFeature.State(
+      restore: .ready,
+      connection: ConnectionFeature.State(
+        id: 1,
+        server: pinnedServer,
+        phase: .failed,
+        info: nil,
+        projects: pinnedProjects,
+        failure: failure,
+        isPinned: true
+      ),
+      savedServer: pinnedServer,
+      savedServers: [pinnedServer],
+      isPinnedForUITest: true
+    )
   }
 
   public static var current: AppLaunchConfiguration {
@@ -35,8 +152,13 @@ public struct AppLaunchConfiguration: Sendable {
       return AppLaunchConfiguration()
     }
 
-    let value = process.environment["OPENCODE_UI_TEST_PHASE"] ?? argumentValue(after: "-uiTestPhase")
-    return AppLaunchConfiguration(uiTestPhase: value.flatMap(UITestPhase.init(rawValue:)))
+    let scenario = process.environment["OPENCODE_UI_TEST_SCENARIO"]
+      ?? argumentValue(after: "-uiTestScenario")
+    return AppLaunchConfiguration(
+      uiTestScenario: scenario.flatMap(UITestScenario.init(rawValue:)),
+      uiTestOpenURL: process.environment["OPENCODE_UI_TEST_OPEN_URL"] ?? argumentValue(after: "-uiTestOpenURL"),
+      uiTestClipboard: process.environment["OPENCODE_UI_TEST_CLIPBOARD"] ?? argumentValue(after: "-uiTestClipboard")
+    )
   }
 
   private static func argumentValue(after flag: String) -> String? {

@@ -80,6 +80,14 @@ public struct OpenCodeServer: Sendable, Equatable, Codable {
     return ([url] + alternateURLs).filter { seen.insert($0).inserted }
   }
 
+  /// The addresses that get the head start in a race: the ones the pairing code listed, when they
+  /// are still candidates; otherwise just the address in use.
+  public var firstAttemptURLs: [String] {
+    let candidates = Set(candidateURLs)
+    let preferred = preferredURLs.filter { candidates.contains($0) }
+    return preferred.isEmpty ? [url] : preferred
+  }
+
   /// The host and port in use, without a scheme.
   public var host: String {
     guard let origin = ServerOrigin(address: url) else { return url }

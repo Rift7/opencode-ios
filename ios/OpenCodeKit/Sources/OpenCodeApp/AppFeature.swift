@@ -1,67 +1,1085 @@
 import ComposableArchitecture
 import Foundation
 import OpenCodeCore
+import OpenCodeServer
 
-/// Where the app is in its launch sequence. Only `disconnected`, `loading` and `failed` are
-/// reachable in this scaffold; `connected` is wired in the networking phase.
-public enum LaunchPhase: Equatable, Sendable {
-  case disconnected
-  case loading
-  case failed(ProbeFailure)
-  case connected
+// MARK: - Shared app-shell values
+
+/// Why a connection could not be established or maintained. The value carries facts only; the view
+/// chooses localized copy.
+public enum ConnectionFailure: Equatable, Sendable {
+  case invalidAddress
+  case unreachable
+  case offline
+  case timedOut
+  case credentialsRejected
+  case incompatibleAPI(feature: String)
+  case malformed(feature: String)
+  case serverStatus(Int)
+  case pairingExpired
+  case pairingUnsupported
+  case streamEnded
+  case streamOverflow
+  case unsupported
+  case unknown
+
+  public static func from(_ error: OpenCodeClientError, isOffline: Bool = false) -> ConnectionFailure {
+    switch error.failure {
+    case .status(401):
+      return .credentialsRejected
+    case .status(let status):
+      return .serverStatus(status)
+    case .transport(let transport):
+      switch transport {
+      case .timedOut:
+        return .timedOut
+      case .notSent, .interrupted:
+        return isOffline ? .offline : .unreachable
+      }
+    case .invalidURL:
+      return .invalidAddress
+    case .unsupported:
+      return .unsupported
+    case .undecodable(let feature):
+      return .malformed(feature: feature)
+    case .incompatibleAPI(let feature):
+      return .incompatibleAPI(feature: feature)
+    case .unreachable:
+      return isOffline ? .offline : .unreachable
+    case .streamEnded:
+      return .streamEnded
+    case .streamServerFailure:
+      return .streamEnded
+    case .streamOversizedFrame:
+      return .streamEnded
+    case .streamOverflow:
+      return .streamOverflow
+    case .pairingExpired:
+      return .pairingExpired
+    case .pairingUnsupported:
+      return .pairingUnsupported
+    }
+  }
 }
 
-public enum ProbeOutcome: Equatable, Sendable {
-  case reachable
-  case failed(ProbeFailure)
+/// Why pairing text did not become a connection. Parsing stays free of transport.
+public enum PairingProblem: Equatable, Sendable {
+  case emptyClipboard
+  case notPairingText
+  case invalidCode
+  case unusableAddress(address: String, reason: PairingAddressProblem)
+  case loopback
+  case expired
+  case unsupported
+  case connection(ConnectionFailure)
+
+  public static func from(_ error: OpenCodeClientError, isOffline: Bool = false) -> PairingProblem {
+    switch error.failure {
+    case .pairingExpired:
+      return .expired
+    case .pairingUnsupported:
+      return .unsupported
+    default:
+      return .connection(.from(error, isOffline: isOffline))
+    }
+  }
 }
 
+/// A pairing link waiting for explicit confirmation. An opened link must never spend its one-time
+/// code before the person taps Pair.
+public struct PairingConfirmation: Identifiable, Equatable, Sendable {
+  public let id: UUID
+  public let link: PairingLink
+  public let replacedServerNames: [String]
+
+  public init(id: UUID, link: PairingLink, replacedServerNames: [String] = []) {
+    self.id = id
+    self.link = link
+    self.replacedServerNames = replacedServerNames
+  }
+
+  /// Distinct display hosts in the order redemption will try them.
+  public var hosts: [String] {
+    var seen = Set<String>()
+    return link.redeemOrigins.compactMap { origin in
+      guard let host = ServerOrigin(address: origin)?.host else { return nil }
+      let key = host.lowercased()
+      guard seen.insert(key).inserted else { return nil }
+      return host
+    }
+  }
+}
+
+public struct PairingAttempt: Equatable, Sendable {
+  public let id: Int
+  public let link: PairingLink
+
+  public init(id: Int, link: PairingLink) {
+    self.id = id
+    self.link = link
+  }
+}
+
+public enum ServerFormProblem: Equatable, Sendable {
+  case emptyAddress
+  case invalidAddress(ServerOrigin.Problem)
+}
+
+/// The manual-entry form. Address validation runs on Connect; other fields only trim on connect.
+public struct ServerForm: Equatable, Sendable {
+  public var name: String
+  public var address: String
+  public var username: String
+  public var password: String
+  public var isEditingSaved: Bool
+  public var problem: ServerFormProblem?
+
+  public init(
+    name: String = "",
+    address: String = "",
+    username: String = "opencode",
+    password: String = "",
+    isEditingSaved: Bool = false,
+    problem: ServerFormProblem? = nil
+  ) {
+    self.name = name
+    self.address = address
+    self.username = username
+    self.password = password
+    self.isEditingSaved = isEditingSaved
+    self.problem = problem
+  }
+
+  public var server: OpenCodeServer? {
+    let origin: ServerOrigin
+    switch ServerOrigin.parse(AppFeature.withDefaultScheme(address.trimmingCharacters(in: .whitespacesAndNewlines))) {
+    case .success(let value): origin = value
+    case .failure: return nil
+    }
+    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
+    return OpenCodeServer(
+      url: origin.address,
+      username: trimmedUser.isEmpty ? "opencode" : trimmedUser,
+      password: password,
+      name: trimmedName.isEmpty ? nil : trimmedName
+    )
+  }
+}
+
+public enum AppNotice: Equatable, Sendable {
+  case couldNotSaveServer(StorageFailure)
+  case couldNotReadSavedServers
+  case couldNotReadCache
+}
+
+public enum AppRestore: Equatable, Sendable {
+  case idle
+  case ready
+  case storageUnavailable(StorageFailure)
+  case corruptSavedServers
+}
+
+/// A read of the launch keys. Missing, corrupt and unavailable are separate answers; only an
+/// explicit destructive action may remove saved credentials.
+public enum AppRestoreResult: Equatable, Sendable {
+  case missing
+  case restored(
+    server: OpenCodeServer,
+    servers: [OpenCodeServer],
+    cache: CachedServerSummary?,
+    notice: AppNotice?
+  )
+  case corrupt
+  case storageUnavailable(StorageFailure)
+
+  public static func read(_ store: SharedStore) -> AppRestoreResult {
+    let saved = store.read(ServerSharedKeys.savedServer)
+    let list = store.read(ServerSharedKeys.savedServers)
+    let cache = store.read(ServerSharedKeys.cachedSummaries)
+
+    if case .failure(let failure) = saved { return .storageUnavailable(failure) }
+    if case .failure(let failure) = list { return .storageUnavailable(failure) }
+
+    let savedServer: OpenCodeServer? = {
+      if case .value(let value) = saved { return value }
+      return nil
+    }()
+    let savedServers: [OpenCodeServer] = {
+      if case .value(let value) = list { return value }
+      return []
+    }()
+
+    let server = savedServer ?? savedServers.first
+    guard let server else {
+      if case .undecodable = saved { return .corrupt }
+      if case .undecodable = list { return .corrupt }
+      return .missing
+    }
+
+    var notice: AppNotice?
+    if case .undecodable = list { notice = .couldNotReadSavedServers }
+    if case .undecodable = saved { notice = .couldNotReadSavedServers }
+
+    var summary: CachedServerSummary?
+    switch cache {
+    case .value(let summaries):
+      summary = summaries[server.persistenceID]
+    case .undecodable:
+      notice = notice ?? .couldNotReadCache
+    case .failure:
+      notice = notice ?? .couldNotReadCache
+    case .missing:
+      break
+    }
+
+    return .restored(server: server, servers: savedServers, cache: summary, notice: notice)
+  }
+}
+
+/// Saves a verified server at the top of the list without dropping local settings.
+public enum SavedServers {
+  public static func remembering(
+    _ server: OpenCodeServer,
+    among saved: [OpenCodeServer]
+  ) -> [OpenCodeServer] {
+    let entry = server.keepingLocalSettings(saved: saved)
+    return [entry] + saved.filter { !entry.supersedes($0) }
+  }
+}
+
+// MARK: - Connection child
+
+/// One connection attempt's lifetime. The parent identifies this state by `id`; replacing it or
+/// clearing it cancels the health race, REST refresh and event stream.
 @Reducer
-public struct AppFeature {
+public struct ConnectionFeature {
   @ObservableState
-  public struct State: Equatable, Sendable {
-    public var phase: LaunchPhase
+  public struct State: Equatable, Identifiable, Sendable {
+    public enum Phase: Equatable, Sendable {
+      case connecting
+      case loading
+      case connected
+      case reconnecting
+      case failed
+    }
 
-    public init(phase: LaunchPhase = .disconnected) {
+    public let id: Int
+    public var server: OpenCodeServer
+    public var phase: Phase
+    public var info: ServerInfo?
+    public var projects: [ServerProject]
+    public var failure: ConnectionFailure?
+    public var isOffline: Bool
+    public var isInForeground: Bool
+    /// A UI-test scenario is pinned: no effect may reach the network.
+    public var isPinned: Bool
+
+    var generation = 0
+    var streamStarted = false
+    var hasBeenConnected = false
+    var wasOffline = false
+
+    public init(
+      id: Int,
+      server: OpenCodeServer,
+      phase: Phase = .connecting,
+      info: ServerInfo? = nil,
+      projects: [ServerProject] = [],
+      failure: ConnectionFailure? = nil,
+      isOffline: Bool = false,
+      isInForeground: Bool = true,
+      isPinned: Bool = false
+    ) {
+      self.id = id
+      self.server = server
       self.phase = phase
+      self.info = info
+      self.projects = projects
+      self.failure = failure
+      self.isOffline = isOffline
+      self.isInForeground = isInForeground
+      self.isPinned = isPinned
+      self.generation = id * 1_000
+    }
+
+    /// Effect bookkeeping is deliberately outside equality: a test asserts the visible connection,
+    /// and the generation counters only guard stale callbacks.
+    public static func == (lhs: State, rhs: State) -> Bool {
+      lhs.id == rhs.id
+        && lhs.server == rhs.server
+        && lhs.phase == rhs.phase
+        && lhs.info == rhs.info
+        && lhs.projects == rhs.projects
+        && lhs.failure == rhs.failure
+        && lhs.isOffline == rhs.isOffline
+        && lhs.isInForeground == rhs.isInForeground
+        && lhs.isPinned == rhs.isPinned
     }
   }
 
   public enum Action: Equatable, Sendable {
-    case connectTapped
+    case task
     case retryTapped
-    case probeFinished(ProbeOutcome)
+    case scenePhaseChanged(isActive: Bool)
+    case networkPathChanged(NetworkPath)
+    case healthFinished(generation: Int, result: Result<ServerLinkProbe, OpenCodeClientError>)
+    case refreshFinished(generation: Int, result: Result<[ServerProject], OpenCodeClientError>)
+    case streamResynchronized(result: Result<[ServerProject], OpenCodeClientError>)
+    case streamPhase(EventStreamPhase)
+    case streamEvent(ServerEvent)
+    case delegate(Delegate)
   }
 
-  @Dependency(\.connectionProbe) private var probe
+  public enum Delegate: Equatable, Sendable {
+    case verified(OpenCodeServer, ServerInfo)
+    case projects(OpenCodeServer, [ServerProject], ServerInfo?)
+    case failed(ConnectionFailure)
+  }
+
+  enum CancelID: Hashable {
+    case health
+    case refresh
+    case stream
+  }
+
+  @Dependency(\.openCodeClient) private var client
+  @Dependency(\.clock) private var clock
 
   public init() {}
 
   public var body: some Reducer<State, Action> {
     Reduce { state, action in
       switch action {
-      case .connectTapped, .retryTapped:
-        guard state.phase != .loading else { return .none }
-        state.phase = .loading
-        let probe = probe
-        return .run { send in
-          let result = await probe.check()
-          switch result {
-          case .success:
-            await send(.probeFinished(.reachable))
-          case .failure(let failure):
-            await send(.probeFinished(.failed(failure)))
+      case .task:
+        guard !state.isPinned else { return .none }
+        return startConnecting(&state)
+
+      case .retryTapped:
+        guard !state.isPinned else { return .none }
+        return startConnecting(&state)
+
+      case .scenePhaseChanged(let isActive):
+        state.isInForeground = isActive
+        guard !state.isPinned else { return .none }
+        if !isActive {
+          if state.phase == .failed { return .none }
+          if state.hasBeenConnected { state.phase = .reconnecting }
+          state.streamStarted = false
+          return .merge(.cancel(id: CancelID.health), .cancel(id: CancelID.refresh), .cancel(id: CancelID.stream))
+        }
+        if state.phase == .failed && state.failure != .offline { return .none }
+        return startConnecting(&state)
+
+      case .networkPathChanged(let path):
+        let wasOffline = state.wasOffline
+        state.wasOffline = path.isOffline
+        state.isOffline = path.isOffline
+        guard !state.isPinned else { return .none }
+        if path.isOffline && !wasOffline {
+          if state.phase != .failed {
+            if state.hasBeenConnected {
+              state.phase = .reconnecting
+            } else {
+              state.phase = .failed
+              state.failure = .offline
+            }
+          }
+          state.streamStarted = false
+          return .merge(.cancel(id: CancelID.health), .cancel(id: CancelID.refresh), .cancel(id: CancelID.stream))
+        }
+        if !path.isOffline && wasOffline {
+          if state.phase != .failed || state.failure == .offline {
+            return startConnecting(&state)
           }
         }
-
-      case .probeFinished(.reachable):
-        state.phase = .connected
         return .none
 
-      case .probeFinished(.failed(let failure)):
-        state.phase = .failed(failure)
+      case .healthFinished(let generation, let result):
+        guard generation == state.generation else { return .none }
+        switch result {
+        case .success(let probe):
+          state.server = probe.server
+          state.info = probe.info
+          state.failure = nil
+          state.phase = .loading
+          state.streamStarted = true
+          return .merge(
+            .send(.delegate(.verified(probe.server, probe.info))),
+            streamEffect(server: probe.server)
+          )
+        case .failure(let error):
+          return fail(&state, .from(error, isOffline: state.isOffline))
+        }
+
+      case .refreshFinished(let generation, let result):
+        guard generation == state.generation else { return .none }
+        switch result {
+        case .success(let projects):
+          state.projects = projects
+          state.phase = .connected
+          state.failure = nil
+          state.hasBeenConnected = true
+          AppLog(category: .app).event(
+            .connectionReady,
+            [LogField("projects", .count(projects.count))]
+          )
+          return .send(.delegate(.projects(state.server, projects, state.info)))
+        case .failure(let error):
+          state.streamStarted = false
+          return .merge(.cancel(id: CancelID.stream), fail(&state, .from(error, isOffline: state.isOffline)))
+        }
+
+      case .streamResynchronized(let result):
+        guard !state.isPinned else { return .none }
+        if case .success(let projects) = result {
+          state.projects = projects
+          return .send(.delegate(.projects(state.server, projects, state.info)))
+        }
+        return .none
+
+      case .streamPhase(let phase):
+        guard !state.isPinned else { return .none }
+        switch phase {
+        case .connected:
+          guard state.phase != .failed else { return .none }
+          state.streamStarted = true
+          return refreshEffect(generation: state.generation, server: state.server)
+        case .disconnected(let error):
+          if let error, error.statusCode == 401 {
+            state.streamStarted = false
+            return .merge(.cancel(id: CancelID.stream), fail(&state, .credentialsRejected))
+          }
+          if state.phase != .failed {
+            state.phase = .reconnecting
+            state.failure = nil
+          }
+          return .none
+        case .resynchronizing:
+          if state.phase != .failed { state.phase = .reconnecting }
+          return .none
+        case .ended(let error):
+          guard state.phase != .failed else { return .none }
+          state.streamStarted = false
+          let failure = error.map { ConnectionFailure.from($0, isOffline: state.isOffline) } ?? .streamEnded
+          return fail(&state, failure)
+        }
+
+      case .streamEvent(let event):
+        guard !state.isPinned else { return .none }
+        switch event {
+        case .projectUpdated(let project):
+          if let index = state.projects.firstIndex(where: { $0.id == project.id }) {
+            state.projects[index] = project
+          } else {
+            state.projects.append(project)
+          }
+          return .send(.delegate(.projects(state.server, state.projects, state.info)))
+        default:
+          return .none
+        }
+
+      case .delegate:
         return .none
       }
     }
+  }
+
+  private func startConnecting(_ state: inout State) -> Effect<Action> {
+    state.generation += 1
+    let generation = state.generation
+    state.phase = state.hasBeenConnected ? .reconnecting : .connecting
+    state.failure = nil
+    state.streamStarted = false
+    let server = state.server
+    let client = client
+    let clock = clock
+    AppLog(category: .app).event(
+      .connectionAttempt,
+      [LogField("candidates", .count(server.candidateURLs.count))]
+    )
+
+    let health = Effect<Action>.run { send in
+      do {
+        let probe = try await ServerLink.probe(server, health: client.health, clock: clock)
+        await send(.healthFinished(generation: generation, result: .success(probe)))
+      } catch let error as OpenCodeClientError {
+        await send(.healthFinished(generation: generation, result: .failure(error)))
+      } catch is CancellationError {
+        return
+      } catch {
+        await send(.healthFinished(generation: generation, result: .failure(OpenCodeClientError(.unreachable))))
+      }
+    }
+    .cancellable(id: CancelID.health, cancelInFlight: true)
+
+    return .merge(
+      .cancel(id: CancelID.refresh),
+      .cancel(id: CancelID.stream),
+      health
+    )
+  }
+
+  private func refreshEffect(generation: Int, server: OpenCodeServer) -> Effect<Action> {
+    let client = client
+    return .run { send in
+      do {
+        let projects = try await client.projects(server)
+        await send(.refreshFinished(generation: generation, result: .success(projects)))
+      } catch let error as OpenCodeClientError {
+        await send(.refreshFinished(generation: generation, result: .failure(error)))
+      } catch is CancellationError {
+        return
+      } catch {
+        await send(.refreshFinished(generation: generation, result: .failure(OpenCodeClientError(.unreachable))))
+      }
+    }
+    .cancellable(id: CancelID.refresh, cancelInFlight: true)
+  }
+
+  private func streamEffect(server: OpenCodeServer) -> Effect<Action> {
+    let client = client
+    return .run { send in
+      let stream = client.events(server) { phase in
+        if case .resynchronizing = phase {
+          await send(.streamPhase(phase))
+          do {
+            let projects = try await client.projects(server)
+            await send(.streamResynchronized(result: .success(projects)))
+          } catch let error as OpenCodeClientError {
+            await send(.streamResynchronized(result: .failure(error)))
+          } catch is CancellationError {
+            return
+          } catch {
+            await send(.streamResynchronized(result: .failure(OpenCodeClientError(.unreachable))))
+          }
+        } else {
+          await send(.streamPhase(phase))
+        }
+      }
+      do {
+        for try await event in stream {
+          await send(.streamEvent(event))
+        }
+        await send(.streamPhase(.ended(nil)))
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        await send(.streamPhase(.ended(error)))
+      } catch {
+        await send(.streamPhase(.ended(OpenCodeClientError(.unreachable))))
+      }
+    }
+    .cancellable(id: CancelID.stream, cancelInFlight: true)
+  }
+
+  private func fail(_ state: inout State, _ failure: ConnectionFailure) -> Effect<Action> {
+    state.phase = .failed
+    state.failure = failure
+    state.streamStarted = false
+    AppLog(category: .app).event(
+      .connectionFailed,
+      [
+        LogField("offline", .flag(failure == .offline)),
+        LogField("auth", .flag(failure == .credentialsRejected)),
+      ]
+    )
+    return .merge(
+      .cancel(id: CancelID.health),
+      .cancel(id: CancelID.refresh),
+      .cancel(id: CancelID.stream),
+      .send(.delegate(.failed(failure)))
+    )
+  }
+}
+
+// MARK: - App parent
+
+@Reducer
+public struct AppFeature {
+  @ObservableState
+  public struct State: Equatable, Sendable {
+    public var restore: AppRestore
+    public var connection: ConnectionFeature.State?
+    public var savedServer: OpenCodeServer?
+    public var savedServers: [OpenCodeServer]
+    public var form: ServerForm?
+    public var pendingPairing: PairingConfirmation?
+    public var pairingAttempt: PairingAttempt?
+    public var pairingProblem: PairingProblem?
+    public var pasteProblem: PairingProblem?
+    public var notice: AppNotice?
+    public var isInForeground: Bool
+    public var networkPath: NetworkPath
+    public var isPinnedForUITest: Bool
+
+    var didStart = false
+    var nextConnectionID = 1
+    var nextPairingAttempt = 1
+
+    public init(
+      restore: AppRestore = .idle,
+      connection: ConnectionFeature.State? = nil,
+      savedServer: OpenCodeServer? = nil,
+      savedServers: [OpenCodeServer] = [],
+      form: ServerForm? = nil,
+      pendingPairing: PairingConfirmation? = nil,
+      pairingAttempt: PairingAttempt? = nil,
+      pairingProblem: PairingProblem? = nil,
+      pasteProblem: PairingProblem? = nil,
+      notice: AppNotice? = nil,
+      isInForeground: Bool = true,
+      networkPath: NetworkPath = .online,
+      isPinnedForUITest: Bool = false
+    ) {
+      self.restore = restore
+      self.connection = connection
+      self.savedServer = savedServer
+      self.savedServers = savedServers
+      self.form = form
+      self.pendingPairing = pendingPairing
+      self.pairingAttempt = pairingAttempt
+      self.pairingProblem = pairingProblem
+      self.pasteProblem = pasteProblem
+      self.notice = notice
+      self.isInForeground = isInForeground
+      self.networkPath = networkPath
+      self.isPinnedForUITest = isPinnedForUITest
+    }
+
+    public static func == (lhs: State, rhs: State) -> Bool {
+      lhs.restore == rhs.restore
+        && lhs.connection == rhs.connection
+        && lhs.savedServer == rhs.savedServer
+        && lhs.savedServers == rhs.savedServers
+        && lhs.form == rhs.form
+        && lhs.pendingPairing == rhs.pendingPairing
+        && lhs.pairingAttempt == rhs.pairingAttempt
+        && lhs.pairingProblem == rhs.pairingProblem
+        && lhs.pasteProblem == rhs.pasteProblem
+        && lhs.notice == rhs.notice
+        && lhs.isInForeground == rhs.isInForeground
+        && lhs.networkPath == rhs.networkPath
+        && lhs.isPinnedForUITest == rhs.isPinnedForUITest
+    }
+  }
+
+  public enum Action: Equatable, Sendable {
+    case task
+    case restored(AppRestoreResult)
+    case scenePhaseChanged(isActive: Bool)
+    case networkPathChanged(NetworkPath)
+    case restoreRetried
+    case forgetSavedServersTapped
+    case manualEntryTapped
+    case formDismissed
+    case formNameChanged(String)
+    case formAddressChanged(String)
+    case formUsernameChanged(String)
+    case formPasswordChanged(String)
+    case formSubmitted
+    case savedServerTapped(OpenCodeServer)
+    case pastePairingTapped
+    case openURL(String)
+    case pairingConfirmed(UUID)
+    case pairingCancelled
+    case pairingProblemDismissed
+    case pairingFinished(attempt: Int, result: Result<OpenCodeServer, OpenCodeClientError>)
+    case disconnectTapped
+    case noticeDismissed
+    case persisted(saved: StorageWrite, list: StorageWrite)
+    case connection(ConnectionFeature.Action)
+  }
+
+  enum CancelID: Hashable {
+    case restore
+    case path
+    case pairing
+  }
+
+  @Dependency(\.sharedStore) private var store
+  @Dependency(\.openCodeClient) private var client
+  @Dependency(\.networkPath) private var networkPath
+  @Dependency(\.pasteboard) private var pasteboard
+  @Dependency(\.uuidClient) private var uuid
+  @Dependency(\.dateClient) private var date
+
+  public init() {}
+
+  public var body: some Reducer<State, Action> {
+    Reduce { state, action in
+      switch action {
+      case .task:
+        guard !state.didStart else { return .none }
+        state.didStart = true
+        if state.isPinnedForUITest { return .none }
+        return .merge(restoreEffect(), pathEffect())
+
+      case .restored(let result):
+        switch result {
+        case .missing:
+          state.restore = .ready
+          AppLog(category: .app).event(.launchStarted, [LogField("restored", .flag(false))])
+          return .none
+
+        case .storageUnavailable(let failure):
+          state.restore = .storageUnavailable(failure)
+          AppLog(category: .app).event(
+            .launchFailed,
+            [LogField("storage", .flag(true))]
+          )
+          return .none
+
+        case .corrupt:
+          state.restore = .corruptSavedServers
+          AppLog(category: .app).event(
+            .launchFailed,
+            [LogField("corrupt", .flag(true))]
+          )
+          return .none
+
+        case .restored(let server, let servers, let cache, let notice):
+          state.restore = .ready
+          state.savedServer = server
+          state.savedServers = servers
+          state.notice = notice
+          AppLog(category: .app).event(
+            .launchStarted,
+            [
+              LogField("restored", .flag(true)),
+              LogField("cached", .flag(cache != nil)),
+              LogField("servers", .count(servers.count)),
+            ]
+          )
+          let id = state.nextConnectionID
+          state.nextConnectionID += 1
+          state.connection = ConnectionFeature.State(
+            id: id,
+            server: server,
+            phase: .connecting,
+            projects: cache?.projects ?? [],
+            isOffline: state.networkPath.isOffline,
+            isInForeground: state.isInForeground,
+            isPinned: state.isPinnedForUITest
+          )
+          return .send(.connection(.task))
+        }
+
+      case .scenePhaseChanged(let isActive):
+        state.isInForeground = isActive
+        guard state.connection != nil else { return .none }
+        return .send(.connection(.scenePhaseChanged(isActive: isActive)))
+
+      case .networkPathChanged(let path):
+        state.networkPath = path
+        guard state.connection != nil else { return .none }
+        return .send(.connection(.networkPathChanged(path)))
+
+      case .restoreRetried:
+        state.restore = .idle
+        return restoreEffect()
+
+      case .forgetSavedServersTapped:
+        let saved = store.delete(ServerSharedKeys.savedServer)
+        let list = store.delete(ServerSharedKeys.savedServers)
+        if case .failure(let failure) = saved { return .send(.restored(.storageUnavailable(failure))) }
+        if case .failure(let failure) = list { return .send(.restored(.storageUnavailable(failure))) }
+        state.savedServer = nil
+        state.savedServers = []
+        state.restore = .ready
+        state.connection = nil
+        state.notice = nil
+        return .none
+
+      case .manualEntryTapped:
+        state.form = ServerForm()
+        state.pairingProblem = nil
+        state.pasteProblem = nil
+        return .none
+
+      case .formDismissed:
+        state.form = nil
+        return .none
+
+      case .formNameChanged(let value):
+        state.form?.name = value
+        state.form?.problem = nil
+        return .none
+
+      case .formAddressChanged(let value):
+        state.form?.address = value
+        state.form?.problem = nil
+        return .none
+
+      case .formUsernameChanged(let value):
+        state.form?.username = value
+        return .none
+
+      case .formPasswordChanged(let value):
+        state.form?.password = value
+        return .none
+
+      case .formSubmitted:
+        guard var form = state.form else { return .none }
+        let text = form.address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+          form.problem = .emptyAddress
+          state.form = form
+          return .none
+        }
+        if PairingLink.decodeCopied(text) != nil || PairingLink.isPairingEndpoint(text) {
+          state.form = nil
+          return handlePairingText(text, requiresConfirmation: false, state: &state)
+        }
+        let address = Self.withDefaultScheme(text)
+        switch ServerOrigin.parse(address) {
+        case .failure(let problem):
+          form.problem = .invalidAddress(problem)
+          state.form = form
+          return .none
+        case .success:
+          guard let server = form.server else {
+            form.problem = .invalidAddress(.notAWebAddress)
+            state.form = form
+            return .none
+          }
+          state.form = nil
+          return connect(to: server, state: &state)
+        }
+
+      case .savedServerTapped(let server):
+        state.form = nil
+        state.pasteProblem = nil
+        state.pairingProblem = nil
+        return connect(to: server, state: &state)
+
+      case .pastePairingTapped:
+        guard let text = pasteboard.string(), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+          state.pasteProblem = .emptyClipboard
+          return .none
+        }
+        return handlePairingText(text, requiresConfirmation: false, state: &state)
+
+      case .openURL(let text):
+        return handlePairingText(text, requiresConfirmation: true, state: &state)
+
+      case .pairingConfirmed(let id):
+        guard let pending = state.pendingPairing, pending.id == id else { return .none }
+        state.pendingPairing = nil
+        return redeem(pending.link, state: &state)
+
+      case .pairingCancelled:
+        state.pendingPairing = nil
+        return .none
+
+      case .pairingProblemDismissed:
+        state.pairingProblem = nil
+        state.pasteProblem = nil
+        return .none
+
+      case .pairingFinished(let attempt, let result):
+        guard state.pairingAttempt?.id == attempt else { return .none }
+        state.pairingAttempt = nil
+        switch result {
+        case .success(let server):
+          state.pairingProblem = nil
+          return connect(to: server, state: &state)
+        case .failure(let error):
+          state.pairingProblem = .from(error, isOffline: state.networkPath.isOffline)
+          return .none
+        }
+
+      case .disconnectTapped:
+        state.connection = nil
+        state.pairingAttempt = nil
+        state.pendingPairing = nil
+        return .cancel(id: CancelID.pairing)
+
+      case .noticeDismissed:
+        state.notice = nil
+        return .none
+
+      case .connection(.delegate(.verified(let server, let info))):
+        let servers = SavedServers.remembering(server, among: state.savedServers)
+        state.savedServer = server
+        state.savedServers = servers
+        _ = info
+        let store = store
+        return .run { send in
+          let saved = store.write(server, for: ServerSharedKeys.savedServer)
+          let list = store.write(servers, for: ServerSharedKeys.savedServers)
+          await send(.persisted(saved: saved, list: list))
+        }
+
+      case .persisted(let saved, let list):
+        if case .failure(let failure) = saved {
+          state.notice = .couldNotSaveServer(failure)
+        } else if case .failure(let failure) = list {
+          state.notice = .couldNotSaveServer(failure)
+        } else {
+          state.notice = nil
+        }
+        return .none
+
+      case .connection(.delegate(.projects(let server, let projects, let info))):
+        let store = store
+        let summary = CachedServerSummary(
+          projects: projects,
+          version: info?.version,
+          capturedAt: date.now()
+        )
+        return .run { _ in
+          var summaries: [String: CachedServerSummary]
+          switch store.read(ServerSharedKeys.cachedSummaries) {
+          case .value(let value): summaries = value
+          case .missing, .undecodable, .failure: summaries = [:]
+          }
+          summaries[server.persistenceID] = summary
+          _ = store.write(summaries, for: ServerSharedKeys.cachedSummaries)
+        }
+
+      case .connection(.delegate(.failed)):
+        return .none
+
+      case .connection:
+        return .none
+      }
+    }
+    .ifLet(\.connection, action: \.connection) {
+      ConnectionFeature()
+    }
+  }
+
+  // MARK: Effects
+
+  private func restoreEffect() -> Effect<Action> {
+    let store = store
+    return .run { send in
+      await send(.restored(AppRestoreResult.read(store)))
+    }
+    .cancellable(id: CancelID.restore, cancelInFlight: true)
+  }
+
+  private func pathEffect() -> Effect<Action> {
+    let path = networkPath
+    return .run { send in
+      for await update in path.updates() {
+        await send(.networkPathChanged(update))
+      }
+    }
+    .cancellable(id: CancelID.path, cancelInFlight: true)
+  }
+
+  // MARK: Connecting
+
+  private func connect(to server: OpenCodeServer, state: inout State) -> Effect<Action> {
+    let id = state.nextConnectionID
+    state.nextConnectionID += 1
+    state.pairingProblem = nil
+    state.pasteProblem = nil
+    let cached = cachedSummaries()[server.persistenceID]
+    state.connection = ConnectionFeature.State(
+      id: id,
+      server: server,
+      phase: .connecting,
+      projects: cached?.projects ?? [],
+      isOffline: state.networkPath.isOffline,
+      isInForeground: state.isInForeground,
+      isPinned: state.isPinnedForUITest
+    )
+    return state.isPinnedForUITest ? .none : .send(.connection(.task))
+  }
+
+  // MARK: Pairing
+
+  private func handlePairingText(
+    _ text: String,
+    requiresConfirmation: Bool,
+    state: inout State
+  ) -> Effect<Action> {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let link = PairingLink.decodeCopied(trimmed) else {
+      if let unusable = PairingLink.unusableAddress(in: trimmed) {
+        let problem = PairingProblem.unusableAddress(address: unusable.address, reason: unusable.problem)
+        setPairingProblem(problem, requiresConfirmation: requiresConfirmation, state: &state)
+      } else {
+        let problem: PairingProblem = PairingLink.isPairingEndpoint(trimmed) ? .invalidCode : .notPairingText
+        setPairingProblem(problem, requiresConfirmation: requiresConfirmation, state: &state)
+      }
+      return .none
+    }
+    if link.isLoopback {
+      setPairingProblem(.loopback, requiresConfirmation: requiresConfirmation, state: &state)
+      return .none
+    }
+    let normalized = link.normalizedForRedemption
+    if requiresConfirmation {
+      let replaced = normalized.replacedServers(saved: knownServers(state)).map(\.displayName)
+      state.pendingPairing = PairingConfirmation(
+        id: uuid.uuid(),
+        link: normalized,
+        replacedServerNames: replaced
+      )
+      state.pairingProblem = nil
+      state.pasteProblem = nil
+      return .none
+    }
+    return redeem(normalized, state: &state)
+  }
+
+  private func setPairingProblem(
+    _ problem: PairingProblem,
+    requiresConfirmation: Bool,
+    state: inout State
+  ) {
+    if requiresConfirmation {
+      state.pairingProblem = problem
+    } else {
+      state.pasteProblem = problem
+    }
+  }
+
+  private func redeem(_ link: PairingLink, state: inout State) -> Effect<Action> {
+    let attempt = state.nextPairingAttempt
+    state.nextPairingAttempt += 1
+    state.pairingAttempt = PairingAttempt(id: attempt, link: link)
+    state.pendingPairing = nil
+    state.pairingProblem = nil
+    state.pasteProblem = nil
+    state.connection = nil
+    let client = client
+    return .run { send in
+      do {
+        let server = try await client.redeemPairing(link)
+        await send(.pairingFinished(attempt: attempt, result: .success(server)))
+      } catch let error as OpenCodeClientError {
+        await send(.pairingFinished(attempt: attempt, result: .failure(error)))
+      } catch is CancellationError {
+        return
+      } catch {
+        await send(.pairingFinished(attempt: attempt, result: .failure(OpenCodeClientError(.unreachable))))
+      }
+    }
+    .cancellable(id: CancelID.pairing, cancelInFlight: true)
+  }
+
+  private func knownServers(_ state: State) -> [OpenCodeServer] {
+    var seen = Set<String>()
+    return ([state.savedServer].compactMap { $0 } + state.savedServers).filter {
+      seen.insert($0.persistenceID).inserted
+    }
+  }
+
+  private func cachedSummaries() -> [String: CachedServerSummary] {
+    switch store.read(ServerSharedKeys.cachedSummaries) {
+    case .value(let summaries): summaries
+    case .missing, .undecodable, .failure: [:]
+    }
+  }
+
+  /// A typed address without a scheme means plain HTTP on a LAN or tailnet.
+  public static func withDefaultScheme(_ address: String) -> String {
+    if address.isEmpty || address.contains("://") { return address }
+    return "http://\(address)"
   }
 }

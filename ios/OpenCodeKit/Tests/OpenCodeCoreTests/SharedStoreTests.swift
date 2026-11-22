@@ -1,5 +1,6 @@
 import Foundation
 import OpenCodeCore
+import OpenCodeServer
 import OpenCodeTestSupport
 import Testing
 
@@ -25,6 +26,17 @@ struct SharedStoreTests {
     #expect(SharedKeys.sidebarShown.defaultValue == true)
     #expect(SharedKeys.lastViewedSession.defaultValue == nil)
     #expect(SharedKeys.pairedServers.defaultValue == nil)
+    #expect(ServerSharedKeys.savedServer.defaultValue == nil)
+    #expect(ServerSharedKeys.savedServers.defaultValue == [])
+    #expect(ServerSharedKeys.cachedSummaries.defaultValue == [:])
+  }
+
+  @Test("server keys keep credentials in the keychain and the cache in defaults")
+  func serverStorageRouting() {
+    #expect(ServerSharedKeys.savedServer.storage == .keychain)
+    #expect(ServerSharedKeys.savedServers.storage == .keychain)
+    #expect(ServerSharedKeys.cachedSummaries.storage == .userDefaults)
+    #expect(Set(SharedKeys.names).isDisjoint(with: ServerSharedKeys.names))
   }
 
   @Test("every key names the storage its value belongs in")

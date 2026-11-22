@@ -82,7 +82,11 @@ public struct OpenCodeClient: Sendable {
   public var getSession: @Sendable (OpenCodeServer, String) async throws -> OpenCodeSession
   public var activeSessionIDs: @Sendable (OpenCodeServer) async throws -> Set<String>
   /// The long-lived event subscription. The flow throws on disconnect; the owner reconnects.
-  public var events: @Sendable (OpenCodeServer) -> AsyncThrowingStream<ServerEvent, any Error>
+  /// `onPhase` is awaited before the reconnect loop acts, so a consumer can show the state and
+  /// re-read REST before the next socket opens.
+  public var events:
+    @Sendable (OpenCodeServer, @escaping @Sendable (EventStreamPhase) async -> Void) ->
+      AsyncThrowingStream<ServerEvent, any Error>
 
   public init(
     health: @escaping @Sendable (OpenCodeServer) async throws -> ServerInfo,
@@ -91,7 +95,8 @@ public struct OpenCodeClient: Sendable {
     sessionPage: @escaping @Sendable (OpenCodeServer, SessionPageRequest, Int) async throws -> SessionPage,
     getSession: @escaping @Sendable (OpenCodeServer, String) async throws -> OpenCodeSession,
     activeSessionIDs: @escaping @Sendable (OpenCodeServer) async throws -> Set<String>,
-    events: @escaping @Sendable (OpenCodeServer) -> AsyncThrowingStream<ServerEvent, any Error>
+    events: @escaping @Sendable (OpenCodeServer, @escaping @Sendable (EventStreamPhase) async -> Void) ->
+      AsyncThrowingStream<ServerEvent, any Error>
   ) {
     self.health = health
     self.redeemPairing = redeemPairing
@@ -119,7 +124,9 @@ extension OpenCodeClient: DependencyKey {
     sessionPage: { _, _, _ in throw OpenCodeClientError(.unreachable) },
     getSession: { _, _ in throw OpenCodeClientError(.unreachable) },
     activeSessionIDs: { _ in throw OpenCodeClientError(.unreachable) },
-    events: { _ in AsyncThrowingStream { $0.finish(throwing: OpenCodeClientError(.unreachable)) } }
+    events: { _, _ in
+      AsyncThrowingStream { $0.finish(throwing: OpenCodeClientError(.unreachable)) }
+    }
   )
 
   /// A real client over an explicit transport and clock, for tests and previews. Requests are sent
@@ -163,9 +170,15 @@ extension DependencyValues {
 private struct DependencyReader: Sendable {
   @Dependency(\.httpTransport) private var transport
   @Dependency(\.clock) private var clock
+  @Dependency(\.networkPath) private var networkPath
 
   var environment: ClientEnvironment {
-    ClientEnvironment(transport: transport, clock: clock, retryEnvironment: .live, streamCapacity: 128)
+    ClientEnvironment(
+      transport: transport,
+      clock: clock,
+      retryEnvironment: networkPath.retryEnvironment,
+      streamCapacity: 128
+    )
   }
 }
 
@@ -200,13 +213,15 @@ private struct Runtime: Sendable {
       activeSessionIDs: { server in
         try await Operations.activeSessionIDs(server, environment: environment, policy: policy)
       },
-      events: { server in
+      events: { server, onPhase in
         EventStreamRunner(
           stream: EventStream(
             transport: environment.transport,
             clock: environment.clock,
             capacity: environment.streamCapacity
-          )
+          ),
+          environment: environment.retryEnvironment,
+          onPhase: onPhase
         ).events(server: server)
       }
     )

@@ -21,7 +21,7 @@ apart:
 | `P-4` | Photo picking | — | **open** |
 | `P-5` | Glass | — | **open** |
 | `P-6` | Branch location | D-3 | — |
-| `P-7` | Bundle id, team, App Group, Keychain service | D-8 (historical values are evidence), D-15 (service configurable) | production naming before real credentials |
+| `P-7` | Bundle id, team, App Group, Keychain service | D-8 (historical values are evidence), D-15 (service configurable), D-32 (service derives from bundle id) | owner-supplied bundle id/team before distribution |
 | `P-8` | iPad | D-16 (out of scope) | — |
 | `P-9` | Push notifications | — | **open** (default: Experimental, off) |
 
@@ -304,6 +304,8 @@ success.
 P2/P3. Wiring the client to the app is P5's change, so this phase cannot accidentally present a half-built
 connection flow.
 
+- Superseded by D-34 in P5: the probe is gone and `ConnectionFeature` owns the client boundary.
+
 ### D-26 Session ownership — one request session, one per stream
 `URLSessionTransport` owns two kinds of session, deliberately:
 
@@ -405,3 +407,75 @@ with an HTML body remains an authentication failure.
 The live investigation (STATUS) found exactly this case: an installable `opencode serve` build
 answers unknown `/api/*` paths with its web shell, so `/api/info` and `/api/project` look like 200s
 until the content type is checked.
+
+### D-32 Keychain identity follows the configured bundle identifier
+`SharedStore.liveValue` builds `KeychainStorage` with `"<Bundle.main.bundleIdentifier>.credentials"`;
+there is no hard-coded migration service and no historical identifier. The current project bundle id
+(`ai.opencode.migration`) is still owner-configurable, so changing it changes the credential store
+name. Tests and the in-app probe use unique disposable services.
+
+- Why: the owner has not supplied a production bundle id. Deriving the service means the identity is
+  final wherever signing settles it, rather than a value copied from evidence or invented here.
+- Consequence: changing the bundle id after real credentials exist orphans the old Keychain items;
+  settle the identifier before distributing a build that stores user credentials.
+- Gate: `SharedStoreTests` covers keychain/defaults routing; the app-process Keychain probe covers a
+  real round trip with a unique service.
+
+### D-33 One network-path monitor, behind a dependency
+`NetworkPathClient` exposes `current`, `updates()` and `waitUntilAvailable()`. The live value is one
+process-wide `NWPathMonitor`; tests inject a path stream. `RetryEnvironment` reads the same client,
+so a retry loop waits for the path instead of spending attempts while offline.
+
+- `NetworkPathMonitor` is `@unchecked Sendable` for one reason: `NWPathMonitor` owns its serial queue
+  and only `Mutex`-guarded state plus stream continuations cross threads. This is the same narrow use
+  as D-22's transport helpers, not a blanket concurrency escape.
+- The shell cancels the stream and health/refresh work when the path goes offline and re-races the
+  address when it returns. A satisfied path is never treated as proof that a particular server is
+  reachable.
+
+### D-34 Connection ownership is identified state with generation guards
+`AppFeature.connection` is an optional `ConnectionFeature.State` that is `Identifiable` by a
+parent-assigned id. Replacing or clearing it cancels the health race, refresh and stream through
+TCA's `ifLet` identity. Inside the child, each attempt increments a generation seeded from that id;
+every effect action carries its generation and a stale one is ignored.
+
+- One stream effect at a time (`.cancellable(cancelInFlight:)`); the `EventStreamRunner` owns the
+  reconnect schedule, so the app never nests a retry loop around it.
+- Health is `.once` per address; the address race is the only concurrency over candidates.
+- Leaving the foreground cancels the stream and health/refresh; becoming active re-races and
+  re-reads REST. `disconnectTapped` clears the child and keeps saved credentials.
+- Keychain restores and writes run in effects, not in the reducer body; the app keeps its UI state on
+  the main actor and moves storage I/O off it.
+
+### D-35 Unreachable is not a local-network denial
+iOS has no preflight equivalent to Android 17's local-network permission. A transport failure is
+shown as “Couldn’t reach the OpenCode server.” with a suggestion to check Settings › Privacy &
+Security › Local Network when the address may be on the LAN. The shell does not claim the permission
+was denied, and `.offline` is used only when the path monitor says the path is unsatisfied.
+
+- `.credentialsRejected` remains a 401-only outcome; `.incompatibleAPI` is a 2xx web page;
+  `.malformed` is a contract decode mismatch; `.unreachable`/`.offline` are connectivity.
+
+### D-36 The P5 connected destination is deliberately minimal
+After health and a projects refresh, the shell shows the server name, version and project list, plus
+“Sessions arrive in a later phase.” The Home drawer, Catch Up, session list and transcript belong to
+P6–P8. This keeps P5 reviewable and prevents a half-built session screen.
+
+### D-37 Pairing confirmation and explicit paste
+`PairingLink` remains a value with no transport: parsing a paste, link preview or deep link cannot
+spend a one-time code. An opened URL is held as `PairingConfirmation` until Pair; a pasted link or a
+pairing link typed into the manual address field is an explicit action and redeems immediately.
+Existing saved credentials are replaced only after health succeeds, through `SavedServers.remembering`.
+
+- Re-pairing keeps a saved server's local name and headers (`keepingLocalSettings`).
+- A stale redemption result is ignored when its attempt id no longer matches.
+
+### D-38 App-shell copy lives in a String Catalog; reducers hold typed facts
+`ios/OpenCode/Resources/Localizable.xcstrings` owns the English UI copy. `RootView` resolves keys via
+`AppCopy`; reducers carry `ConnectionFailure`, `PairingProblem` and `ServerFormProblem` values and
+never compare or store sentences. Tests assert the English copy through XCUITest, and typed outcomes
+through Swift Testing.
+
+- Protocol constants, accessibility identifiers, log events and fixture data stay literals.
+- Custom request headers and the copied error report are deferred with the manual form follow-up;
+  the model and wire support already exist from P4.

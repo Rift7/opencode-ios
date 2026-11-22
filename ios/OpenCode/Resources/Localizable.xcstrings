@@ -1,0 +1,350 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "app.name" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "OpenCode" } } }
+    },
+    "connection.disconnected.intro" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Keep your coding sessions moving from your iPhone." } } }
+    },
+    "connection.disconnected.returning" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Pick up where you left off, or pair another computer." } } }
+    },
+    "connection.disconnected.no_saved" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "No server is configured yet." } } }
+    },
+    "connection.disconnected.saved" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Saved servers" } } }
+    },
+    "connection.disconnected.last_used" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "last used" } } }
+    },
+    "connection.disconnected.enter_manually" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Enter a Server Manually" } } }
+    },
+    "connection.disconnected.paste" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Paste Pairing Link" } } }
+    },
+    "connection.disconnected.paste_hint" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "On your computer, run `opencode pair --remote`, then paste the link it prints." } } }
+    },
+    "form.title.new" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "New Server" } } }
+    },
+    "form.title.edit" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Edit Server" } } }
+    },
+    "form.name" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Name" } } }
+    },
+    "form.name_placeholder" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Optional" } } }
+    },
+    "form.address" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Server address" } } }
+    },
+    "form.username" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Username" } } }
+    },
+    "form.password" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Password" } } }
+    },
+    "form.connect" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Connect" } } }
+    },
+    "form.hint" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Paste the link `opencode pair --remote` prints to pair, or use the address and password your OpenCode server runs with. The username is usually opencode." } } }
+    },
+    "form.problem.empty" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Enter a server address." } } }
+    },
+    "form.problem.invalid" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Enter a complete HTTP or HTTPS server address." } } }
+    },
+    "form.problem.scheme" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The address must start with http:// or https://." } } }
+    },
+    "form.problem.host" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The address needs a host name." } } }
+    },
+    "form.problem.credentials" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove the user name and password from the address." } } }
+    },
+    "form.problem.query" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove the query or fragment from the address." } } }
+    },
+    "form.problem.port" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Use a port between 1 and 65535." } } }
+    },
+    "form.problem.path" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The server must be at the root of its address." } } }
+    },
+    "common.cancel" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel" } } }
+    },
+    "common.try_again" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Try Again" } } }
+    },
+    "common.pair" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Pair" } } }
+    },
+    "common.dismiss" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Dismiss" } } }
+    },
+    "form.show_password" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Show Password" } } }
+    },
+    "form.hide_password" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Hide Password" } } }
+    },
+    "connection.phase.connecting" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Connecting…" } } }
+    },
+    "connection.phase.loading" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Loading projects…" } } }
+    },
+    "connection.phase.reconnecting" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Reconnecting…" } } }
+    },
+    "connection.phase.pairing" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Pairing…" } } }
+    },
+    "connection.connected.title" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Connected" } } }
+    },
+    "connection.connected.projects" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Projects" } } }
+    },
+    "connection.connected.no_projects" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "No projects yet." } } }
+    },
+    "connection.connected.later" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Sessions arrive in a later phase." } } }
+    },
+    "connection.connected.disconnect" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Use a Different Server" } } }
+    },
+    "connection.reconnecting.cached" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Showing the last projects read from this server." } } }
+    },
+    "connection.reconnecting.offline" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Waiting for a network connection…" } } }
+    },
+    "failure.connect.title" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t connect" } } }
+    },
+    "failure.pair.title" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t Pair" } } }
+    },
+    "failure.storage.title" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t Read Saved Servers" } } }
+    },
+    "failure.corrupt.title" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Saved Servers Couldn’t Be Read" } } }
+    },
+    "failure.credentials" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The server rejected these credentials." } } }
+    },
+    "failure.incompatible" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This address answered with a web page, not the OpenCode V2 API. Check that the address is the OpenCode server, and update OpenCode on your computer." } } }
+    },
+    "failure.malformed" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The server’s response didn’t match the OpenCode V2 contract." } } }
+    },
+    "failure.unreachable" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t reach the OpenCode server." } } }
+    },
+    "failure.offline" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "There’s no network connection." } } }
+    },
+    "failure.timed_out" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The server didn’t answer in time." } } }
+    },
+    "failure.http" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The server returned HTTP %d." } } }
+    },
+    "failure.stream_ended" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The event stream ended." } } }
+    },
+    "failure.stream_overflow" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The event stream fell behind and couldn’t recover." } } }
+    },
+    "failure.unsupported" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This server doesn’t support that feature. Update OpenCode on your computer." } } }
+    },
+    "failure.storage.unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The Keychain is not available right now, so saved servers couldn’t be read. Your saved credentials were not changed." } } }
+    },
+    "failure.storage.denied" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Access to the Keychain was refused, so saved servers couldn’t be read. Your saved credentials were not changed." } } }
+    },
+    "failure.storage.other" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Saved servers couldn’t be read. Your saved credentials were not changed." } } }
+    },
+    "failure.corrupt.body" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The saved server data is damaged. You can forget it and enter a server again. Nothing on your servers is affected." } } }
+    },
+    "failure.edit_server" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Edit Server" } } }
+    },
+    "failure.enter_manually" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Enter a Server Manually" } } }
+    },
+    "failure.forget" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Forget Saved Servers" } } }
+    },
+    "failure.local_network_hint" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "If this server is on your local network, check Settings › Privacy & Security › Local Network for OpenCode." } } }
+    },
+    "pairing.confirm.title" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Pair with %@?" } } }
+    },
+    "pairing.confirm.message_one" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "OpenCode will pair with %@ and switch to it." } } }
+    },
+    "pairing.confirm.message_many" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "OpenCode will try %@ and switch to the first address that answers." } } }
+    },
+    "pairing.confirm.replaces" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "%@ Saved credentials for %@ may be replaced." } } }
+    },
+    "pairing.error.not_a_link" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "That isn’t a pairing link." } } }
+    },
+    "pairing.error.invalid_code" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "That isn’t an OpenCode pairing code. Run `opencode pair --remote` on your computer, then paste the link it prints." } } }
+    },
+    "pairing.error.loopback" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "That server only listens on localhost, so this iPhone can’t reach it. Run `opencode pair --remote` on your computer instead, which works from any network." } } }
+    },
+    "pairing.error.expired" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This pairing code expired or was already used. Run `opencode pair --remote` again." } } }
+    },
+    "pairing.error.unsupported" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This server doesn’t support pairing links. Update OpenCode on your computer, or enter the server manually." } } }
+    },
+    "pairing.error.unusable" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t use “%@” from this pairing code: it %@." } } }
+    },
+    "pairing.address.not_a_web_address" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "isn’t a web address" } } }
+    },
+    "pairing.address.bad_scheme" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "doesn’t start with http:// or https://" } } }
+    },
+    "pairing.address.no_host" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "has no host name" } } }
+    },
+    "pairing.address.credentials" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "includes a user name or password" } } }
+    },
+    "pairing.address.query" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "has a query or fragment" } } }
+    },
+    "pairing.address.port" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "has a port outside 1–65535" } } }
+    },
+    "pairing.address.path" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "has a path, and the server must be at the root of its address" } } }
+    },
+    "clipboard.empty" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Your clipboard is empty." } } }
+    },
+    "notice.save_failed" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Connected, but this server couldn’t be saved to the Keychain. It may not appear on the next launch." } } }
+    },
+    "notice.saved_list_unreadable" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Some saved server data couldn’t be read." } } }
+    },
+    "notice.cache_unreadable" : {
+      "extractionState" : "manual",
+      "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The launch preview couldn’t be read." } } }
+    }
+  },
+  "version" : "1.0"
+}

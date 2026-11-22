@@ -12,8 +12,8 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | P1 | Read-only reconstruction audit | done | `docs/ios-migration/audit/` |
 | P2 | `ios` branch, baseline, reproducible project, gate | done — merged into `ios` as `143d8f86` (PR #1) | `BASELINE.md`, `ios/project.yml`, `ios/scripts/` |
 | P3 | Core: store, dependencies, sharing, tokens, logging, haptics | done — merged into `ios` as `d0fdf2f5` (PR #2) | checklist below |
-| **P4** | **Server: transport, retry, models, SSE, pairing** | **done on `ios-networking`** | `PROTOCOL_COVERAGE.md`, `STATUS.md` |
-| P5 | App shell: launch, connection, pairing, reconnect | scaffold | launch states and an inert probe; no pairing, no reconnect |
+| P4 | Server: transport, retry, models, SSE, pairing | done — merged into `ios` as `5f143ea7` (PR #3, tree `2326a49b`) | `PROTOCOL_COVERAGE.md`, `STATUS.md` |
+| **P5** | **App shell: launch, connection, pairing, reconnect** | **done on `ios-shell`** | `STATUS.md` Phase 5, `PARITY.md` App shell, `ConnectionFeatureTests`, 14 UI tests |
 | P6 | Home, drawer, projects, Catch Up, What's New | not started | folders only |
 | P7 | Session, subagents, background work, request review | not started | folders only |
 | P8 | Transcript | not started | folders only |
@@ -32,7 +32,7 @@ server route was reached until P4 added the transport, retry, models, SSE parsin
 
 | Requirement (audit `PLAN.md` P3) | Status | Evidence or gap |
 | --- | --- | --- |
-| Dependency clients as `DependencyKey`s with inert test values | done | `ConnectionProbe`, `DateClient`, `UuidClient` (`OpenCodeCore/Dependencies/FoundationClients.swift`), `HapticsClient` (`.../Haptics/HapticsClient.swift`), `HTTPTransport` (`.../Transport/HTTPTransport.swift`); every key's test value is inert and `DependencyIsolationTests` fails a key that omits one |
+| Dependency clients as `DependencyKey`s with inert test values | done | `DateClient`, `UuidClient` (`OpenCodeCore/Dependencies/FoundationClients.swift`), `PasteboardClient`, `SharedStore` (`.../Storage/SharedKeys.swift`), `NetworkPathClient` (`.../Network/NetworkPathClient.swift`), `HapticsClient` (`.../Haptics/HapticsClient.swift`), `HTTPTransport` (`.../Transport/HTTPTransport.swift`), `OpenCodeClient`; every key's test value is inert and `DependencyIsolationTests` fails a key that omits one |
 | `Shared` storage, including Keychain | done | `UserDefaultsStorage`, `InMemoryStorage`, `KeychainStorage(service:operations:)`; `SharedStore` + `SharedKeys`; every operation returns an explicit outcome |
 | Design tokens: colour | done | `Design/OpenCodeColorTokens.swift`; every token resolves and body/link text clears WCAG AA in both appearances |
 | Design tokens: type | done | `Design/OpenCodeTypeTokens.swift`; system font, system monospaced for code/logs |
@@ -74,17 +74,17 @@ leaving the parent to clear the presented state.
 - **Previews.** Preview support is enabled, two launch-state previews exist, and the dependency context under
   Xcode previews resolves inert values, so a preview cannot reach the network and cannot play a haptic.
 
-## Roadmap after P4
+## Roadmap after P5
 
-P4 (networking) is complete on `ios-networking` and is the phase P5 follows. P5 branches from the updated
-`ios` once P4 is merged, never from a task branch.
+P5 (app shell) is complete on `ios-shell` and is the phase P6 follows. P6 branches from the updated
+`ios` once P5 is merged, never from a task branch.
 
-Prerequisites for P5:
+Prerequisites for P6:
 
-1. **`ios-networking` reviewed and merged into `ios`.** The merge is the hand-off.
-2. P5 wires `OpenCodeClient` into the launch states, pairing redemption and the reconnect loop, and adds the
-   network-path observation that `RetryEnvironment` currently stubs.
-3. Production identifiers (bundle id, App Group, Keychain service) must be settled before real credentials
-   are stored. Nothing in P4 stores a credential outside an in-memory test.
-4. The haptics live path and the local-network permission prompt need a physical device; both are reported
-   unverified.
+1. **`ios-shell` reviewed and merged into `ios`.** The merge is the hand-off.
+2. P6 replaces the P5 project summary cache with the audited Home snapshot and adds the drawer,
+   projects, Catch Up, session list and saved-server switching.
+3. Production identifiers (bundle id, App Group) must be settled before a distributed build stores
+   real credentials; the Keychain service derives from the configured bundle id (D-32).
+4. The haptics live path, camera QR scanning and the local-network prompt need a physical device; they
+   are reported unverified.
