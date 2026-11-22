@@ -301,6 +301,7 @@ struct ConnectionFeatureTests {
       $0.projects = refreshed
     }
     await store.receive(.delegate(.projects(TestServer.server, refreshed, TestServer.info)))
+    await store.receive(.delegate(.resynchronized(TestServer.server)))
     #expect(script.projectCalls.count == 2)
 
     await store.send(.scenePhaseChanged(isActive: false)) {

@@ -16,8 +16,8 @@ Baselines:
 
 - Behaviour: `dev = 7358160e808fb1870eeb20f5da8df832667019d1`.
 - iOS evidence: parity corpus synced at iOS `01eef583`; screenshots at `d809b1e` and `16b40f7` (October).
-- New code: `ios` branch from the same `dev` SHA; P5 branched from `ios` head `5f143ea7` (PR #3, tree
-  `2326a49b`) and is on `ios-shell`.
+- New code: `ios` branch from the same `dev` SHA. P5 merged as `3b34932c` (PR #4); P6 branched from
+  that head as `ios-home`.
 
 ## App shell
 
@@ -33,7 +33,7 @@ Baselines:
 | Connection state machine and identity guard | `app/AppFeature.kt` (`connectionGeneration`, `ConnectionAttempt`) | `AppFeature.swift` | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` (`ConnectionFeature`) | done — identified child state, attempt/stream tokens seeded per connection, stale callbacks ignored |
 | Address race and authoritative REST refresh | `server/ServerLink.kt`, `drawer/HomeConnectionFeature.kt` | `OpenCodeClient+Connection.swift` | `OpenCodeServer/Address/ServerLink.swift`, `OpenCodeServer/Client/OpenCodeClient.swift` | done — preferred head start, 401 preference; projects refresh on every handshake and overflow |
 | Network path observation | `server/retry/NetworkPath.kt` | `NetworkPath.swift` | `OpenCodeCore/Network/NetworkPathClient.swift`, `OpenCodeServer/Retry/NetworkPathRetry.swift` | done for the seam and state transitions; the live `NWPathMonitor` path is simulator/device-only |
-| Pairing link, saved servers | `app/AppFeaturePairing.kt`, `AppFeatureServers.kt` | `AppFeature+Pairing.swift`, `+Servers.swift` | same | done for paste and deep links; saved-server switch/forget UI is P6 |
+| Pairing link, saved servers | `app/AppFeaturePairing.kt`, `AppFeatureServers.kt` | `AppFeature+Pairing.swift`, `+Servers.swift` | same; Home switcher in `ios/OpenCode/Drawer/HomeView.swift` | done for paste, deep links and the connected server switcher; disconnect exists, forget/edit and custom headers are P11 |
 | Manual server form, validation | `app/AppView.kt` | `AppView.swift` | `ios/OpenCode/App/RootView.swift` | partial — name/address/username/password, typed validation, reachable from storage and corrupt screens; custom headers and error-report copy deferred |
 | Pairing confirmation | `app/AppFeaturePairing.kt` (`PendingPairing`) | `AppFeature+Pairing.swift` | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` | done — an opened link is parsed without network and needs Pair |
 | QR scanning | `feature/settings/.../servers/PairingScanner.kt` | `Settings/PairingScanner.swift` | — | deferred to a later phase; device-only, no scanner in P5 |
@@ -65,7 +65,7 @@ Baselines:
 | Credential scope | `OpenCodeServer.kt`, `live/LiveTransport.kt` | not recoverable | `HTTPRedirectRule`, `OpenCodeServer.wireHeaders` | done — Basic header applied by origin, cross-origin hop refused and rule-tested |
 | Retry, backoff, `Retry-After`, idempotency | `server/retry/NetworkRetry.kt` | `NetworkRetry.swift` | `OpenCodeServer/Retry/{RetryPolicy,NetworkRetry}.swift` | done — presets, classification, equal jitter, window, cancellation, unsafe-write rule tested |
 | Wire models | `server/model/*.kt`, `live/Payloads.kt` | `OpenCodeClient+Payloads.swift` | `OpenCodeServer/Models/*.swift` | partial — session, project, shell, job, prompt body, model ref and envelopes modelled; remaining routes listed in `PROTOCOL_COVERAGE.md` |
-| Client boundary | `server/OpenCodeClient.kt` | `OpenCodeClient.swift` | `OpenCodeServer/Client/OpenCodeClient.swift` | done for the shell: health, pairing redeem, projects, session page, get session, active IDs, events with awaited phase callbacks; other call sites belong to their feature phases |
+| Client boundary | `server/OpenCodeClient.kt` | `OpenCodeClient.swift` | `OpenCodeServer/Client/OpenCodeClient.swift` | done for the shell and Home: health, pairing redeem, projects, session page (first/search/after), get session, active IDs, attention IDs, view receipt, delete, events with awaited phase callbacks; remaining call sites belong to their feature phases |
 | Alternate-origin routing | `server/ServerLink.kt` | `OpenCodeClient+Family.swift` | `OpenCodeServer/Address/ServerLink.swift` | done — every candidate probed once, preferred head start, first answer wins, 401 preferred on failure |
 | Network path | `server/retry/NetworkPath.kt` | `NetworkPath.swift` | `OpenCodeCore/Network/NetworkPathClient.swift` | done for observation, offline/wait and reroute-driven reconnect; live monitor hardware path unverified |
 | SSE decode and batching | `server/live/LiveEvents.kt`, `EventBatcher.kt` | `OpenCodeClient+Events.swift` | `OpenCodeServer/Events/*.swift` | done for framing, decoding, coalescing, ordering and bounds; transcript pressure shedding deferred (D-23) |
@@ -81,14 +81,31 @@ cancellation identities → error states. The full extraction is in `docs/ios-mi
 
 | Area | Android entry point | Recovered iOS source | New path | Status |
 | --- | --- | --- | --- | --- |
-| Home, drawer, projects, Catch Up | `feature/drawer/.../HomeFeature.kt` | `HomeFeature.swift`, `HomeView.swift`, `CatchUpStack.swift` | `ios/OpenCodeKit/Sources/OpenCodeDrawer` | not started |
-| Session, subagents, background work | `feature/session/.../SessionFeature.kt` | `SessionFeature.swift`, `SessionView.swift` | `.../OpenCodeSession` | not started |
+| Home, drawer, projects, Catch Up | `feature/drawer/.../{HomeFeature,HomeFeatureDrawerState,HomeFeatureSessionPages,HomeFeatureSessions}.kt`, `catchup/CatchUpFeature.kt` | `HomeFeature.swift`, `HomeView.swift`, `CatchUpStack.swift` | `OpenCodeKit/Sources/OpenCodeDrawer`, `ios/OpenCode/Drawer/HomeView.swift` | **done for P6 scope** — see the Home section below |
+| Session, subagents, background work | `feature/session/.../SessionFeature.kt` | `SessionFeature.swift`, `SessionView.swift` | `.../OpenCodeSession` | not started (P6 only carries a `SessionSelection` to a placeholder) |
 | Transcript | `feature/transcript/.../TranscriptEntry.kt`, `list/` | `TranscriptEntry.swift`, `TranscriptListViewController.swift` | `.../OpenCodeTranscript` | not started |
 | Composer, pending inputs | `feature/composer/.../ComposerTextInput.kt`, `RequestDockFeature.kt` | `ComposerTextInput.swift`, `RequestReviewView.swift` | `.../OpenCodeComposer` | not started |
 | Media, agent files, browser | `feature/media/.../` | `Media/`, `Browser/` | `.../OpenCodeMedia` | not started |
 | Settings, experiments, diagnostics | `feature/settings/.../SettingsFeature.kt` | `SettingsView.swift`, `DiagnosticsView.swift` | `.../OpenCodeSettings` | not started |
 | Notifications, share, Live Activities | `feature/system/.../` | `System/`, `OpenCodeShare/`, `OpenCodeWidgets/` | `.../OpenCodeSystem` | not started |
 | Voice, dictation | `feature/voice/.../VoiceFeature.kt` | `Voice/` | `.../OpenCodeVoice` | not started |
+
+## Home (P6)
+
+| Behaviour | Android source (`dev = 7358160e`) | Recovered iOS evidence | New path | Status |
+| --- | --- | --- | --- | --- |
+| Authoritative Home snapshot: projects, first root page, active IDs, next cursor | `drawer/HomeFeatureConnection.kt` (`refreshSnapshot`, last changed at baseline), `server/live/LiveFamily.kt` (`requestHomeSnapshot`) | `HomeFeature.swift` (description only) | `HomeFeature.refreshed`, `HomeSnapshotStore`, `OpenCodeClient.sessionPage(.first)` + `.activeSessionIDs` | done — 250 ms debounce, cancel-in-flight, generation/request guards; REST remains authoritative after reconnect and overflow |
+| Bounded, versioned persistence per server | `server/ServerSharedKeys.kt` (`cachedHomeSnapshots`, `home-snapshots.json`) | `HomeFeature.swift` (description only) | `HomeSnapshot` v1, 8 servers × 50 sessions, actor in `HomeModels.swift` | done — atomic write, decode/version failures reported; legacy `cachedServerSummaries` removed after a successful write |
+| Drawer: search, pins, read/unread, status dots, project labels | `feature/drawer/list/DrawerListModel.kt`, `HomeFeatureDrawerState.kt` (`visibleSessions`, `drawerSessions`, `StatusSnapshot`) | `HomeView.swift` (description only) | `HomeFeature` derived state; `HomeView` drawer | done — root/unarchived/hidden rules, pin order, attention > running > unread, local + server search |
+| Paging (50 per page) | `HomeFeatureSessionPages.kt` (`sessionPageSize = 50`, `OlderSessions`, `SessionSearch`) | not recoverable | `HomeFeature.loadMore` / `.olderLoaded` / `.searchLoaded` | done — footer spinner/retry, stale cursor ignored |
+| Server-scoped local records | `core/.../sharing/SharedKeys.kt` (`followed-sessions`, `session-read-dates`, `manually-unread-sessions`, `muted-sessions`, `hidden-sessions`, `last-viewed-sessions`) | `SharedKeys.swift` | `HomeSharedKeys`, `HomeFeature.key(_:)` | done — `serverPersistenceID|sessionID`, tested across two servers |
+| Catch Up filtering and stack | `catchup/CatchUpFeature.kt`, `HomeFeatureDrawerState.kt` (`catchUpSessions`, `needsCatchUp`), tests `catchup/CatchUpTests.kt` | `CatchUpStack.swift` (description only) | `HomeFeature` (`catchUpSessions`, `catchUpCardDismissed`, `catchUpUndoTapped`, `catchUpFinished`) | done for P6 — attention-first, running excluded, muted/archived/subagent excluded; last card closes to the drawer's All Caught Up row |
+| Mark read / keep unread / undo / failure | same, `requestViewSession` | `HomeFeature.swift` (description only) | `HomeFeature.markRead`, `readReceiptFinished`, `CatchUpView` | done — optimistic local read, `POST /view`, restore on failure, Undo cancels the receipt and restores the card |
+| Delete with backup and reconciliation | `HomeFeatureDrawer.kt` (`hideSession`, `restoreSession`, `DeleteSessionResponse`) | not recoverable | `HomeFeature.confirmDeletion`, `restoreDeletion`, `purgeLocalRecords` | done — row leaves at once, DELETE in flight, failure reinserts at its index with active/attention state and a notice; success purges this phone's records. Two-phase server deletion is P7 |
+| What's New row, routing and seen state | `feature/settings/whatsnew/WhatsNewFeature.kt`, `WhatsNewView.kt`, `HomeFeature.kt` (`showsWhatsNewButton`) | `WhatsNew*` (description only) | `HomeFeature.whatsNew`, `WhatsNewCatalog`, `WhatsNewView` | done for P6 mechanism — unseen dot, page, seen-on-close, persisted `whats-new-seen`; the shipped release catalogue and Try It destinations are P11 |
+| Saved-server switch | `app/AppFeatureServers.kt`, `switcher/ServerSwitcher.kt` | `AppFeature+Servers.swift` | `HomeView.ServerSwitcherView`, `AppFeature.connect(to:)` | done — switch replaces the connection and clears the old Home; disconnect available; forget/edit P11 |
+| App → Home → Session boundary | `HomeFeature.kt` (`openViewedSession`), `SessionPageStack.kt` | `SessionFeature`/`HomeFeature` (description only) | `SessionSelection` in `HomeModels.swift`; `AppFeature.sessionDestination`; `SessionPlaceholderView` | done for the boundary — stable server ID + session ID + explicit intent; P7 supplies the real destination |
+| Motion | Compose springs and card flights (`CatchUpStackController.kt`) | UIKit card flights (unrecoverable) | platform sheet/navigation, press highlights, one drag threshold | native adaptation — no card flight or custom animation added; Reduce Motion inherits the platform |
 
 ## Deliberate divergences
 
@@ -109,7 +126,7 @@ Recorded here so they are not mistaken for missing work.
 | Time in retries | `Clock` dependency over coroutines | `ClockClient` with recording/gated doubles (D-21) |
 | Local-network denial | Android 17 permission preflight with a dedicated denial message | iOS does not expose a preflight; the shell shows a generic unreachable message plus a Local Network settings hint, never a denial claim (D-35) |
 | Storage identity | Android application id + keys | Keychain service derived at runtime from the configured bundle identifier; no historical identifier copied (D-32) |
-| Connected destination | Home drawer and session list | P5 shows the server and its project list; Home/sessions are P6/P7 (D-36) |
+| Connected destination | Home drawer and session list | P6 shows Home, the drawer and a session placeholder; P7 owns the session screen (D-36 superseded by D-43) |
 
 ## Test coverage
 
@@ -124,6 +141,7 @@ Recorded here so they are not mistaken for missing work.
 | Dependency isolation and transport boundary | `.../DependencyIsolationTests.swift`, `.../TransportBoundaryTests.swift`, `.../NetworkAndIsolationTests.swift` | done |
 | Store semantics | `OpenCodeAppTests/StoreSemanticsTests.swift` | done |
 | App reducer | `OpenCodeAppTests/AppFeatureTests.swift`, `ConnectionFeatureTests.swift`, `LaunchConfigurationTests.swift` | done |
+| Home reducer and persistence | `OpenCodeDrawerTests/HomeFeatureTests.swift` | done — 17 tests covering pins, unread, server isolation, visibility, search/paging, stale responses, deletion recovery, Catch Up, What's New, snapshot bounds/versioning/migration and read-receipt failure |
 | Server: address and cleartext policy | `OpenCodeServerTests/ServerAddressTests.swift` | done |
 | Server: address race | `.../ServerLinkTests.swift` | done |
 | Server: redirect rule | `.../RedirectRuleTests.swift` | done |
@@ -138,4 +156,4 @@ Recorded here so they are not mistaken for missing work.
 | Server: live read-only smoke | `.../LiveServerTests.swift` | run once manually; skipped by default |
 | Server: client requests | `.../OpenCodeClientTests.swift` | done |
 | Bounded channel | `OpenCodeCoreTests/BoundedChannelTests.swift` | done; one pre-existing timing-sensitive expectation flaked once and passed on rerun |
-| UI (XCUITest) | `OpenCodeUITests/{LaunchSmokeTests,ConnectionLifecycleUITests,KeychainProbeTests,SavedServerProbeTests}.swift` | done — 18 tests covering launch, manual entry from both storage-error screens, paste, connected/reconnecting, failures, deep-link confirmation, lifecycle fixture and Keychain restore |
+| UI (XCUITest) | `OpenCodeUITests/{LaunchSmokeTests,ConnectionLifecycleUITests,KeychainProbeTests,SavedServerProbeTests,HomeUITests,HomeScreenshotUITests,HomeScrollTraceUITests}.swift` | done — 26 tests; P6 adds drawer search/select, server switching, Catch Up mark/keep/undo/finish, What's New seen state, Dynamic Type, accessibility label/keyboard dismissal, screenshots and a measured scroll trace |

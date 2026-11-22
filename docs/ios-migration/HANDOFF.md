@@ -20,15 +20,17 @@ The Android tree is not modified by this work.
 ## Branches
 
 - `ios` — integration branch, base `7358160e808fb1870eeb20f5da8df832667019d1` (see `BASELINE.md`).
-  Head at Phase 5 start: `5f143ea7` (PR #3 merge).
+  Head at Phase 6 start: `3b34932c` (PR #4 merge).
 - `ios-foundation` — the scaffold. Squash-merged into `ios` as `143d8f86` (PR #1, closed).
 - `ios-core` — Phase 3 (tokens, motion, haptics, store gates). Merged into `ios` as `d0fdf2f5` (PR #2).
 - `ios-networking` — Phase 4. Squash-merged into `ios` as `5f143ea7` (PR #3); the merged tree is
   byte-identical to `2326a49b`.
 - `ios-shell` — Phase 5: launch, connection, pairing and reconnect; review corrections at `04da03cf`.
-  Draft PR into `ios`: https://github.com/Rift7/opencode-ios/pull/4
-- Later task branches from `ios` (`ios-home`, …) are pushed to the fork and opened as **draft**
-  PRs into `ios`. Nothing is merged, released or distributed from here.
+  Merged into `ios` as `3b34932c` (PR #4).
+- `ios-home` — Phase 6: Home, drawer, projects, Catch Up and What's New. Branched from `origin/ios`
+  `3b34932c`; draft PR into `ios` pending.
+- Later task branches from `ios` are pushed to the fork and opened as **draft** PRs into `ios`. Nothing is
+  merged, released or distributed from here.
 
 ## Prerequisites
 
@@ -106,79 +108,54 @@ message or file content.
 
 ## Where the work stands
 
-`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P4 are merged into `ios`;
-P5 (`ios-shell`) is implemented and ready for review. P6 starts from the updated `ios` after P5 merges.
+`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P5 are merged into `ios`;
+P6 is implemented on `ios-home` and is the phase P7 follows. Session, transcript and composer behavior is
+**not** claimed.
 
-What P5 added, in one paragraph: `AppFeature` restores the last server, saved list and a small project
-cache from the Keychain/UserDefaults through explicit `AppRestoreResult` outcomes; unreadable saved
-data is write-protected until a retry succeeds or the person explicitly replaces it; `ConnectionFeature`
-races every address with `ServerLink`, refreshes `/api/project`, and owns one event stream with awaited
-`EventStreamPhase` callbacks; every stream callback carries an attempt/stream token; one eligibility
-gate keeps work out of the background and offline until the path returns; reconnection and overflow
-re-read REST before the next socket; pasted and deep-linked pairing flows parse without network, with
-deep links held behind a confirmation; and `RootView` renders the disconnected, connecting, loading,
-connected, reconnecting, failure, storage and corrupt-data states from a String Catalog. Manual entry
-works from both storage-error screens, and the resulting connection keeps a Replace warning.
+What P6 added, in one paragraph: `HomeFeature` replaces the project-only connected destination with the
+authenticated Home — projects, the drawer's pinned/recent session lists, 50-session paging, local and
+server search, pins, unread/read state, attention/running dots, server switcher, delete-with-backup, Catch
+Up cards with Mark Read/Keep Unread/Undo and an All Caught Up finish, and a What's New row whose seen state
+persists. A versioned, bounded per-server Home snapshot (v1, 8 servers × 50 sessions) replaces the P5
+project-summary cache; the shell still owns the only event stream and forwards session events to Home.
+Session rows hand a stable `SessionSelection(serverID, sessionID, intent)` to the app, which renders a
+labeled placeholder until P7.
 
 Useful entry points:
 
 | Need | File |
 | --- | --- |
-| App restore, form, pairing, persistence | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` (`AppFeature`) |
-| Connection lifecycle and identity guards | same (`ConnectionFeature`, `ConnectionFeature.Token`, `canAttempt`) |
-| Saved-data trust and explicit replacement | same (`SavedDataState`, `replaceSavedDataConfirmed`) |
-| Address race | `OpenCodeKit/Sources/OpenCodeServer/Address/ServerLink.swift` |
-| Network path and retry environment | `OpenCodeCore/Network/NetworkPathClient.swift`, `OpenCodeServer/Retry/NetworkPathRetry.swift` |
-| Stream phases | `OpenCodeServer/Events/EventStream.swift` (`EventStreamPhase`) |
-| Launch scenarios for UI tests | `OpenCodeApp/AppLaunchConfiguration.swift` |
-| Connection UI and copy keys | `ios/OpenCode/App/RootView.swift`, `ios/OpenCode/Resources/Localizable.xcstrings` |
-| Compatible fixture connection | `OpenCodeServerTests/LocalFixtureServerTests.compatibleFixtureConnection` |
-| Device lifecycle fixture | `ios/OpenCode/App/UITestFixture.swift`, `OpenCodeUITests/ConnectionLifecycleUITests.swift` |
-| Device Keychain restore probe | `ios/OpenCode/App/SavedServerProbe.swift`, `OpenCodeUITests/SavedServerProbeTests.swift` |
+| Home reducer, local keys, search/paging, deletion, Catch Up, What's New | `OpenCodeKit/Sources/OpenCodeDrawer/HomeFeature.swift` |
+| Home models, snapshot store, keys, catalogue, selection | `OpenCodeKit/Sources/OpenCodeDrawer/HomeModels.swift` |
+| App ↔ Home ownership, connection delegates, server switch | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` |
+| Home/drawer/projects/Catch Up/What's New UI | `ios/OpenCode/Drawer/HomeView.swift` |
+| Session placeholder boundary | `ios/OpenCode/App/RootView.swift` (`SessionPlaceholderView`) |
+| Client read receipt, delete, attention | `OpenCodeKit/Sources/OpenCodeServer/Client/OpenCodeClient.swift` |
+| Fixture sessions and scroll fixture | `ios/OpenCode/App/UITestFixture.swift` |
+| UI journeys | `ios/OpenCodeUITests/HomeUITests.swift` |
+| Screenshots and scroll trace | `ios/OpenCodeUITests/{HomeScreenshotUITests,HomeScrollTraceUITests}.swift` |
+| Debug frame probe | `ios/OpenCode/Drawer/ScrollFrameProbe.swift` |
 
-Session and stream ownership (D-26/D-27): one request session per transport, one per stream connection;
-every connection exit closes its tasks and session. The connect deadline covers response headers.
-Overflow protection clears only after healthy consumption, not on `server.connected` (D-29); the
-transport's chunk buffer overflows into the same recoverable path (D-30); an HTML 2xx is an
-`.incompatibleAPI` failure, distinct from auth and connectivity (D-31).
+### P6 evidence
 
-Device work (one iPhone Air, debug build, configured development identity):
+- `swift test --package-path ios/OpenCodeKit`: 299 tests (161 server, 67 core, 54 app, 17 drawer).
+- `ios/scripts/verify.sh`: 26 UI tests pass, including 8 P6 tests; app build and `OpenCodeTests` pass.
+- Screenshots: `docs/ios-migration/screens/p6-{home,drawer,catch-up}[-dark].png`.
+- Scroll trace: 300-session fixture, iPhone 18 Pro Max simulator (iOS 27.2), 141–142 frames per
+  iteration, p50/p95 16.7 ms, one 33.3 ms frame, deceleration 2.428 s average. Simulator measurement only.
 
-- local-network prompt denied → `URLError -1009`, no request at the Mac fixture;
-- reinstalled, prompt allowed → `status=200` from the Mac's LAN fixture;
-- foreground haptics: first run nothing felt (System Haptics off), second run all eleven felt and
-  distinct after enabling it. Reported as one-device observations, not automated results.
+## Deferred P5 items — owner, phase and check
 
-P5 device status: the existing local development identity (not recorded here) builds, signs, installs
-and launches the app on the connected iPhone. `SavedServerProbeTests` reads two fake servers through
-`AppRestoreResult` using a disposable Keychain service, and `ConnectionLifecycleUITests` runs the real
-shell with a deterministic in-app client through connected → Home → activate → connected. Both pass on
-the device. A real LAN server, the local-network prompt and a real socket's background/foreground
-reconnect remain **unverified on hardware**.
-
-Live read-only smoke: `OPENCODE_LIVE_SERVER` + `OPENCODE_LIVE_PASSWORD` + `swift test --filter
-LiveServerTests` passed in P4 against `opencode serve 0.0.0-dev-202611170722` for `/api/session`,
-`/api/session/active`, `/api/event`, and for the compatibility classification.
-
-That build does not implement the audited `/api/info` and `/api/project`; unknown `/api/*` paths return
-its web shell (200 `text/html`), and `/project` has a different shape. The cause is the server build's
-route set, not auth (401 JSON works), prefix (`/api/session` works) or a proxy. The client does not
-remap routes. A compatible server must serve `/api/info` (`{version,pid}`), `/api/project` (bare array
-with `canonical`), `/api/session`, `/api/session/active` and `/api/event`; these requirements are in
-`PROTOCOL_COVERAGE.md`.
-
-Flaky test record: one first `verify.sh` run failed `BoundedChannelTests.waiterHandoff` on a 20 ms
-timing assumption. The test was not changed; later green runs do not establish the cause, and P5 is
-not claimed to have fixed it.
-
-Known unverified items:
-
-- `/api/info` and `/api/project` against a real V2 server (version mismatch above).
-- A real LAN server on the device, the local-network prompt and a real socket's background/foreground
-  reconnect. The device lifecycle check uses the deterministic in-app client.
-- Haptic feel beyond the one device; the local-network denial classification on other iOS versions.
-- Camera QR scanning, custom request headers and the copied error report (deferred in P5).
-- No live mutation was performed: the live suite is read-only by construction.
+| Item | Phase | Acceptance check |
+| --- | --- | --- |
+| Camera QR pairing | P11 | Device scan of a valid `opencode pair` code reaches the confirmation and redeems once; denied camera is a typed outcome. Simulator unverified. |
+| Custom headers | P11 | Keychain round-trip; headers apply only to their server's origins; an invalid header is refused without locking out. |
+| Copied error report | P11 | Copy contains typed facts only; redaction test fails on credentials/addresses/pairing codes/message text. |
+| Haptics feel | P14 | Eleven haptics felt and distinguished on hardware; simulator unverified. |
+| Local-network prompt / real socket | P14 | Denied prompt → no fixture request and unreachable copy; allowed → fixture request; real background/foreground socket reconnect. |
+| Production identifiers (bundle/team/App Group/Keychain) | P12/P14 | Owner-supplied identity builds and signs; credentials persist across relaunch; no historical values copied. |
+| Push notifications | P12 | Relay + credentials exist and the feature defaults off; without them, blocked/unverified. |
+| Session, transcript, composer | P7–P9 | P6's `SessionSelection` is consumed by P7; P8 transcript; P9 composer. |
 
 ## Phase-end checklist
 

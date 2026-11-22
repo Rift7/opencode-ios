@@ -1,0 +1,1412 @@
+import ComposableArchitecture
+import Foundation
+import OpenCodeCore
+import OpenCodeServer
+
+/// The connected home: the drawer's session lists, pins, read state, search, paging, Catch Up and
+/// What's New. `AppFeature` owns the connection and the event stream; this reducer is the one
+/// consumer of their results and re-reads REST after every reconnect or overflow.
+@Reducer
+public struct HomeFeature {
+  @ObservableState
+  public struct State: Equatable, Sendable {
+    public struct PageState: Equatable, Sendable {
+      public var next: String?
+      public var isLoading: Bool
+      public var failed: Bool
+      public var pagesLoaded: Int
+
+      public init(next: String? = nil, isLoading: Bool = false, failed: Bool = false, pagesLoaded: Int = 0) {
+        self.next = next
+        self.isLoading = isLoading
+        self.failed = failed
+        self.pagesLoaded = pagesLoaded
+      }
+
+      public var canLoad: Bool { next != nil && !isLoading && !failed }
+    }
+
+    public struct SearchState: Equatable, Sendable {
+      public var query: String
+      public var results: [OpenCodeSession]
+      public var next: String?
+      public var isLoading: Bool
+      public var failed: Bool
+
+      public init(
+        query: String,
+        results: [OpenCodeSession] = [],
+        next: String? = nil,
+        isLoading: Bool = false,
+        failed: Bool = false
+      ) {
+        self.query = query
+        self.results = results
+        self.next = next
+        self.isLoading = isLoading
+        self.failed = failed
+      }
+
+      public var canLoad: Bool { next != nil && !isLoading && !failed }
+    }
+
+    public struct DeletionBackup: Equatable, Sendable {
+      public var session: OpenCodeSession
+      public var index: Int
+      public var wasActive: Bool
+      public var neededAttention: Bool
+      /// False for a search-only match that the loaded list did not hold.
+      public var wasListed: Bool
+
+      public init(
+        session: OpenCodeSession,
+        index: Int,
+        wasActive: Bool,
+        neededAttention: Bool,
+        wasListed: Bool = true
+      ) {
+        self.session = session
+        self.index = index
+        self.wasActive = wasActive
+        self.neededAttention = neededAttention
+        self.wasListed = wasListed
+      }
+    }
+
+    public var server: OpenCodeServer
+    public var projects: [ServerProject]
+    public var sessions: [OpenCodeSession]
+    public var activeSessionIDs: Set<String>
+    public var attentionSessionIDs: Set<String>
+
+    public var pinnedKeys: [String]
+    public var readDates: [String: Date]
+    public var manuallyUnreadKeys: Set<String>
+    public var mutedKeys: Set<String>
+    public var hiddenKeys: Set<String>
+    public var lastViewed: [String: String]
+
+    public var searchText: String
+    public var search: SearchState?
+    public var page: PageState
+    public var isLive: Bool
+    public var hasLoaded: Bool
+    public var loadedFromCache: Bool
+    public var notice: HomeNotice?
+    public var isDrawerOpen: Bool
+    public var showsServerSwitcher: Bool
+
+    public var pendingDeletion: SessionDeletion?
+    public var recentDeletedIDs: Set<String>
+
+    public var catchUp: CatchUpState?
+    public var whatsNew: WhatsNewState
+    public var whatsNewEntries: [WhatsNewEntry]
+    public var catchUpFinished: Bool
+    public var isPinned: Bool
+
+    public var generation: Int
+    public var refreshRequest: Int
+    public var searchToken: Int
+    var isRefreshing: Bool
+    var refreshQueued: Bool
+    var readReceipts: [String: ReadReceipt]
+
+    public struct SessionDeletion: Equatable, Sendable {
+      public var session: OpenCodeSession
+
+      public init(session: OpenCodeSession) {
+        self.session = session
+      }
+    }
+
+    struct ReadReceipt: Equatable, Sendable {
+      var id: UUID
+      var idle: Int64
+      var backup: CatchUpState.ReadBackup
+    }
+
+    public init(
+      server: OpenCodeServer,
+      projects: [ServerProject] = [],
+      sessions: [OpenCodeSession] = [],
+      activeSessionIDs: Set<String> = [],
+      attentionSessionIDs: Set<String> = [],
+      pinnedKeys: [String] = [],
+      readDates: [String: Date] = [:],
+      manuallyUnreadKeys: Set<String> = [],
+      mutedKeys: Set<String> = [],
+      hiddenKeys: Set<String> = [],
+      lastViewed: [String: String] = [:],
+      searchText: String = "",
+      isLive: Bool = true,
+      hasLoaded: Bool = false,
+      loadedFromCache: Bool = false,
+      isDrawerOpen: Bool = false,
+      showsServerSwitcher: Bool = false,
+      whatsNew: WhatsNewState = WhatsNewState(),
+      whatsNewEntries: [WhatsNewEntry] = WhatsNewCatalog.migration.entries,
+      catchUpFinished: Bool = false,
+      isPinned: Bool = false
+    ) {
+      self.server = server
+      self.projects = projects
+      self.sessions = sessions
+      self.activeSessionIDs = activeSessionIDs
+      self.attentionSessionIDs = attentionSessionIDs
+      self.pinnedKeys = pinnedKeys
+      self.readDates = readDates
+      self.manuallyUnreadKeys = manuallyUnreadKeys
+      self.mutedKeys = mutedKeys
+      self.hiddenKeys = hiddenKeys
+      self.lastViewed = lastViewed
+      self.searchText = searchText
+      self.search = nil
+      self.page = PageState()
+      self.isLive = isLive
+      self.hasLoaded = hasLoaded
+      self.loadedFromCache = loadedFromCache
+      self.notice = nil
+      self.isDrawerOpen = isDrawerOpen
+      self.showsServerSwitcher = showsServerSwitcher
+      self.pendingDeletion = nil
+      self.recentDeletedIDs = []
+      self.catchUp = nil
+      self.whatsNew = whatsNew
+      self.whatsNewEntries = whatsNewEntries
+      self.catchUpFinished = catchUpFinished
+      self.isPinned = isPinned
+      self.generation = 1
+      self.refreshRequest = 0
+      self.searchToken = 0
+      self.isRefreshing = false
+      self.refreshQueued = false
+      self.readReceipts = [:]
+    }
+
+    /// Effect bookkeeping stays out of equality; tokens only guard late callbacks.
+    public static func == (lhs: State, rhs: State) -> Bool {
+      lhs.server == rhs.server
+        && lhs.projects == rhs.projects
+        && lhs.sessions == rhs.sessions
+        && lhs.activeSessionIDs == rhs.activeSessionIDs
+        && lhs.attentionSessionIDs == rhs.attentionSessionIDs
+        && lhs.pinnedKeys == rhs.pinnedKeys
+        && lhs.readDates == rhs.readDates
+        && lhs.manuallyUnreadKeys == rhs.manuallyUnreadKeys
+        && lhs.mutedKeys == rhs.mutedKeys
+        && lhs.hiddenKeys == rhs.hiddenKeys
+        && lhs.lastViewed == rhs.lastViewed
+        && lhs.searchText == rhs.searchText
+        && lhs.search == rhs.search
+        && lhs.page == rhs.page
+        && lhs.isLive == rhs.isLive
+        && lhs.hasLoaded == rhs.hasLoaded
+        && lhs.loadedFromCache == rhs.loadedFromCache
+        && lhs.notice == rhs.notice
+        && lhs.isDrawerOpen == rhs.isDrawerOpen
+        && lhs.showsServerSwitcher == rhs.showsServerSwitcher
+        && lhs.pendingDeletion == rhs.pendingDeletion
+        && lhs.recentDeletedIDs == rhs.recentDeletedIDs
+        && lhs.catchUp == rhs.catchUp
+        && lhs.whatsNew == rhs.whatsNew
+        && lhs.whatsNewEntries == rhs.whatsNewEntries
+        && lhs.catchUpFinished == rhs.catchUpFinished
+        && lhs.isPinned == rhs.isPinned
+    }
+
+    // MARK: Derived
+
+    public var serverID: String { server.persistenceID }
+
+    public func key(_ sessionID: String) -> String { "\(server.persistenceID)|\(sessionID)" }
+
+    public func isPinned(_ sessionID: String) -> Bool { pinnedKeys.contains(key(sessionID)) }
+
+    public func isHidden(_ sessionID: String) -> Bool { hiddenKeys.contains(key(sessionID)) }
+
+    public func isMuted(_ sessionID: String) -> Bool { mutedKeys.contains(key(sessionID)) }
+
+    public func isUnread(_ session: OpenCodeSession) -> Bool {
+      let key = key(session.id)
+      if manuallyUnreadKeys.contains(key) { return true }
+      if let idle = session.idleMilliseconds {
+        return idle > (session.viewedMilliseconds ?? -1)
+      }
+      if let read = readDates[key] { return read < session.updatedAt }
+      return true
+    }
+
+    public func indicator(_ session: OpenCodeSession) -> DrawerIndicator {
+      guard isLive else { return .none }
+      if attentionSessionIDs.contains(session.id) { return .attention }
+      if activeSessionIDs.contains(session.id) { return .running }
+      if isUnread(session), !isMuted(session.id) { return .unread }
+      return .none
+    }
+
+    /// Root sessions only; pinned and recent ordering is computed once per change.
+    public var visibleSessions: [OpenCodeSession] {
+      let roots = sessions.filter { $0.parentID == nil && !$0.isArchived }
+      guard !searchText.isEmpty else {
+        return roots.filter { !isHidden($0.id) && !recentDeletedIDs.contains($0.id) }
+      }
+      let local = roots.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+      guard let search else { return local }
+      var known = Set(roots.map(\.id))
+      var extra: [OpenCodeSession] = []
+      for result in search.results {
+        guard !known.contains(result.id), result.parentID == nil, !result.isArchived else { continue }
+        guard !recentDeletedIDs.contains(result.id) else { continue }
+        guard search.query == searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+          || result.title.localizedCaseInsensitiveContains(searchText)
+        else { continue }
+        known.insert(result.id)
+        extra.append(result)
+      }
+      return local + extra
+    }
+
+    public struct DrawerSessions: Equatable, Sendable {
+      public var pinned: [OpenCodeSession]
+      public var recents: [OpenCodeSession]
+
+      public init(pinned: [OpenCodeSession] = [], recents: [OpenCodeSession] = []) {
+        self.pinned = pinned
+        self.recents = recents
+      }
+    }
+
+    public var drawerSessions: DrawerSessions {
+      let visible = visibleSessions
+      let prefix = server.persistenceID + "|"
+      let pinnedIDs = pinnedKeys.compactMap { key -> String? in
+        guard key.hasPrefix(prefix) else { return nil }
+        return String(key.dropFirst(prefix.count))
+      }
+      guard !pinnedIDs.isEmpty else {
+        return DrawerSessions(recents: visible.sorted { $0.updatedAt > $1.updatedAt })
+      }
+      let pinnedSet = Set(pinnedIDs)
+      let byID = Dictionary(visible.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+      let pinned = pinnedIDs.compactMap { byID[$0] }
+      let recents = visible.filter { !pinnedSet.contains($0.id) }.sorted { $0.updatedAt > $1.updatedAt }
+      return DrawerSessions(pinned: pinned, recents: recents)
+    }
+
+    public func needsCatchUp(_ session: OpenCodeSession) -> Bool {
+      guard session.parentID == nil, !session.isArchived, !isMuted(session.id) else { return false }
+      switch indicator(session) {
+      case .attention, .unread: return true
+      case .running, .none: return false
+      }
+    }
+
+    /// Waiting first, then newest.
+    public var catchUpSessions: [OpenCodeSession] {
+      sessions
+        .filter { needsCatchUp($0) && !recentDeletedIDs.contains($0.id) }
+        .sorted { a, b in
+          let aWaiting = attentionSessionIDs.contains(a.id)
+          let bWaiting = attentionSessionIDs.contains(b.id)
+          if aWaiting != bWaiting { return aWaiting }
+          return a.updatedAt > b.updatedAt
+        }
+    }
+
+    public func session(_ id: String) -> OpenCodeSession? {
+      sessions.first { $0.id == id } ?? search?.results.first { $0.id == id }
+    }
+
+    public var unseenWhatsNew: [WhatsNewEntry] {
+      whatsNewEntries.filter { !whatsNew.seenIDs.contains($0.id) }
+    }
+
+    public var showsWhatsNewRow: Bool { !unseenWhatsNew.isEmpty }
+
+    public var catchUpCard: OpenCodeSession? {
+      guard let catchUp, let id = catchUp.queue.first else { return nil }
+      return session(id)
+    }
+
+    public func receiptID(for sessionID: String) -> UUID? {
+      readReceipts[sessionID]?.id
+    }
+
+    public var drawerBadge: DrawerIndicator? {
+      guard isLive else { return nil }
+      for session in sessions where !session.isArchived && !isMuted(session.id) {
+        if attentionSessionIDs.contains(session.id) { return .attention }
+      }
+      for session in sessions where !session.isArchived && !isMuted(session.id) {
+        if isUnread(session), indicator(session) == .unread { return .unread }
+      }
+      return nil
+    }
+  }
+
+  public enum Action: Equatable, Sendable {
+    case task
+    case localStateLoaded
+    case cacheLoaded(generation: Int, result: Result<HomeSnapshot?, HomeSnapshotFailure>)
+    case refreshed(
+      generation: Int,
+      request: Int,
+      result: Result<HomeRefresh, OpenCodeClientError>
+    )
+    case snapshotWritten(generation: Int, result: Result<Bool, HomeSnapshotFailure>)
+    case retryRefreshTapped
+    case connectionChanged(isConnected: Bool)
+    case projectsChanged([ServerProject])
+    case serverEvent(ServerEvent)
+
+    case attentionRefreshed(generation: Int, result: Result<Set<String>, OpenCodeClientError>)
+
+    case loadMoreTapped
+    case olderLoaded(generation: Int, cursor: String, result: Result<SessionPage, OpenCodeClientError>)
+    case searchChanged(String)
+    case searchLoaded(
+      generation: Int,
+      query: String,
+      token: Int,
+      appending: Bool,
+      result: Result<SessionPage, OpenCodeClientError>
+    )
+
+    case pinToggled(String)
+    case markReadTapped(String)
+    case markUnreadTapped(String)
+    case readReceiptFinished(
+      generation: Int,
+      sessionID: String,
+      receiptID: UUID,
+      result: Result<Bool, OpenCodeClientError>
+    )
+
+    case drawerToggled
+    case drawerDismissed
+    case sessionTapped(String)
+    case serverSwitcherTapped
+    case serverSwitcherDismissed
+    case savedServerSelected(OpenCodeServer)
+
+    case deleteTapped(String)
+    case deleteCancelled
+    case deleteConfirmed
+    case deletionFinished(
+      generation: Int,
+      backup: State.DeletionBackup,
+      result: Result<Bool, OpenCodeClientError>
+    )
+    case noticeExpired
+
+    case catchUpTapped
+    case catchUpCardDismissed(sessionID: String, disposition: CatchUpDisposition)
+    case catchUpUndoTapped
+    case catchUpExitTapped
+    case catchUpOpenTapped
+    case catchUpProblemDismissed
+
+    case whatsNewTapped
+    case whatsNewViewed
+    case whatsNewDismissed
+
+    case delegate(Delegate)
+  }
+
+  public enum Delegate: Equatable, Sendable {
+    case openSession(SessionSelection)
+    case switchServer(OpenCodeServer)
+    case disconnect
+  }
+
+  enum CancelID: Hashable {
+    case cache
+    case refresh
+    case attention
+    case olderPage
+    case search
+    case searchPage
+    case snapshotWrite
+    case notice
+    case readReceipt(String)
+    case deletion(String)
+  }
+
+  @Dependency(\.openCodeClient) private var client
+  @Dependency(\.clock) private var clock
+  @Dependency(\.sharedStore) private var store
+  @Dependency(\.homeSnapshotStore) private var snapshots
+  @Dependency(\.whatsNewCatalog) private var whatsNewCatalog
+  @Dependency(\.dateClient) private var date
+  @Dependency(\.uuidClient) private var uuid
+
+  public init() {}
+
+  public var body: some Reducer<State, Action> {
+    Reduce { state, action in
+      switch action {
+      case .task:
+        state.whatsNewEntries = whatsNewCatalog.entries
+        loadLocalState(&state)
+        guard !state.isPinned else {
+          state.hasLoaded = true
+          return .none
+        }
+        let generation = state.generation
+        return .merge(
+          cacheEffect(serverID: state.serverID, generation: generation),
+          startRefresh(&state, delay: .zero)
+        )
+
+      case .localStateLoaded:
+        loadLocalState(&state)
+        return .none
+
+      case .cacheLoaded(let generation, let result):
+        guard generation == state.generation, !state.isPinned else { return .none }
+        switch result {
+        case .success(let snapshot):
+          guard let snapshot, snapshot.serverID == state.serverID else { return .none }
+          state.loadedFromCache = true
+          state.hasLoaded = true
+          if state.projects.isEmpty { state.projects = snapshot.projects }
+          state.sessions = mergeSessions(snapshot.sessions, into: state)
+          state.activeSessionIDs = Set(snapshot.activeSessionIDs)
+          state.page.next = snapshot.nextCursor
+        case .failure(let failure):
+          state.notice = .couldNotReadSnapshot(failure)
+        }
+        return .none
+
+      case .refreshed(let generation, let request, let result):
+        guard generation == state.generation, !state.isPinned else { return .none }
+        guard request == state.refreshRequest else { return .none }
+        state.isRefreshing = false
+        switch result {
+        case .success(let refresh):
+          state.hasLoaded = true
+          state.loadedFromCache = false
+          state.sessions = mergeSessions(refresh.sessions, into: state)
+          state.activeSessionIDs = refresh.activeSessionIDs
+          state.page.next = refresh.next
+          state.page.failed = false
+          state.notice = nil
+          reconcileCatchUp(&state)
+          AppLog(category: .app).event(
+            .connectionReady,
+            [LogField("sessions", .count(state.sessions.count))]
+          )
+          let snapshot = makeSnapshot(state)
+          let attention = attentionEffect(&state)
+          let write = snapshotWriteEffect(snapshot: snapshot, generation: generation)
+          if state.refreshQueued {
+            state.refreshQueued = false
+            return .merge(write, attention, startRefresh(&state, delay: .milliseconds(250)))
+          }
+          return .merge(write, attention)
+        case .failure(let error):
+          state.notice = .couldNotRefresh(.from(error, isOffline: !state.isLive))
+          if state.refreshQueued {
+            state.refreshQueued = false
+            return startRefresh(&state, delay: .milliseconds(250))
+          }
+          return .none
+        }
+
+      case .snapshotWritten(let generation, let result):
+        guard generation == state.generation else { return .none }
+        if case .failure(let failure) = result {
+          state.notice = .couldNotSaveSnapshot(failure)
+        } else {
+          removeLegacyProjectSummary(serverID: state.serverID)
+        }
+        return .none
+
+      case .retryRefreshTapped:
+        return startRefresh(&state, delay: .zero)
+
+      case .connectionChanged(let isConnected):
+        if isConnected {
+          guard !state.isLive else { return .none }
+          state.isLive = true
+          return startRefresh(&state, delay: .zero)
+        }
+        guard state.isLive || state.isRefreshing else { return .none }
+        state.isLive = false
+        state.isRefreshing = false
+        state.refreshQueued = false
+        state.generation += 1
+        return cancelServerWork()
+
+      case .projectsChanged(let projects):
+        state.projects = projects
+        return .none
+
+      case .serverEvent(let event):
+        return reduce(event: event, state: &state)
+
+      case .attentionRefreshed(let generation, let result):
+        guard generation == state.generation, !state.isPinned else { return .none }
+        if case .success(let ids) = result {
+          state.attentionSessionIDs = ids
+          reconcileCatchUp(&state)
+        }
+        return .none
+
+      case .loadMoreTapped:
+        return loadMore(&state)
+
+      case .olderLoaded(let generation, let cursor, let result):
+        guard generation == state.generation, state.page.next == cursor else { return .none }
+        state.page.isLoading = false
+        switch result {
+        case .success(let page):
+          let known = Set(state.sessions.map(\.id))
+          let added = page.sessions.filter {
+            !known.contains($0.id) && !$0.isArchived && $0.parentID == nil
+              && !state.recentDeletedIDs.contains($0.id)
+          }
+          state.sessions += added
+          state.page.next = page.next
+          state.page.pagesLoaded += 1
+          state.page.failed = false
+          seedReadDates(&state, sessions: added)
+        case .failure:
+          state.page.failed = true
+          state.notice = .couldNotLoadOlder
+        }
+        return .none
+
+      case .searchChanged(let text):
+        return reduceSearchChanged(text, state: &state)
+
+      case .searchLoaded(let generation, let query, let token, let appending, let result):
+        guard generation == state.generation, token == state.searchToken else { return .none }
+        guard var search = state.search, search.query == query, state.searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else {
+          return .none
+        }
+        search.isLoading = false
+        switch result {
+        case .success(let page):
+          let accepted = page.sessions.filter {
+            $0.parentID == nil && !$0.isArchived && !state.recentDeletedIDs.contains($0.id)
+          }
+          seedReadDates(&state, sessions: accepted)
+          if appending {
+            let known = Set(search.results.map(\.id))
+            search.results += accepted.filter { !known.contains($0.id) }
+          } else {
+            search.results = accepted
+          }
+          search.next = page.next
+          search.failed = false
+        case .failure:
+          search.failed = true
+        }
+        state.search = search
+        return .none
+
+      case .pinToggled(let sessionID):
+        let key = state.key(sessionID)
+        if let index = state.pinnedKeys.firstIndex(of: key) {
+          state.pinnedKeys.remove(at: index)
+        } else {
+          state.pinnedKeys.append(key)
+        }
+        _ = store.write(state.pinnedKeys, for: HomeSharedKeys.pinnedSessions)
+        return .none
+
+      case .markReadTapped(let sessionID):
+        guard let session = state.session(sessionID) else { return .none }
+        let result = markRead(session, state: &state)
+        return result.effect
+
+      case .markUnreadTapped(let sessionID):
+        guard let session = state.session(sessionID) else { return .none }
+        markUnread(session, state: &state)
+        return .cancel(id: CancelID.readReceipt(session.id))
+
+      case .readReceiptFinished(let generation, let sessionID, let receiptID, let result):
+        guard generation == state.generation else { return .none }
+        guard let receipt = state.readReceipts[sessionID], receipt.id == receiptID else { return .none }
+        state.readReceipts[sessionID] = nil
+        switch result {
+        case .success:
+          if let idle = state.session(sessionID)?.idleMilliseconds {
+            _ = idle
+          }
+          if let index = state.sessions.firstIndex(where: { $0.id == sessionID }),
+            let idle = state.sessions[index].idleMilliseconds
+          {
+            state.sessions[index].viewedMilliseconds = max(state.sessions[index].viewedMilliseconds ?? 0, idle)
+          }
+        case .failure(let error):
+          restoreRead(receipt.backup, sessionID: sessionID, state: &state)
+          let title = state.session(sessionID)?.title ?? ""
+          if state.catchUp != nil {
+            state.catchUp?.problem = title
+          } else {
+            state.notice = .couldNotMarkRead(title: title)
+          }
+          _ = error
+        }
+        return .none
+
+      case .drawerToggled:
+        state.isDrawerOpen.toggle()
+        return .none
+
+      case .drawerDismissed:
+        state.isDrawerOpen = false
+        return .none
+
+      case .sessionTapped(let sessionID):
+        guard let session = state.session(sessionID) else { return .none }
+        state.isDrawerOpen = false
+        state.lastViewed[state.serverID] = sessionID
+        _ = store.write(state.lastViewed, for: HomeSharedKeys.lastViewedSessions)
+        let read = markRead(session, state: &state)
+        return .merge(
+          read.effect,
+          .send(.delegate(.openSession(SessionSelection(serverID: state.serverID, sessionID: sessionID, intent: .browse))))
+        )
+
+      case .serverSwitcherTapped:
+        state.showsServerSwitcher = true
+        return .none
+
+      case .serverSwitcherDismissed:
+        state.showsServerSwitcher = false
+        return .none
+
+      case .savedServerSelected(let server):
+        state.showsServerSwitcher = false
+        return .send(.delegate(.switchServer(server)))
+
+      case .deleteTapped(let sessionID):
+        guard let session = state.session(sessionID) else { return .none }
+        state.pendingDeletion = State.SessionDeletion(session: session)
+        return .none
+
+      case .deleteCancelled:
+        state.pendingDeletion = nil
+        return .none
+
+      case .deleteConfirmed:
+        return confirmDeletion(&state)
+
+      case .deletionFinished(let generation, let backup, let result):
+        guard generation == state.generation else { return .none }
+        switch result {
+        case .success:
+          purgeLocalRecords(backup.session, state: &state)
+          state.recentDeletedIDs.remove(backup.session.id)
+          return .none
+        case .failure:
+          restoreDeletion(backup, state: &state)
+          state.notice = .couldNotDelete(title: backup.session.title)
+          let clock = clock
+          return .run { send in
+            try? await clock.sleep(.seconds(5))
+            await send(.noticeExpired)
+          }
+          .cancellable(id: CancelID.notice, cancelInFlight: true)
+        }
+
+      case .noticeExpired:
+        state.notice = nil
+        return .none
+
+      case .catchUpTapped:
+        state.catchUpFinished = false
+        state.catchUp = CatchUpState(
+          queue: state.catchUpSessions.map(\.id),
+          handled: [],
+          returnSessionID: state.lastViewed[state.serverID]
+        )
+        return .none
+
+      case .catchUpCardDismissed(let sessionID, let disposition):
+        return dismissCatchUpCard(sessionID: sessionID, disposition: disposition, state: &state)
+
+      case .catchUpUndoTapped:
+        return undoLastCatchUpCard(&state)
+
+      case .catchUpExitTapped:
+        state.catchUp = nil
+        return .none
+
+      case .catchUpOpenTapped:
+        guard let catchUp = state.catchUp, let id = catchUp.queue.first else { return .none }
+        return .send(
+          .delegate(.openSession(SessionSelection(serverID: state.serverID, sessionID: id, intent: .catchUpCard)))
+        )
+
+      case .catchUpProblemDismissed:
+        state.catchUp?.problem = nil
+        return .none
+
+      case .whatsNewTapped:
+        state.whatsNew.isPresented = true
+        return .none
+
+      case .whatsNewViewed:
+        markWhatsNewSeen(&state)
+        return .none
+
+      case .whatsNewDismissed:
+        state.whatsNew.isPresented = false
+        markWhatsNewSeen(&state)
+        return .none
+
+      case .delegate:
+        return .none
+      }
+    }
+  }
+
+  // MARK: Local state
+
+  private func loadLocalState(_ state: inout State) {
+    if case .value(let value) = store.read(HomeSharedKeys.pinnedSessions) { state.pinnedKeys = value }
+    if case .value(let value) = store.read(HomeSharedKeys.sessionReadDates) { state.readDates = value }
+    if case .value(let value) = store.read(HomeSharedKeys.manuallyUnreadSessions) { state.manuallyUnreadKeys = value }
+    if case .value(let value) = store.read(HomeSharedKeys.mutedSessions) { state.mutedKeys = value }
+    if case .value(let value) = store.read(HomeSharedKeys.hiddenSessions) { state.hiddenKeys = value }
+    if case .value(let value) = store.read(HomeSharedKeys.lastViewedSessions) { state.lastViewed = value }
+    if case .value(let value) = store.read(HomeSharedKeys.whatsNewSeen) { state.whatsNew.seenIDs = value }
+  }
+
+  private func seedReadDates(_ state: inout State, sessions: [OpenCodeSession]) {
+    var changed = false
+    for session in sessions where session.idleMilliseconds == nil {
+      let key = state.key(session.id)
+      if state.readDates[key] == nil, session.viewedMilliseconds != nil {
+        state.readDates[key] = session.updatedAt
+        changed = true
+      }
+    }
+    if changed { _ = store.write(state.readDates, for: HomeSharedKeys.sessionReadDates) }
+  }
+
+  // MARK: Refresh
+
+  private func startRefresh(_ state: inout State, delay: Duration) -> Effect<Action> {
+    guard state.isLive, !state.isPinned else { return .none }
+    if state.isRefreshing {
+      state.refreshQueued = true
+      return .none
+    }
+    state.isRefreshing = true
+    state.refreshRequest += 1
+    let request = state.refreshRequest
+    let generation = state.generation
+    let server = state.server
+    let client = client
+    let clock = clock
+    return .run { send in
+      do {
+        if delay > .zero { try await clock.sleep(delay) }
+        async let page = client.sessionPage(server, .first, 50)
+        async let active = client.activeSessionIDs(server)
+        let (loaded, running) = try await (page, active)
+        await send(
+          .refreshed(
+            generation: generation,
+            request: request,
+            result: .success(
+              HomeRefresh(sessions: loaded.sessions, next: loaded.next, activeSessionIDs: running)
+            )
+          )
+        )
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        await send(.refreshed(generation: generation, request: request, result: .failure(error)))
+      } catch {
+        await send(.refreshed(generation: generation, request: request, result: .failure(OpenCodeClientError(.unreachable))))
+      }
+    }
+    .cancellable(id: CancelID.refresh, cancelInFlight: true)
+  }
+
+  private func cacheEffect(serverID: String, generation: Int) -> Effect<Action> {
+    let snapshots = snapshots
+    return .run { send in
+      let result = await snapshots.read(serverID)
+      await send(.cacheLoaded(generation: generation, result: result))
+    }
+    .cancellable(id: CancelID.cache, cancelInFlight: true)
+  }
+
+  private func snapshotWriteEffect(snapshot: HomeSnapshot, generation: Int) -> Effect<Action> {
+    let snapshots = snapshots
+    return .run { send in
+      let result = await snapshots.write(snapshot)
+      await send(
+        .snapshotWritten(
+          generation: generation,
+          result: result.map { _ in true }
+        )
+      )
+    }
+    .cancellable(id: CancelID.snapshotWrite, cancelInFlight: true)
+  }
+
+  private func makeSnapshot(_ state: State) -> HomeSnapshot {
+    HomeSnapshot(
+      serverID: state.serverID,
+      projects: state.projects,
+      sessions: state.sessions.filter { $0.parentID == nil && !$0.isArchived }
+        .sorted { $0.updatedAt > $1.updatedAt },
+      activeSessionIDs: state.activeSessionIDs,
+      nextCursor: state.page.next,
+      capturedAt: date.now()
+    )
+  }
+
+  /// REST already fetched the fresh page; older pages this phone loaded are kept so a refresh does
+  /// not collapse the list under the reader.
+  private func mergeSessions(_ fresh: [OpenCodeSession], into state: State) -> [OpenCodeSession] {
+    let accepted = fresh.filter {
+      $0.parentID == nil && !$0.isArchived && !state.recentDeletedIDs.contains($0.id)
+    }
+    guard state.page.pagesLoaded > 0 else { return accepted }
+    let freshIDs = Set(accepted.map(\.id))
+    let kept = state.sessions.filter {
+      !freshIDs.contains($0.id) && !$0.isArchived && $0.parentID == nil
+        && !state.recentDeletedIDs.contains($0.id)
+    }
+    return (accepted + kept).sorted { $0.updatedAt > $1.updatedAt }
+  }
+
+  private func removeLegacyProjectSummary(serverID: String) {
+    guard case .value(var summaries) = store.read(ServerSharedKeys.cachedSummaries),
+      summaries[serverID] != nil
+    else { return }
+    summaries[serverID] = nil
+    _ = store.write(summaries, for: ServerSharedKeys.cachedSummaries)
+  }
+
+  // MARK: Attention
+
+  private func attentionEffect(_ state: inout State) -> Effect<Action> {
+    guard !state.isPinned else { return .none }
+    let directories = attentionDirectories(state)
+    guard !directories.isEmpty else {
+      state.attentionSessionIDs = []
+      return .none
+    }
+    let server = state.server
+    let roots = state.sessions
+    let generation = state.generation
+    let client = client
+    return .run { send in
+      do {
+        let ids = try await client.attentionSessionIDs(server, roots, directories)
+        await send(.attentionRefreshed(generation: generation, result: .success(ids)))
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        await send(.attentionRefreshed(generation: generation, result: .failure(error)))
+      } catch {
+        await send(.attentionRefreshed(generation: generation, result: .failure(OpenCodeClientError(.unreachable))))
+      }
+    }
+    .cancellable(id: CancelID.attention, cancelInFlight: true)
+  }
+
+  /// Only running, waiting and recently-read sessions can hold a request; a location read boots the
+  /// server's full service graph for that directory, so the set stays small.
+  private func attentionDirectories(_ state: State) -> [String] {
+    let hot = state.sessions
+      .filter {
+        state.activeSessionIDs.contains($0.id)
+          || state.attentionSessionIDs.contains($0.id)
+          || state.lastViewed[state.serverID] == $0.id
+      }
+      .sorted { $0.updatedAt > $1.updatedAt }
+    var seen = Set<String>()
+    return hot.compactMap { session in
+      let directory = session.directory.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !directory.isEmpty, seen.insert(directory).inserted else { return nil }
+      return directory
+    }
+    .prefix(8)
+    .map { $0 }
+  }
+
+  // MARK: Server events
+
+  private func reduce(event: ServerEvent, state: inout State) -> Effect<Action> {
+    switch event {
+    case .connected:
+      return .none
+    case .sessionCreated, .sessionArchiveChanged(_, false):
+      return startRefresh(&state, delay: .milliseconds(250))
+    case .sessionRenamed(let id, let title):
+      if let index = state.sessions.firstIndex(where: { $0.id == id }) {
+        state.sessions[index].serverTitle = title
+        return .none
+      }
+      return startRefresh(&state, delay: .milliseconds(250))
+    case .sessionMoved(let id, let directory):
+      if let index = state.sessions.firstIndex(where: { $0.id == id }) {
+        state.sessions[index].directory = directory
+        return .none
+      }
+      return .none
+    case .sessionViewChanged(let id, let idle):
+      if let index = state.sessions.firstIndex(where: { $0.id == id }) {
+        state.sessions[index].viewedMilliseconds = max(state.sessions[index].viewedMilliseconds ?? 0, idle)
+        state.manuallyUnreadKeys.remove(state.key(id))
+        _ = store.write(state.manuallyUnreadKeys, for: HomeSharedKeys.manuallyUnreadSessions)
+      }
+      return .none
+    case .sessionDeleted(let id):
+      state.sessions.removeAll { $0.id == id }
+      state.activeSessionIDs.remove(id)
+      state.attentionSessionIDs.remove(id)
+      state.recentDeletedIDs.remove(id)
+      return .none
+    case .sessionArchiveChanged(let id, true):
+      state.sessions.removeAll { $0.id == id }
+      state.activeSessionIDs.remove(id)
+      state.attentionSessionIDs.remove(id)
+      return .none
+    case .executionStarted(let id):
+      state.activeSessionIDs.insert(id)
+      return .none
+    case .executionEnded(let id):
+      state.activeSessionIDs.remove(id)
+      return startRefresh(&state, delay: .milliseconds(250))
+    case .attentionChanged:
+      return attentionEffect(&state)
+    case .projectUpdated(let project):
+      if let index = state.projects.firstIndex(where: { $0.id == project.id }) {
+        state.projects[index] = project
+      } else {
+        state.projects.append(project)
+      }
+      return .none
+    default:
+      return .none
+    }
+  }
+
+  // MARK: Read state
+
+  @discardableResult
+  private func markRead(_ session: OpenCodeSession, state: inout State) -> (backup: CatchUpState.ReadBackup?, effect: Effect<Action>) {
+    let key = state.key(session.id)
+    let backup = CatchUpState.ReadBackup(
+      idleMilliseconds: session.idleMilliseconds,
+      viewedMilliseconds: session.viewedMilliseconds,
+      readDate: state.readDates[key],
+      wasManuallyUnread: state.manuallyUnreadKeys.contains(key)
+    )
+    state.readDates[key] = max(state.readDates[key] ?? .distantPast, session.updatedAt)
+    state.manuallyUnreadKeys.remove(key)
+    if let idle = session.idleMilliseconds, idle > 0,
+      let index = state.sessions.firstIndex(where: { $0.id == session.id })
+    {
+      state.sessions[index].viewedMilliseconds = max(state.sessions[index].viewedMilliseconds ?? 0, idle)
+    }
+    _ = store.write(state.readDates, for: HomeSharedKeys.sessionReadDates)
+    _ = store.write(state.manuallyUnreadKeys, for: HomeSharedKeys.manuallyUnreadSessions)
+    guard let idle = session.idleMilliseconds, idle > 0 else {
+      return (backup, .none)
+    }
+    let receiptID = uuid.uuid()
+    state.readReceipts[session.id] = State.ReadReceipt(id: receiptID, idle: idle, backup: backup)
+    let server = state.server
+    let client = client
+    let generation = state.generation
+    let sessionID = session.id
+    let effect = Effect<Action>.run { send in
+      do {
+        try await client.viewSession(server, sessionID, idle)
+        await send(
+          .readReceiptFinished(
+            generation: generation,
+            sessionID: sessionID,
+            receiptID: receiptID,
+            result: .success(true)
+          )
+        )
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        await send(
+          .readReceiptFinished(
+            generation: generation,
+            sessionID: sessionID,
+            receiptID: receiptID,
+            result: .failure(error)
+          )
+        )
+      } catch {
+        await send(
+          .readReceiptFinished(
+            generation: generation,
+            sessionID: sessionID,
+            receiptID: receiptID,
+            result: .failure(OpenCodeClientError(.unreachable))
+          )
+        )
+      }
+    }
+    .cancellable(id: CancelID.readReceipt(session.id), cancelInFlight: true)
+    return (backup, effect)
+  }
+
+  private func markUnread(_ session: OpenCodeSession, state: inout State) {
+    let key = state.key(session.id)
+    state.readDates[key] = session.updatedAt.addingTimeInterval(-1)
+    state.manuallyUnreadKeys.insert(key)
+    state.readReceipts[session.id] = nil
+    _ = store.write(state.readDates, for: HomeSharedKeys.sessionReadDates)
+    _ = store.write(state.manuallyUnreadKeys, for: HomeSharedKeys.manuallyUnreadSessions)
+  }
+
+  private func restoreRead(_ backup: CatchUpState.ReadBackup, sessionID: String, state: inout State) {
+    let key = state.key(sessionID)
+    if let readDate = backup.readDate {
+      state.readDates[key] = readDate
+    } else {
+      state.readDates[key] = nil
+    }
+    if backup.wasManuallyUnread {
+      state.manuallyUnreadKeys.insert(key)
+    } else {
+      state.manuallyUnreadKeys.remove(key)
+    }
+    if let index = state.sessions.firstIndex(where: { $0.id == sessionID }) {
+      state.sessions[index].viewedMilliseconds = backup.viewedMilliseconds
+    }
+    _ = store.write(state.readDates, for: HomeSharedKeys.sessionReadDates)
+    _ = store.write(state.manuallyUnreadKeys, for: HomeSharedKeys.manuallyUnreadSessions)
+  }
+
+  // MARK: Search and paging
+
+  private func reduceSearchChanged(_ text: String, state: inout State) -> Effect<Action> {
+    state.searchText = text
+    state.searchToken += 1
+    let token = state.searchToken
+    let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !query.isEmpty else {
+      state.search = nil
+      return .merge(.cancel(id: CancelID.search), .cancel(id: CancelID.searchPage))
+    }
+    // With every page already loaded, the local filter answers and no socket is opened.
+    if state.page.next == nil && !state.page.failed {
+      state.search = nil
+      return .merge(.cancel(id: CancelID.search), .cancel(id: CancelID.searchPage))
+    }
+    let kept = (state.search?.results ?? []).filter {
+      $0.title.localizedCaseInsensitiveContains(query)
+    }
+    state.search = State.SearchState(query: query, results: kept, isLoading: true)
+    let server = state.server
+    let generation = state.generation
+    let client = client
+    let clock = clock
+    return .run { send in
+      do {
+        try await clock.sleep(.milliseconds(250))
+        let page = try await client.sessionPage(server, .search(query), 50)
+        await send(
+          .searchLoaded(
+            generation: generation,
+            query: query,
+            token: token,
+            appending: false,
+            result: .success(page)
+          )
+        )
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        await send(
+          .searchLoaded(generation: generation, query: query, token: token, appending: false, result: .failure(error))
+        )
+      } catch {
+        await send(
+          .searchLoaded(
+            generation: generation,
+            query: query,
+            token: token,
+            appending: false,
+            result: .failure(OpenCodeClientError(.unreachable))
+          )
+        )
+      }
+    }
+    .cancellable(id: CancelID.search, cancelInFlight: true)
+  }
+
+  private func loadMore(_ state: inout State) -> Effect<Action> {
+    if let search = state.search, search.canLoad, let cursor = search.next {
+      state.search?.isLoading = true
+      let server = state.server
+      let generation = state.generation
+      let token = state.searchToken
+      let query = search.query
+      let client = client
+      return .run { send in
+        do {
+          let page = try await client.sessionPage(server, .after(cursor), 50)
+          await send(
+            .searchLoaded(
+              generation: generation,
+              query: query,
+              token: token,
+              appending: true,
+              result: .success(page)
+            )
+          )
+        } catch is CancellationError {
+          return
+        } catch let error as OpenCodeClientError {
+          await send(
+            .searchLoaded(generation: generation, query: query, token: token, appending: true, result: .failure(error))
+          )
+        } catch {
+          await send(
+            .searchLoaded(
+              generation: generation,
+              query: query,
+              token: token,
+              appending: true,
+              result: .failure(OpenCodeClientError(.unreachable))
+            )
+          )
+        }
+      }
+      .cancellable(id: CancelID.searchPage, cancelInFlight: true)
+    }
+    guard state.searchText.isEmpty, let cursor = state.page.next, state.page.canLoad else {
+      return .none
+    }
+    state.page.isLoading = true
+    let server = state.server
+    let generation = state.generation
+    let client = client
+    return .run { send in
+      do {
+        let page = try await client.sessionPage(server, .after(cursor), 50)
+        await send(.olderLoaded(generation: generation, cursor: cursor, result: .success(page)))
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        await send(.olderLoaded(generation: generation, cursor: cursor, result: .failure(error)))
+      } catch {
+        await send(.olderLoaded(generation: generation, cursor: cursor, result: .failure(OpenCodeClientError(.unreachable))))
+      }
+    }
+    .cancellable(id: CancelID.olderPage, cancelInFlight: true)
+  }
+
+  // MARK: Deletion
+
+  private func confirmDeletion(_ state: inout State) -> Effect<Action> {
+    guard let pending = state.pendingDeletion else { return .none }
+    let session = pending.session
+    state.pendingDeletion = nil
+    guard let index = state.sessions.firstIndex(where: { $0.id == session.id }) else {
+      // A search-only row is not in the list; drop it from results and delete on the server.
+      state.search?.results.removeAll { $0.id == session.id }
+      state.recentDeletedIDs.insert(session.id)
+      return deletionEffect(session: session, backup: nil, state: &state)
+    }
+    let backup = State.DeletionBackup(
+      session: session,
+      index: index,
+      wasActive: state.activeSessionIDs.contains(session.id),
+      neededAttention: state.attentionSessionIDs.contains(session.id)
+    )
+    state.sessions.remove(at: index)
+    state.activeSessionIDs.remove(session.id)
+    state.attentionSessionIDs.remove(session.id)
+    state.search?.results.removeAll { $0.id == session.id }
+    state.recentDeletedIDs.insert(session.id)
+    return deletionEffect(session: session, backup: backup, state: &state)
+  }
+
+  private func deletionEffect(
+    session: OpenCodeSession,
+    backup: State.DeletionBackup?,
+    state: inout State
+  ) -> Effect<Action> {
+    let server = state.server
+    let client = client
+    let generation = state.generation
+    let placeholder =
+      backup
+      ?? State.DeletionBackup(
+        session: session,
+        index: 0,
+        wasActive: false,
+        neededAttention: false,
+        wasListed: false
+      )
+    return .run { send in
+      do {
+        try await client.deleteSession(server, session.id)
+        await send(.deletionFinished(generation: generation, backup: placeholder, result: .success(true)))
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        await send(.deletionFinished(generation: generation, backup: placeholder, result: .failure(error)))
+      } catch {
+        await send(
+          .deletionFinished(generation: generation, backup: placeholder, result: .failure(OpenCodeClientError(.unreachable)))
+        )
+      }
+    }
+    .cancellable(id: CancelID.deletion(session.id), cancelInFlight: true)
+  }
+
+  private func restoreDeletion(_ backup: State.DeletionBackup, state: inout State) {
+    state.recentDeletedIDs.remove(backup.session.id)
+    if !backup.wasListed {
+      if !(state.search?.results.contains(where: { $0.id == backup.session.id }) ?? false) {
+        state.search?.results.append(backup.session)
+      }
+      return
+    }
+    guard !state.sessions.contains(where: { $0.id == backup.session.id }) else { return }
+    let index = min(backup.index, state.sessions.count)
+    state.sessions.insert(backup.session, at: index)
+    if backup.wasActive { state.activeSessionIDs.insert(backup.session.id) }
+    if backup.neededAttention { state.attentionSessionIDs.insert(backup.session.id) }
+  }
+
+  /// A confirmed server delete also drops this phone's records for the session.
+  private func purgeLocalRecords(_ session: OpenCodeSession, state: inout State) {
+    let key = state.key(session.id)
+    state.pinnedKeys.removeAll { $0 == key }
+    state.readDates[key] = nil
+    state.manuallyUnreadKeys.remove(key)
+    state.mutedKeys.remove(key)
+    state.hiddenKeys.remove(key)
+    _ = store.write(state.pinnedKeys, for: HomeSharedKeys.pinnedSessions)
+    _ = store.write(state.readDates, for: HomeSharedKeys.sessionReadDates)
+    _ = store.write(state.manuallyUnreadKeys, for: HomeSharedKeys.manuallyUnreadSessions)
+    _ = store.write(state.mutedKeys, for: HomeSharedKeys.mutedSessions)
+    _ = store.write(state.hiddenKeys, for: HomeSharedKeys.hiddenSessions)
+  }
+
+  // MARK: Catch Up
+
+  /// Follows reads, answers and new activity while the stack is open. The front card stays until
+  /// the reader moves it along.
+  private func reconcileCatchUp(_ state: inout State) {
+    if state.catchUp == nil, !state.catchUpSessions.isEmpty { state.catchUpFinished = false }
+    guard var catchUp = state.catchUp else { return }
+    let candidates = state.catchUpSessions
+    let front = catchUp.queue.first
+    var queue = catchUp.queue.filter { id in
+      if id == front { return true }
+      guard let session = state.session(id) else { return false }
+      return state.needsCatchUp(session)
+    }
+    let queued = Set(queue)
+    let handled = Dictionary(catchUp.handled.map { ($0.sessionID, $0) }, uniquingKeysWith: { _, last in last })
+    for candidate in candidates where !queued.contains(candidate.id) {
+      if let past = handled[candidate.id],
+        !past.isSuperseded(
+          by: candidate,
+          needsAttention: state.attentionSessionIDs.contains(candidate.id)
+        )
+      {
+        continue
+      }
+      queue.append(candidate.id)
+    }
+    catchUp.queue = queue
+    state.catchUp = catchUp
+    if !catchUp.queue.isEmpty || !candidates.isEmpty { state.catchUpFinished = false }
+  }
+
+  private func dismissCatchUpCard(
+    sessionID: String,
+    disposition: CatchUpDisposition,
+    state: inout State
+  ) -> Effect<Action> {
+    guard var catchUp = state.catchUp, catchUp.queue.first == sessionID else { return .none }
+    guard let session = state.session(sessionID) else { return .none }
+    let neededAttention = state.attentionSessionIDs.contains(sessionID)
+    var effect: Effect<Action> = .none
+    var backup: CatchUpState.ReadBackup?
+    if disposition == .markRead {
+      let read = markRead(session, state: &state)
+      backup = read.backup
+      effect = read.effect
+    }
+    catchUp.queue.removeFirst()
+    catchUp.handled.append(
+      CatchUpState.Handled(
+        sessionID: sessionID,
+        disposition: disposition,
+        idleMilliseconds: session.idleMilliseconds,
+        updatedAt: session.updatedAt,
+        neededAttention: neededAttention
+      )
+    )
+    catchUp.lastUndo = CatchUpState.Undo(
+      sessionID: sessionID,
+      disposition: disposition,
+      backup: backup
+    )
+    catchUp.problem = nil
+    if catchUp.queue.isEmpty {
+      state.catchUp = nil
+      state.catchUpFinished = true
+      state.isDrawerOpen = true
+    } else {
+      state.catchUp = catchUp
+    }
+    return effect
+  }
+
+  private func undoLastCatchUpCard(_ state: inout State) -> Effect<Action> {    guard var catchUp = state.catchUp, let undo = catchUp.lastUndo else { return .none }
+    if let backup = undo.backup {
+      restoreRead(backup, sessionID: undo.sessionID, state: &state)
+      state.readReceipts[undo.sessionID] = nil
+    }
+    catchUp.handled.removeAll { $0.sessionID == undo.sessionID }
+    catchUp.queue.removeAll { $0 == undo.sessionID }
+    catchUp.queue.insert(undo.sessionID, at: 0)
+    catchUp.lastUndo = nil
+    catchUp.problem = nil
+    state.catchUp = catchUp
+    return .cancel(id: CancelID.readReceipt(undo.sessionID))
+  }
+
+  // MARK: What's New
+
+  private func markWhatsNewSeen(_ state: inout State) {
+    let ids = Set(state.whatsNewEntries.map(\.id))
+    guard !ids.isSubset(of: state.whatsNew.seenIDs) else { return }
+    state.whatsNew.seenIDs.formUnion(ids)
+    _ = store.write(state.whatsNew.seenIDs, for: HomeSharedKeys.whatsNewSeen)
+  }
+
+  // MARK: Cancellation
+
+  private func cancelServerWork() -> Effect<Action> {
+    .merge(
+      .cancel(id: CancelID.refresh),
+      .cancel(id: CancelID.attention),
+      .cancel(id: CancelID.olderPage),
+      .cancel(id: CancelID.search),
+      .cancel(id: CancelID.searchPage),
+      .cancel(id: CancelID.cache),
+      .cancel(id: CancelID.snapshotWrite),
+      .cancel(id: CancelID.notice)
+    )
+  }
+}

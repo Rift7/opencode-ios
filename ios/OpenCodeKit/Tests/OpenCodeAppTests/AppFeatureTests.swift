@@ -2,6 +2,7 @@ import ComposableArchitecture
 import Foundation
 import OpenCodeApp
 import OpenCodeCore
+import OpenCodeDrawer
 import OpenCodeServer
 import OpenCodeTestSupport
 import Synchronization
@@ -809,6 +810,32 @@ struct AppFeatureTests {
       waitUntilAvailable: {}
     )
   }
+
+  @Test("a Home server switch replaces the connection")
+  func homeServerSwitch() async {
+    var state = AppFeature.State()
+    state.isPinnedForUITest = true
+    state.savedData = .read
+    state.connection = ConnectionFeature.State(
+      id: 1,
+      server: TestServer.server,
+      phase: .connected,
+      projects: [],
+      isPinned: true
+    )
+    state.home = HomeFeature.State(server: TestServer.server, isPinned: true)
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.sharedStore = self.storage()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.home(.delegate(.switchServer(TestServer.other))))
+    #expect(store.state.connection?.server == TestServer.other)
+    #expect(store.state.home == nil)
+  }
+
 }
 
 final class ToggleStorage: KeyValueStorage, Sendable {

@@ -47,7 +47,7 @@ uses: unknown keys ignored, absent optionals nil, a present wrong type rejects t
 | GET | `/api/info` | `live/LiveConnection.kt` `requestHealth` (`5e4b4219`, 2026-11-16), `ServerInfoPayload` | `ServerInfo`, `Operations.health` | implemented + tested: 3.5 s, one attempt, redirects refused, address-identification rule |
 | GET | `/auth/connect/{code}` | `live/LiveConnection.kt` `requestRedeemPairing` | `Operations.redeemPairing` | implemented + tested: one GET per candidate, no `Authorization`, 15 s, `.unsafe`, redirects refused, 401/404 copy |
 | GET | `/api/project` | `live/LiveFamily.kt` | `Operations.projects`, `ProjectPayload` | implemented + tested: bare array, display-name and repository-slug rules |
-| GET | `/api/session` | `live/LiveSessions.kt` `requestSessionPage`, `requestRootSessions` (`8566441f`, 2026-11-17) | `Operations.sessionPage` | implemented + tested: `limit,parentID=null,archived=false,order=desc,search`, cursor page, archived/child filter, empty-page end |
+| GET | `/api/session` | `live/LiveSessions.kt` `requestSessionPage`, `requestRootSessions` (`8566441f`, 2026-11-17) | `Operations.sessionPage` | implemented + tested: first page (`limit,parentID=null,archived=false,order=desc`), `search`, cursor page, archived/child filter, empty-page end |
 | GET | `/api/session/{id}` | same | `Operations.getSession` | implemented + tested: `time.updated` ms, title placeholder, archive, revert, notification metadata |
 | GET | `/api/session/active` | `live/LiveSessions.kt`, `live/LiveFamily.kt` | `Operations.activeSessionIDs` | implemented + tested: map envelope |
 | GET | `/api/event` | `live/LiveEvents.kt` (`4c1e0054`, 2026-11-20) | `EventStream`, `EventStreamRunner` | implemented + tested: SSE, batching, watchdog, 401 stop, reconnect |
@@ -56,12 +56,12 @@ uses: unknown keys ignored, absent optionals nil, a present wrong type rejects t
 | GET | `/api/session/{id}/message/{messageID}` | same | — | deferred to P8 |
 | POST | `/api/session/{id}/prompt` (30 s, idempotent by message id) | `live/LivePrompts.kt` | `PromptBody` (core fields only) | modelled + encoded in tests; call site deferred to P9 (composer) |
 | POST | `/api/session/{id}/interrupt?resume=true` | `live/LiveSessions.kt` `requestInterrupt` | — | deferred to P7 |
-| POST | `/api/session` (create; idempotent only with a client id) | `live/LiveSessions.kt` `requestCreateSession` | — | deferred to P6/P7 |
-| PATCH | `/api/session/{id}` (rename; empty title is unsafe, 60 s) | same `requestRenameSession` | — | deferred to P6 |
-| PATCH | `/api/session/{id}` (archive/unarchive, idempotent) | same `requestSetArchived` | — | deferred to P6 |
-| DELETE | `/api/session/{id}` | same `requestDeleteSession` | — | deferred to P6 |
-| POST | `/api/session/{id}/move` (unsafe, 15 s) | same `requestMoveSession` | — | deferred to P6 |
-| POST | `/api/session/{id}/view` (idempotent watermark) | same `requestViewSession` | — | deferred to P7 |
+| POST | `/api/session` (create; idempotent only with a client id) | `live/LiveSessions.kt` `requestCreateSession` | — | deferred to P7 (What's New Try It is P11) |
+| PATCH | `/api/session/{id}` (rename; empty title is unsafe, 60 s) | same `requestRenameSession` | — | deferred to P7 (session menu; Home P6 does not rename) |
+| PATCH | `/api/session/{id}` (archive/unarchive, idempotent) | same `requestSetArchived` | — | deferred to P7/P11 (the Android archived page is not inherited) |
+| DELETE | `/api/session/{id}` | same `requestDeleteSession` | `Operations.deleteSession` | implemented + tested (P6 Home delete; unsafe by default, one call) |
+| POST | `/api/session/{id}/move` (unsafe, 15 s) | same `requestMoveSession` | — | deferred to P7 |
+| POST | `/api/session/{id}/view` (idempotent watermark) | same `requestViewSession` | `Operations.viewSession` | implemented + tested (P6 read receipts; body `{idle}`, idempotent, one retry layer) |
 | POST | `/api/session/{id}/fork` | same `requestForkSession` | — | deferred to P7 |
 | POST | `/api/session/{id}/compact` | same `requestCompactSession` | — | deferred to P7 |
 | POST | `/api/session/{id}/revert/stage`, `DELETE …/revert` | same | — | deferred to P7 |
@@ -71,13 +71,13 @@ uses: unknown keys ignored, absent optionals nil, a present wrong type rejects t
 | GET | `/api/session/{id}/inbox` | `live/LivePrompts.kt` | — | deferred to P7 |
 | PATCH | `/api/session/{id}/inbox/{inputID}` (unsafe; 409 or read-back settles) | same | — | deferred to P7 |
 | DELETE | `/api/session/{id}/inbox/{inputID}` (idempotent) | same | — | deferred to P7 |
-| GET | `/api/permission/request`, `/api/form` (60 s, location-scoped) | `live/LiveRequests.kt` | — | deferred to P7 |
+| GET | `/api/permission/request`, `/api/form` (60 s, location-scoped) | `live/LiveRequests.kt` | `Operations.attentionSessionIDs` | implemented for Home attention only: at most 8 directories, both routes concurrently, loose `sessionID` extraction and root resolution; full request models/replies are P7 |
 | POST | `…/permission/{requestID}/reply`, `…/form/{formID}/reply` | same | — | deferred to P7 |
 | GET | `/api/shell`, `/api/shell/{id}`, `/api/shell/{id}/output`, `DELETE /api/shell/{id}` | same | `ShellInfoPayload`, `ServerShell` | modelled + decoded in tests; call sites deferred to P7 |
 | GET | `/api/experimental/job`, `POST …/{jobID}/cancel` | same | `JobInfoPayload`, `ServerJob` | modelled + decoded in tests (event); call sites deferred to P7 |
 | GET | `/api/model`, `/api/model/default` | `live/LiveCatalog.kt` | `ModelRef` only | deferred to P9/P11 |
 | GET | `/api/agent`, `/api/skill`, `/api/command`, `/api/plugin`, `/api/mcp`, `/api/integration` | `live/LiveCatalog.kt` | — | deferred to P9/P11 |
-| GET | `/api/fs/list`, `/api/fs/find`, `/api/fs/read/{rel}` | `live/LiveFiles.kt` | — | deferred to P6/P9/P10 |
+| GET | `/api/fs/list`, `/api/fs/find`, `/api/fs/read/{rel}` | `live/LiveFiles.kt` | — | deferred to P9/P10 |
 | POST | `/api/experimental/fs/write` | `live/LiveFiles.kt` | — | deferred to P9 |
 | GET | `/api/experimental/media/{hash}` | `live/MediaReferenceFetch.kt` | — | deferred to P10 |
 | POST | `/api/rpc/mobile-notifications/pair` | `live/LiveConnection.kt` | — | deferred to P12 (Experimental, off) |
@@ -162,10 +162,12 @@ Do not silently remap `/api/project` to `/project` or treat the web shell as dat
 audited contract. A connection attempt that lands on an HTML page now fails as
 `.incompatibleAPI` (D-31), which is distinct from a rejected password and from an unreachable host.
 
-P5 uses exactly these routes: `health` (`/api/info`), `projects` (`/api/project`) and `events`
-(`/api/event`). A compatible fixture serves those three through the real `URLSession` stack in
-`LocalFixtureServerTests.compatibleFixtureConnection`. The live P4 build still fails the connection
-screen as incompatible; that outcome is preserved, not remapped.
+P5 uses `health` (`/api/info`), `projects` (`/api/project`) and `events` (`/api/event`). P6 adds
+`/api/session`, `/api/session/active`, `/api/session/{id}/view`, `DELETE /api/session/{id}` and the two
+attention reads. A compatible fixture serves the connection routes through the real `URLSession` stack in
+`LocalFixtureServerTests.compatibleFixtureConnection`; Home runs against the deterministic in-app fixture
+because no live V2 build with `/api/info` and `/api/project` was available. That incompatible outcome is
+preserved, not remapped.
 
 ## Authentication and pairing
 

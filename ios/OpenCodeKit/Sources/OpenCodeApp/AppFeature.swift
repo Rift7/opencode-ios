@@ -1,6 +1,7 @@
 import ComposableArchitecture
 import Foundation
 import OpenCodeCore
+import OpenCodeDrawer
 import OpenCodeServer
 
 // MARK: - Shared app-shell values
@@ -368,6 +369,10 @@ public struct ConnectionFeature {
   public enum Delegate: Equatable, Sendable {
     case verified(OpenCodeServer, ServerInfo)
     case projects(OpenCodeServer, [ServerProject], ServerInfo?)
+    /// A reconnect or overflow completed and REST was re-read before the next socket.
+    case resynchronized(OpenCodeServer)
+    /// A session-scoped event the stream owner forwards to Home; the stream stays single-owner.
+    case sessionEvent(OpenCodeServer, ServerEvent)
     case failed(ConnectionFailure)
   }
 
@@ -457,7 +462,10 @@ public struct ConnectionFeature {
         guard token == currentToken(state), !state.isPinned else { return .none }
         if case .success(let projects) = result {
           state.projects = projects
-          return .send(.delegate(.projects(state.server, projects, state.info)))
+          return .concatenate(
+            .send(.delegate(.projects(state.server, projects, state.info))),
+            .send(.delegate(.resynchronized(state.server)))
+          )
         }
         return .none
 
@@ -495,6 +503,9 @@ public struct ConnectionFeature {
             state.projects.append(project)
           }
           return .send(.delegate(.projects(state.server, state.projects, state.info)))
+        case .executionStarted, .executionEnded, .sessionCreated, .sessionRenamed, .sessionMoved,
+          .sessionViewChanged, .sessionDeleted, .sessionArchiveChanged, .attentionChanged:
+          return .send(.delegate(.sessionEvent(state.server, event)))
         default:
           return .none
         }
@@ -655,6 +666,8 @@ public struct AppFeature {
   public struct State: Equatable, Sendable {
     public var restore: AppRestore
     public var connection: ConnectionFeature.State?
+    public var home: HomeFeature.State?
+    public var sessionDestination: SessionSelection?
     public var savedServer: OpenCodeServer?
     public var savedServers: [OpenCodeServer]
     public var form: ServerForm?
@@ -677,6 +690,8 @@ public struct AppFeature {
     public init(
       restore: AppRestore = .idle,
       connection: ConnectionFeature.State? = nil,
+      home: HomeFeature.State? = nil,
+      sessionDestination: SessionSelection? = nil,
       savedServer: OpenCodeServer? = nil,
       savedServers: [OpenCodeServer] = [],
       form: ServerForm? = nil,
@@ -693,6 +708,8 @@ public struct AppFeature {
     ) {
       self.restore = restore
       self.connection = connection
+      self.home = home
+      self.sessionDestination = sessionDestination
       self.savedServer = savedServer
       self.savedServers = savedServers
       self.form = form
@@ -711,6 +728,8 @@ public struct AppFeature {
     public static func == (lhs: State, rhs: State) -> Bool {
       lhs.restore == rhs.restore
         && lhs.connection == rhs.connection
+        && lhs.home == rhs.home
+        && lhs.sessionDestination == rhs.sessionDestination
         && lhs.savedServer == rhs.savedServer
         && lhs.savedServers == rhs.savedServers
         && lhs.form == rhs.form
@@ -749,6 +768,7 @@ public struct AppFeature {
     case pairingProblemDismissed
     case pairingFinished(attempt: Int, result: Result<OpenCodeServer, OpenCodeClientError>)
     case disconnectTapped
+    case sessionDestinationDismissed
     case noticeDismissed
     case persisted(saved: StorageWrite, list: StorageWrite)
     case replaceSavedDataTapped
@@ -761,6 +781,7 @@ public struct AppFeature {
       list: StorageWrite
     )
     case connection(ConnectionFeature.Action)
+    case home(HomeFeature.Action)
   }
 
   enum CancelID: Hashable {
@@ -774,7 +795,6 @@ public struct AppFeature {
   @Dependency(\.networkPath) private var networkPath
   @Dependency(\.pasteboard) private var pasteboard
   @Dependency(\.uuidClient) private var uuid
-  @Dependency(\.dateClient) private var date
 
   public init() {}
 
@@ -868,7 +888,9 @@ public struct AppFeature {
       case .scenePhaseChanged(let isActive):
         state.isInForeground = isActive
         guard state.connection != nil else { return .none }
-        return .send(.connection(.scenePhaseChanged(isActive: isActive)))
+        let connection = Effect<Action>.send(.connection(.scenePhaseChanged(isActive: isActive)))
+        guard state.home != nil else { return connection }
+        return .merge(connection, .send(.home(.connectionChanged(isConnected: isActive))))
 
       case .networkPathChanged(let path):
         state.networkPath = path
@@ -890,6 +912,8 @@ public struct AppFeature {
         state.pendingSave = nil
         state.restore = .ready
         state.connection = nil
+        state.home = nil
+        state.sessionDestination = nil
         state.notice = nil
         return .none
 
@@ -1050,10 +1074,16 @@ public struct AppFeature {
 
       case .disconnectTapped:
         state.connection = nil
+        state.home = nil
+        state.sessionDestination = nil
         state.pairingAttempt = nil
         state.pendingPairing = nil
         state.pendingSave = nil
         return .cancel(id: CancelID.pairing)
+
+      case .sessionDestinationDismissed:
+        state.sessionDestination = nil
+        return .none
 
       case .noticeDismissed:
         state.notice = nil
@@ -1065,6 +1095,9 @@ public struct AppFeature {
         state.savedServer = remembered
         state.savedServers = servers
         _ = info
+        if state.home?.serverID == remembered.persistenceID {
+          state.home?.server = remembered
+        }
         guard state.savedData.isReadable else {
           state.pendingSave = remembered
           return .none
@@ -1082,31 +1115,62 @@ public struct AppFeature {
         return .none
 
       case .connection(.delegate(.projects(let server, let projects, let info))):
-        let store = store
-        let summary = CachedServerSummary(
-          projects: projects,
-          version: info?.version,
-          capturedAt: date.now()
-        )
-        return .run { _ in
-          var summaries: [String: CachedServerSummary]
-          switch store.read(ServerSharedKeys.cachedSummaries) {
-          case .value(let value): summaries = value
-          case .missing, .undecodable, .failure: summaries = [:]
-          }
-          summaries[server.persistenceID] = summary
-          _ = store.write(summaries, for: ServerSharedKeys.cachedSummaries)
+        _ = info
+        var effects: [Effect<Action>] = [
+          .send(.home(.projectsChanged(projects))),
+          .send(.home(.connectionChanged(isConnected: true))),
+        ]
+        if state.home?.serverID != server.persistenceID {
+          state.home = HomeFeature.State(
+            server: server,
+            projects: projects,
+            isPinned: state.isPinnedForUITest
+          )
+          effects.append(.send(.home(.task)))
+        } else {
+          state.home?.server = server
         }
+        return .merge(effects)
+
+      case .connection(.delegate(.resynchronized)):
+        return .merge(
+          .send(.home(.connectionChanged(isConnected: true))),
+          .send(.home(.retryRefreshTapped))
+        )
+
+      case .connection(.delegate(.sessionEvent(_, let event))):
+        return .send(.home(.serverEvent(event)))
 
       case .connection(.delegate(.failed)):
-        return .none
+        guard state.home != nil else { return .none }
+        return .send(.home(.connectionChanged(isConnected: false)))
 
       case .connection:
+        return .none
+
+      case .home(.delegate(.openSession(let selection))):
+        state.sessionDestination = selection
+        return .none
+
+      case .home(.delegate(.switchServer(let server))):
+        state.sessionDestination = nil
+        return connect(to: server, state: &state)
+
+      case .home(.delegate(.disconnect)):
+        state.connection = nil
+        state.home = nil
+        state.sessionDestination = nil
+        return .none
+
+      case .home:
         return .none
       }
     }
     .ifLet(\.connection, action: \.connection) {
       ConnectionFeature()
+    }
+    .ifLet(\.home, action: \.home) {
+      HomeFeature()
     }
   }
 
@@ -1146,6 +1210,8 @@ public struct AppFeature {
     state.nextConnectionID += 1
     state.pairingProblem = nil
     state.pasteProblem = nil
+    state.home = nil
+    state.sessionDestination = nil
     let cached = cachedSummaries()[server.persistenceID]
     state.connection = ConnectionFeature.State(
       id: id,

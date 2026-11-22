@@ -264,8 +264,9 @@ public struct SessionPage: Sendable, Equatable {
   }
 }
 
-/// What the drawer's first page asks for: a search, or the page after one already read.
+/// What a session page asks for: the newest root page, a search, or the page after one already read.
 public enum SessionPageRequest: Sendable, Equatable {
+  case first
   case search(String)
   case after(String)
 }

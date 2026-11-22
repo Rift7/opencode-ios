@@ -6,15 +6,15 @@
 | --- | --- |
 | Integration branch | `ios` |
 | Behaviour baseline | `7358160e808fb1870eeb20f5da8df832667019d1` (`origin/dev`) |
-| `ios` head when P5 started | `5f143ea7927796f341d93373f002dfa2c1c38b7e` (PR #3, transport/retry/models/SSE/pairing) |
-| P5 branch | `ios-shell`, created from `origin/ios` after `git fetch origin`; review corrections at `04da03cf` |
+| `ios` head when P6 started | `3b34932c8c3d1e7dcc9f4985264bcec49ec64782` (PR #4) |
+| P6 branch | `ios-home`, created from `origin/ios` after `git fetch origin` |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
-`git fetch origin` moved `origin/ios` from `d0fdf2f5` to `5f143ea7`. PR #3 is merged:
-`mergedAt=2026-11-22T02:28:55Z`, merge commit `5f143ea7`, head `2326a49b`. The merged tree is
-byte-identical to `2326a49b` (`git rev-parse origin/ios^{tree}` =
-`git rev-parse 2326a49b^{tree}` = `0132311…`), so the corrected networking tree is present even
-though the squash merge makes `2326a49b` not an ancestor.
+`git fetch origin` moved `origin/ios` from `5f143ea7` to `3b34932c`. PR #4 (`ios: wire launch,
+connection, pairing and reconnect`) is **MERGED** (`mergedAt=2026-11-22T04:08:50Z`, merge commit
+`3b34932c`, base `ios`, head `ios-shell`). The review correction `e64c1154` (“word the saved-data
+warning for a connecting server”) is not an ancestor because the merge was squashed; its copy is present
+in `origin/ios:ios/OpenCode/Resources/Localizable.xcstrings`, and the gate was checked before any P6 work.
 
 ## Phase status
 
@@ -24,8 +24,8 @@ though the squash merge makes `2326a49b` not an ancestor.
 | 2 | `ios` branch, baseline, scaffold and gate | complete — `143d8f86` (PR #1) |
 | 3 | Core: store, dependencies, sharing, tokens, logging, haptics | complete — `d0fdf2f5` (PR #2) |
 | 4 | Server: transport, retry, models, SSE, pairing | complete — `5f143ea7` (PR #3, tree `2326a49b`) |
-| 5 | App shell: launch, connection, pairing, reconnect | **complete on `ios-shell`**; draft PR: `Rift7/opencode-ios#4` |
-| 6 | Home, drawer, projects, Catch Up, What's New | not started |
+| 5 | App shell: launch, connection, pairing, reconnect | complete — `3b34932c` (PR #4) |
+| 6 | Home, drawer, projects, Catch Up, What's New | **complete on `ios-home`** (draft PR pending) |
 | 7 | Session, subagents, background work, request review | not started |
 | 8 | Transcript | not started |
 | 9 | Composer | not started |
@@ -35,78 +35,98 @@ though the squash merge makes `2326a49b` not an ancestor.
 | 13 | Voice (Experimental, off) | not started |
 | 14 | Hardening | not started |
 
-## Phase 5 — what landed
+## Phase 6 — what landed
 
 | Area | New or changed path | Gate |
 | --- | --- | --- |
-| Connection child reducer with identified state | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` (`ConnectionFeature`) | `ConnectionFeatureTests` — connect, auth, incompatible, malformed, offline, reconnect, overflow, lifecycle, stale attempt/stream tokens |
-| App shell reducer: restore, form, pairing, persistence | same (`AppFeature`) | `AppFeatureTests` — restore outcomes, manual entry, pairing, persistence, disconnect, scene forwarding, unreadable-data recovery, multiple saved servers |
-| Saved-data trust and explicit replacement | same (`SavedDataState`, `SavedDataWarningBanner`) | `AppFeatureTests` — temporary read failure, preserved list, replace confirmation/failure; UI tests from both storage-error screens |
-| Attempt and stream identity | same (`ConnectionFeature.Token`) | `ConnectionFeatureTests` — delayed callbacks from cancelled work are ignored |
-| Central connection eligibility | same (`canAttempt`, `startIfEligible`) | `ConnectionFeatureTests` — offline restore, background path return, foreground recovery |
-| Address race over every candidate with a preferred head start | `OpenCodeKit/Sources/OpenCodeServer/Address/ServerLink.swift` | `ServerLinkTests` — first answer, 401 preference, head start, order |
-| Stream lifecycle phases | `OpenCodeKit/Sources/OpenCodeServer/Events/EventStream.swift` (`EventStreamPhase`, `onPhase`) | `EventStreamPhaseTests` — connected/disconnected/ended, 401, overflow order |
-| Client event seam with awaited phase callback | `OpenCodeKit/Sources/OpenCodeServer/Client/OpenCodeClient.swift` | `ConnectionFeatureTests`; `LocalFixtureServerTests.compatibleFixtureConnection` |
-| Server keys and launch cache | `OpenCodeKit/Sources/OpenCodeServer/Address/ServerSharedKeys.swift` | `SharedStoreTests`; `AppFeatureTests` restore outcomes |
-| SharedStore dependency and derived Keychain service | `OpenCodeKit/Sources/OpenCodeCore/Storage/SharedKeys.swift` | `SharedStoreTests`; app keychain probe |
-| Network path observation | `OpenCodeKit/Sources/OpenCodeCore/Network/NetworkPathClient.swift`, `OpenCodeKit/Sources/OpenCodeServer/Retry/NetworkPathRetry.swift` | injected path in `ConnectionFeatureTests`; live monitor is device-only |
-| Clipboard and UUID/date dependency names | `OpenCodeKit/Sources/OpenCodeCore/Dependencies/{PasteboardClient,FoundationClients}.swift` | dependency isolation; pairing tests |
-| Launch scenarios, URL scheme and device probes | `OpenCodeKit/Sources/OpenCodeApp/AppLaunchConfiguration.swift`, `ios/OpenCode/Info.plist`, `ios/OpenCode/App/{OpenCodeApp,SavedServerProbe,UITestFixture}.swift` | 18 UI tests, including lifecycle fixture and Keychain restore probe |
-| Connection UI and string catalog | `ios/OpenCode/App/RootView.swift`, `ios/OpenCode/Resources/Localizable.xcstrings` | child store scoped for observation; UI tests assert English copy |
-| Screenshots | `docs/ios-migration/screens/p5-{disconnected,connected,failed-unreachable}[-dark].png` | simulator, fixture data only, light and dark |
+| Home reducer, local records, search/paging, pins, read state, deletion, Catch Up, What's New | `OpenCodeKit/Sources/OpenCodeDrawer/HomeFeature.swift` | `HomeFeatureTests` — 17 Swift Testing cases (pin/unpin, unread, server isolation, visibility, search, stale search, paging, stale refresh, delete failure, Catch Up, supersede, What's New, snapshot bounds, receipt failure) |
+| Home models, server-scoped keys, bounded/versioned snapshot store, What's New catalog | `.../OpenCodeDrawer/HomeModels.swift` | snapshot write/read, version rejection, server separation and legacy-cache removal tested |
+| Client read receipt, delete, attention read | `OpenCodeKit/Sources/OpenCodeServer/Client/OpenCodeClient.swift` | `OpenCodeClientTests` request shape; Home effect tests for success and failure |
+| First-page request | `OpenCodeKit/Sources/OpenCodeServer/Models/OpenCodeSession.swift` (`SessionPageRequest.first`) | `OpenCodeClientTests` |
+| Stream forwarding to Home without a second stream | `.../OpenCodeApp/AppFeature.swift` (`ConnectionFeature.Delegate.sessionEvent`, `.resynchronized`) | `ConnectionFeatureTests` order; App switch test |
+| App → Home → Session ownership | same (`AppFeature.home`, `sessionDestination`); `OpenCode/Drawer/HomeView.swift`; `OpenCode/App/RootView.swift` (`SessionPlaceholderView`) | `AppFeatureTests.homeServerSwitch`; UI journey opens a session selection |
+| Native drawer, project rows, rows with status dots, server switcher, What's New page | `ios/OpenCode/Drawer/HomeView.swift` | `HomeUITests` + screenshots |
+| Catch Up card interaction, mark/keep/undo, finish row | same (`CatchUpView`); `HomeFeature` (`catchUpFinished`) | unit + UI tests; the last card closes Catch Up onto the drawer's **All Caught Up** row, as audited |
+| Deterministic fixture sessions and second server | `ios/OpenCode/App/UITestFixture.swift` | UI tests use the fixture only; no socket |
+| Debug frame probe for the scroll trace | `ios/OpenCode/Drawer/ScrollFrameProbe.swift` | DEBUG-only `CADisplayLink`; exposes an accessibility label read by the trace test |
+| Copy, including What's New entries | `ios/OpenCode/Resources/Localizable.xcstrings` | UI tests assert English text |
+| UI automation | `ios/OpenCodeUITests/{HomeUITests,HomeScreenshotUITests,HomeScrollTraceUITests}.swift` | 8 tests: drawer search/select, server switch, Catch Up, Dynamic Type, accessibility/keyboard, What's New, screenshots, scroll trace |
+| Screenshots | `docs/ios-migration/screens/p6-{home,drawer,catch-up}[-dark].png` | light and dark, iPhone 18 Pro Max simulator, synthetic data only |
 
-## Adopted values and freshness (baseline `dev = 7358160e`)
+### Authoritative refresh and identity
 
-| New behaviour | Android source | Last change | Treatment |
-| --- | --- | --- | --- |
-| Connection states `Idle/Pairing/Connecting/LoadingHome/Connected/Failed/Picking` | `app/AppFeature.kt` | current baseline | native phases `disconnected/connecting/loading/connected/reconnecting/failed`; `Picking` and Home loading are P6 |
-| Address race, 3.5 s probe, preferred head start, 401 preference | `server/ServerLink.kt` | `5e4b4219`, 2026-11-16 | adopted as `ServerLink.probe`; health is one attempt per address |
-| Saved server and saved list keys | `server/ServerSharedKeys.kt` | current baseline | adopted; Keychain-backed |
-| Deep-link/paste pairing; parsing without redemption | `app/AppFeaturePairing.kt`, `server/OpenCodePairingLink.kt` | `5e4b4219`, 2026-11-16 | adopted; deep links require confirmation, paste is explicit |
-| Local-network permission distinction | `server/LocalNetworkPermission.kt` | current baseline | **not adopted as a permission claim**: iOS has no equivalent preflight. Unreachable copy is generic; the local-network hint is a suggestion, never a denial classification |
-| SSE lifecycle/backoff/overflow | `drawer/HomeConnectionFeature.kt`, `retry/NetworkRetry.kt` | current baseline | adopted in the P4 runner; P5 wires phases and REST refresh |
-| Cached launch snapshot | `server/ServerSharedKeys.kt` (`cachedHomeSnapshots`) | current baseline | reduced to project summaries for the shell; Home snapshots arrive with P6 |
-| Failure copy | `app/src/main/res/values/strings.xml` | current baseline | typed failure values in Swift; String Catalog at the app edge |
+- `HomeFeature.Refresh` reads `SessionPageRequest.first` (50 roots) and `/api/session/active` in one
+  effect. It is debounced 250 ms and `cancelInFlight`, matching the audited `refreshSnapshot`; a result
+  whose `generation`/`request` no longer matches is ignored.
+- The shell remains the only stream owner. `ConnectionFeature` forwards session-scoped events as a
+  delegate; Home re-reads REST on reconnect, overflow resynchronization and execution end.
+- Pins, read dates, manual-unread marks, mutes, hidden sessions, last-viewed sessions and What's New seen
+  state use `serverPersistenceID|sessionID` keys (or per-server maps), so switching servers cannot read
+  another server's records.
+- `HomeSnapshot` is version 1, at most 8 servers and 50 sessions per server, written atomically to
+  `home-snapshots.json` in Caches by an actor. A decode/version failure is reported, never trusted.
+  A successful write removes that server's P5 project-summary entry from `cachedServerSummaries`, which
+  is the safe migration off the temporary cache.
+
+### Catch Up semantics
+
+- Candidates are root, unarchived, unmuted sessions whose indicator is attention or unread; running
+  sessions are excluded. Attention sorts first, then newest.
+- Mark Read applies the local read state immediately and sends `POST /api/session/{id}/view` with the
+  idle watermark. A failed receipt restores the previous viewed/read/ manual-unread state and reports on
+  the stack. Undo cancels the in-flight receipt, restores the snapshot and puts the card back.
+- Keep Unread moves the card without a server call and leaves the session unread. The last handled card
+  closes Catch Up to the drawer, whose row reads **All Caught Up** until new work arrives.
+
+### Scroll trace (measured)
+
+| Item | Value |
+| --- | --- |
+| Fixture | `connected-scroll`, 300 root sessions, two projects, no paging |
+| Device/runtime | iPhone 18 Pro Max simulator, iOS 27.2 (runtime `24B8117`) |
+| Test | `HomeScrollTraceUITests.testDrawerScrollDeceleration`, 3 iterations, fast up/up/down |
+| Frame probe | 141–142 frames per iteration; p50 **16.7 ms**, p95 **16.7 ms**, max **33.3 ms** (one deferred frame) |
+| Deceleration metric | 2.416–2.450 s, average 2.428 s, relative standard deviation 0.647% |
+
+This is a simulator trace, not a device claim. The 33.3 ms maximum means one frame took two display
+intervals during the measured swipes; the p95 stays at one interval.
 
 ## Verified in this phase
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | **281 tests pass**: 161 server, 67 core, 53 app (live suite skipped without environment variables) |
-| `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; `OpenCodeTests` passes; **18 UI tests pass**; package suites pass |
-| Loopback compatible fixture | `LocalFixtureServerTests.compatibleFixtureConnection` serves `/api/info`, `/api/project`, `/api/event` over the real `URLSession` stack; health, projects and the handshake all arrive |
-| Signed device build and install | with the existing local development identity (identifier not recorded): build, install and launch on the connected iPhone succeed |
-| Device Keychain | `KeychainProbeTests` and `SavedServerProbeTests` pass on the device; the latter reads two fake servers through `AppRestoreResult` using a disposable service and removes them |
-| Device lifecycle | `ConnectionLifecycleUITests` passes on the device with the deterministic in-app client: connected → Home → activate → connected |
-| Screenshots | disconnected, connected and unreachable failure states captured in light and dark on the iPhone 18 Pro Max simulator with fixture-only data |
-
-One `BoundedChannelTests.waiterHandoff` run failed on a timing-sensitive expectation during the first
-`verify.sh`. The test sleeps 20 ms and assumes the consumer already took the first element. It was not
-changed in P5; the failing run and later green runs are recorded, but the reruns do **not** establish
-that the race is fixed or that P5 did not contribute to its timing. The cause remains unresolved.
+| `swift test --package-path ios/OpenCodeKit` | **299 tests pass**: 161 server, 67 core, 54 app, 17 drawer; live and loopback-opt-out suites behave as before |
+| `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; `OpenCodeTests` passes; **26 UI tests pass** (18 existing + 8 P6); package suites pass |
 
 ## Not verified
 
-- **A real V2 server on the device**: the device lifecycle check uses the in-app deterministic client,
-  not a LAN server. Local-network prompts and a real socket's background/foreground restart remain
-  unverified on hardware.
-- **A real V2 server**: no build with the audited `/api/info` and `/api/project` routes was available.
-  The P4 live build returns its web shell for those paths; P5 preserves `.incompatibleAPI` and does
-  not remap routes. Fixture coverage is separate from live evidence. No P5 live connection succeeded
-  against a real V2 server.
-- **Camera QR pairing**: deferred; no scanner is implemented in P5. Paste and deep-link flows are
-  implemented and tested.
-- **Custom request headers** in the manual form: deferred. The model (`OpenCodeServer.headers`) and
-  wire behaviour exist from P4; the form edits name/address/username/password only.
-- **Home/session content**: the connected destination is intentionally a project list, not the P6
-  drawer or P7 session screen.
-- **Visual comparison with the original app**: unavailable; October screenshots are evidence, not a
-  pixel target.
+- **Physical device**: no P6 run on hardware. VoiceOver order, Taptic feel, real LAN reconnection and the
+  local-network prompt remain device checks; the simulator covers accessibility labels and Dynamic Type
+  layout only.
+- **Reduce Motion**: P6 adds no custom animation; sheets, navigation and system controls keep platform
+  motion. The Reduce Motion policy is therefore inherited, not separately exercised.
+- **Live V2 server**: no build with the audited `/api/info`, `/api/project` and new Home routes was
+  tested in P6. The P4/P5 `.incompatibleAPI` outcome is preserved; no route was remapped.
+- **Real session mutations**: none. Delete/read receipts were exercised against fixture clients only.
+- **Visual comparison with the original app**: unavailable; October captures are evidence, not a target.
+- **iPad**: out of scope (D-16).
+
+## Deferred P5 items — later phase and acceptance check
+
+| Deferred item | Later phase | Acceptance check |
+| --- | --- | --- |
+| Camera QR pairing (`PairingScanner`) | P11 (Settings › Servers) | On a device, scanning a valid `opencode pair` code presents the pairing confirmation and redeems once; denied camera shows a typed outcome. Simulator records **unverified**. |
+| Custom request headers in the manual form | P11 (Settings › Servers) | A saved header round-trips through Keychain, is sent only to its server's origins, and an invalid name/value is refused without locking the person out. |
+| Copied error report | P11 (Diagnostics/connection) | The copied report contains status/feature/typed facts only; a redaction test fails if a credential, address, pairing code or message text appears. |
+| Haptics live feel | P14 (hardware hardening) | Each of the eleven haptics is felt and distinguished on a device with System Haptics on; simulator remains **unverified**. |
+| Local-network prompt / real LAN socket | P14 (hardware hardening) | Denied prompt → unreachable copy, no request at the fixture; allowed → request reaches the Mac fixture; background/foreground reconnect over the real socket. |
+| Production identifiers (bundle id, team, App Group, Keychain service) | P12/P14 owner configuration | Owner-supplied values build/sign; credentials survive relaunch in the configured service; no historical team or group is copied. |
+| Push notifications | P12 (Experimental, off) | Relay credentials exist; notifications default off; a fixture push reaches the app only after opt-in. Without a relay the path is **blocked/unverified**. |
+| Session/transcript/composer | P7–P9 | P6 carries a stable `SessionSelection` to a placeholder only; P7 adds the session destination, P8 the transcript, P9 the composer. |
 
 ## Next
 
-1. P6 (`ios-home`): HomeFeature, drawer, projects, Catch Up, and the cached Home snapshot replacing
-   the P5 summary cache.
-2. P6/P7: switch/forget/edit flows for saved servers, including the form's custom headers and the
-   failure-report copy actions.
-3. P8: transcript consumer and the off-screen event pressure policy (D-23).
+1. P7 (`ios-session`): `SessionFeature`, subagent pages, background work, request review. Consume
+   `SessionSelection` (server ID + intent) rather than adding a second navigation model.
+2. P8: transcript and the off-screen event pressure policy (D-23).
+3. P11: settings, the shipped What's New catalogue, custom headers, camera pairing and report copy.

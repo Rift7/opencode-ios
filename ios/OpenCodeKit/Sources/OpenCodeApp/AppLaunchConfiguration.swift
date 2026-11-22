@@ -1,5 +1,6 @@
 import Foundation
 import OpenCodeCore
+import OpenCodeDrawer
 import OpenCodeServer
 
 /// Launch-time state, overridable from the command line so UI tests can pin a screen. Overrides are
@@ -26,16 +27,21 @@ public struct AppLaunchConfiguration: Sendable {
   /// Use the in-app deterministic client instead of the network. Test runner only.
   public let usesFixtureClient: Bool
 
+  /// Which synthetic data set the fixture client serves (`connected` or `connected-scroll`).
+  public let uiTestFixture: String?
+
   public init(
     uiTestScenario: UITestScenario? = nil,
     uiTestOpenURL: String? = nil,
     uiTestClipboard: String? = nil,
-    usesFixtureClient: Bool = false
+    usesFixtureClient: Bool = false,
+    uiTestFixture: String? = nil
   ) {
     self.uiTestScenario = uiTestScenario
     self.uiTestOpenURL = uiTestOpenURL
     self.uiTestClipboard = uiTestClipboard
     self.usesFixtureClient = usesFixtureClient
+    self.uiTestFixture = uiTestFixture
   }
 
   public var initialState: AppFeature.State {
@@ -59,6 +65,7 @@ public struct AppLaunchConfiguration: Sendable {
       return AppFeature.State(
         restore: .ready,
         connection: pinnedConnection(phase: .connected),
+        home: pinnedHome,
         savedServer: pinnedServer,
         savedServers: [pinnedServer],
         isPinnedForUITest: true
@@ -129,6 +136,27 @@ public struct AppLaunchConfiguration: Sendable {
     ]
   }
 
+  private var pinnedHome: HomeFeature.State {
+    HomeFeature.State(
+      server: pinnedServer,
+      projects: pinnedProjects,
+      sessions: [
+        OpenCodeSession(
+          id: "pinned-session",
+          serverTitle: "Migration check",
+          projectID: "p1",
+          directory: "/work/opencode",
+          updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+          idleMilliseconds: 2_000,
+          viewedMilliseconds: 1_000
+        )
+      ],
+      activeSessionIDs: [],
+      hasLoaded: true,
+      isPinned: true
+    )
+  }
+
   private func pinnedConnection(phase: ConnectionFeature.State.Phase) -> ConnectionFeature.State {
     ConnectionFeature.State(
       id: 1,
@@ -166,11 +194,13 @@ public struct AppLaunchConfiguration: Sendable {
 
     let scenario = process.environment["OPENCODE_UI_TEST_SCENARIO"]
       ?? argumentValue(after: "-uiTestScenario")
+    let fixture = process.environment["OPENCODE_UI_TEST_FIXTURE"]
     return AppLaunchConfiguration(
       uiTestScenario: scenario.flatMap(UITestScenario.init(rawValue:)),
       uiTestOpenURL: process.environment["OPENCODE_UI_TEST_OPEN_URL"] ?? argumentValue(after: "-uiTestOpenURL"),
       uiTestClipboard: process.environment["OPENCODE_UI_TEST_CLIPBOARD"] ?? argumentValue(after: "-uiTestClipboard"),
-      usesFixtureClient: process.environment["OPENCODE_UI_TEST_FIXTURE"] == "connected"
+      usesFixtureClient: fixture == "connected" || fixture == "connected-scroll",
+      uiTestFixture: fixture
     )
   }
 

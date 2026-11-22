@@ -13,8 +13,8 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | P2 | `ios` branch, baseline, reproducible project, gate | done — merged into `ios` as `143d8f86` (PR #1) | `BASELINE.md`, `ios/project.yml`, `ios/scripts/` |
 | P3 | Core: store, dependencies, sharing, tokens, logging, haptics | done — merged into `ios` as `d0fdf2f5` (PR #2) | checklist below |
 | P4 | Server: transport, retry, models, SSE, pairing | done — merged into `ios` as `5f143ea7` (PR #3, tree `2326a49b`) | `PROTOCOL_COVERAGE.md`, `STATUS.md` |
-| **P5** | **App shell: launch, connection, pairing, reconnect** | **done on `ios-shell`** | `STATUS.md` Phase 5, `PARITY.md` App shell, `ConnectionFeatureTests`, 14 UI tests |
-| P6 | Home, drawer, projects, Catch Up, What's New | not started | folders only |
+| P5 | App shell: launch, connection, pairing, reconnect | done — merged into `ios` as `3b34932c` (PR #4) | `STATUS.md`, `PARITY.md` App shell, `ConnectionFeatureTests`, UI tests |
+| **P6** | **Home, drawer, projects, Catch Up, What's New** | **done on `ios-home`** | `STATUS.md` Phase 6, `PARITY.md` Home, `HomeFeatureTests`, 8 UI tests, screenshots, scroll trace |
 | P7 | Session, subagents, background work, request review | not started | folders only |
 | P8 | Transcript | not started | folders only |
 | P9 | Composer | not started | folders only |
@@ -74,17 +74,19 @@ leaving the parent to clear the presented state.
 - **Previews.** Preview support is enabled, two launch-state previews exist, and the dependency context under
   Xcode previews resolves inert values, so a preview cannot reach the network and cannot play a haptic.
 
-## Roadmap after P5
+## Roadmap after P6
 
-P5 (app shell) is complete on `ios-shell` and is the phase P6 follows. P6 branches from the updated
-`ios` once P5 is merged, never from a task branch.
+P6 (Home) is complete on `ios-home` and is the phase P7 follows. P6 branched from `3b34932c`, the PR #4
+merge, never from a task branch.
 
-Prerequisites for P6:
+P7 starts from `ios` once P6 is merged. Prerequisites:
 
-1. **`ios-shell` reviewed and merged into `ios`.** The merge is the hand-off.
-2. P6 replaces the P5 project summary cache with the audited Home snapshot and adds the drawer,
-   projects, Catch Up, session list and saved-server switching.
-3. Production identifiers (bundle id, App Group) must be settled before a distributed build stores
-   real credentials; the Keychain service derives from the configured bundle id (D-32).
-4. The haptics live path, camera QR scanning and the local-network prompt need a physical device; they
-   are reported unverified.
+1. **`ios-home` reviewed and merged into `ios`.** The merge is the hand-off.
+2. P7 consumes `SessionSelection(serverID, sessionID, intent)` from Home instead of adding a second
+   navigation model; the current `SessionPlaceholderView` is deliberately not a session screen.
+3. P7 owns the request-review models behind Home's attention read (`GET /api/permission/request`,
+   `GET /api/form` are read loosely here for root IDs only).
+4. Production identifiers (bundle id, App Group) must be settled before a distributed build stores real
+   credentials; the Keychain service derives from the configured bundle id (D-32).
+5. The haptics live path, camera QR scanning, VoiceOver on device and the local-network prompt need
+   physical checks; they are reported unverified.
