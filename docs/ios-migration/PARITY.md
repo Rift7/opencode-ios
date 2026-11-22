@@ -141,7 +141,7 @@ Recorded here so they are not mistaken for missing work.
 | Dependency isolation and transport boundary | `.../DependencyIsolationTests.swift`, `.../TransportBoundaryTests.swift`, `.../NetworkAndIsolationTests.swift` | done |
 | Store semantics | `OpenCodeAppTests/StoreSemanticsTests.swift` | done |
 | App reducer | `OpenCodeAppTests/AppFeatureTests.swift`, `ConnectionFeatureTests.swift`, `LaunchConfigurationTests.swift` | done |
-| Home reducer and persistence | `OpenCodeDrawerTests/HomeFeatureTests.swift` | done — 17 tests covering pins, unread, server isolation, visibility, search/paging, stale responses, deletion recovery, Catch Up, What's New, snapshot bounds/versioning/migration and read-receipt failure |
+| Home reducer and persistence | `OpenCodeDrawerTests/HomeFeatureTests.swift` | done — 18 tests covering pins, unread, server isolation, visibility, search/paging, stale responses, deletion recovery, Catch Up, What's New, snapshot bounds/versioning/migration and read-receipt failure |
 | Server: address and cleartext policy | `OpenCodeServerTests/ServerAddressTests.swift` | done |
 | Server: address race | `.../ServerLinkTests.swift` | done |
 | Server: redirect rule | `.../RedirectRuleTests.swift` | done |

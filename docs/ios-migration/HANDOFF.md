@@ -138,7 +138,7 @@ Useful entry points:
 
 ### P6 evidence
 
-- `swift test --package-path ios/OpenCodeKit`: 299 tests (161 server, 67 core, 54 app, 17 drawer).
+- `swift test --package-path ios/OpenCodeKit`: 300 tests (161 server, 67 core, 54 app, 18 drawer).
 - `ios/scripts/verify.sh`: 26 UI tests pass, including 8 P6 tests; app build and `OpenCodeTests` pass.
 - Screenshots: `docs/ios-migration/screens/p6-{home,drawer,catch-up}[-dark].png`.
 - Scroll trace: 300-session fixture, iPhone 18 Pro Max simulator (iOS 27.2), 141–142 frames per

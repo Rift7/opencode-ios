@@ -39,7 +39,7 @@ in `origin/ios:ios/OpenCode/Resources/Localizable.xcstrings`, and the gate was c
 
 | Area | New or changed path | Gate |
 | --- | --- | --- |
-| Home reducer, local records, search/paging, pins, read state, deletion, Catch Up, What's New | `OpenCodeKit/Sources/OpenCodeDrawer/HomeFeature.swift` | `HomeFeatureTests` — 17 Swift Testing cases (pin/unpin, unread, server isolation, visibility, search, stale search, paging, stale refresh, delete failure, Catch Up, supersede, What's New, snapshot bounds, receipt failure) |
+| Home reducer, local records, search/paging, pins, read state, deletion, Catch Up, What's New | `OpenCodeKit/Sources/OpenCodeDrawer/HomeFeature.swift` | `HomeFeatureTests` — 18 Swift Testing cases (pin/unpin, unread, server isolation, visibility, search, stale search, paging, stale refresh, delete failure, Catch Up, supersede, What's New, snapshot bounds, receipt failure) |
 | Home models, server-scoped keys, bounded/versioned snapshot store, What's New catalog | `.../OpenCodeDrawer/HomeModels.swift` | snapshot write/read, version rejection, server separation and legacy-cache removal tested |
 | Client read receipt, delete, attention read | `OpenCodeKit/Sources/OpenCodeServer/Client/OpenCodeClient.swift` | `OpenCodeClientTests` request shape; Home effect tests for success and failure |
 | First-page request | `OpenCodeKit/Sources/OpenCodeServer/Models/OpenCodeSession.swift` (`SessionPageRequest.first`) | `OpenCodeClientTests` |
@@ -95,7 +95,7 @@ intervals during the measured swipes; the p95 stays at one interval.
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | **299 tests pass**: 161 server, 67 core, 54 app, 17 drawer; live and loopback-opt-out suites behave as before |
+| `swift test --package-path ios/OpenCodeKit` | **300 tests pass**: 161 server, 67 core, 54 app, 18 drawer; live and loopback-opt-out suites behave as before |
 | `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; `OpenCodeTests` passes; **26 UI tests pass** (18 existing + 8 P6); package suites pass |
 
 ## Not verified

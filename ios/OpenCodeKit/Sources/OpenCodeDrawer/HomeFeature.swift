@@ -465,6 +465,7 @@ public struct HomeFeature {
 
       case .cacheLoaded(let generation, let result):
         guard generation == state.generation, !state.isPinned else { return .none }
+        guard !state.hasLoaded || state.loadedFromCache else { return .none }
         switch result {
         case .success(let snapshot):
           guard let snapshot, snapshot.serverID == state.serverID else { return .none }

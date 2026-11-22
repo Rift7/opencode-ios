@@ -540,6 +540,25 @@ struct HomeFeatureTests {
     #expect(store.state.notice == nil)
   }
 
+
+  @Test("a late cache read cannot regress a fresh REST page")
+  func lateCacheIgnored() async {
+    let store = makeStore(
+      HomeFeature.State(server: server, sessions: [session("fresh")], hasLoaded: true)
+    )
+    let stale = HomeSnapshot(
+      serverID: server.persistenceID,
+      projects: [],
+      sessions: [session("cached")],
+      activeSessionIDs: [],
+      nextCursor: nil,
+      capturedAt: Date()
+    )
+    await store.send(.cacheLoaded(generation: store.state.generation, result: .success(stale)))
+    #expect(store.state.sessions.map(\.id) == ["fresh"])
+    #expect(!store.state.loadedFromCache)
+  }
+
   private func waitFor(
     _ predicate: @MainActor () -> Bool,
     attempts: Int = 1_000
