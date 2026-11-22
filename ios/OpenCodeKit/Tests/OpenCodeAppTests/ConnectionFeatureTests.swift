@@ -17,6 +17,10 @@ struct ConnectionFeatureTests {
     )
   }
 
+  private func token(attempt: Int, stream: Int) -> ConnectionFeature.Token {
+    ConnectionFeature.Token(attempt: attempt, stream: stream)
+  }
+
   private func store(
     script: ScriptedClient,
     state: ConnectionFeature.State
@@ -38,13 +42,13 @@ struct ConnectionFeatureTests {
     let store = store(script: script, state: ConnectionFeature.State(id: 1, server: TestServer.server))
 
     await store.send(.task)
-    await store.receive(.healthFinished(generation: 1_001, result: .success(probe()))) {
+    await store.receive(.healthFinished(attempt: 1_001, result: .success(probe()))) {
       $0.phase = .loading
       $0.info = TestServer.info
     }
     await store.receive(.delegate(.verified(TestServer.server, TestServer.info)))
-    await store.receive(.streamPhase(.connected))
-    await store.receive(.refreshFinished(generation: 1_001, result: .success(TestServer.projects))) {
+    await store.receive(.streamPhase(token: token(attempt: 1_001, stream: 2), phase: .connected))
+    await store.receive(.refreshFinished(attempt: 1_001, result: .success(TestServer.projects))) {
       $0.phase = .connected
       $0.projects = TestServer.projects
     }
@@ -69,7 +73,7 @@ struct ConnectionFeatureTests {
     let store = store(script: script, state: ConnectionFeature.State(id: 1, server: TestServer.server))
 
     await store.send(.task)
-    await store.receive(.healthFinished(generation: 1_001, result: .failure(failure))) {
+    await store.receive(.healthFinished(attempt: 1_001, result: .failure(failure))) {
       $0.phase = .failed
       $0.failure = .credentialsRejected
     }
@@ -87,7 +91,7 @@ struct ConnectionFeatureTests {
     let store = store(script: script, state: ConnectionFeature.State(id: 1, server: TestServer.server))
 
     await store.send(.task)
-    await store.receive(.healthFinished(generation: 1_001, result: .failure(failure))) {
+    await store.receive(.healthFinished(attempt: 1_001, result: .failure(failure))) {
       $0.phase = .failed
       $0.failure = .incompatibleAPI(feature: "server info")
     }
@@ -104,15 +108,15 @@ struct ConnectionFeatureTests {
     let store = store(script: script, state: ConnectionFeature.State(id: 1, server: TestServer.server))
 
     await store.send(.task)
-    await store.receive(.healthFinished(generation: 1_001, result: .failure(failure))) {
+    await store.receive(.healthFinished(attempt: 1_001, result: .failure(failure))) {
       $0.phase = .failed
       $0.failure = .malformed(feature: "server info")
     }
     await store.receive(.delegate(.failed(.malformed(feature: "server info"))))
   }
 
-  @Test("a known-offline path fails with offline, not a credentials message")
-  func offlineIsNotCredentials() async {
+  @Test("a known-offline path waits instead of claiming bad credentials")
+  func offlineWaits() async {
     let state = ConnectionFeature.State(id: 1, server: TestServer.server, isOffline: false)
     let script = ScriptedClient(
       health: Script([.success(TestServer.info)]),
@@ -121,10 +125,11 @@ struct ConnectionFeatureTests {
     let store = store(script: script, state: state)
 
     await store.send(.networkPathChanged(.offline)) {
-      $0.phase = .failed
-      $0.failure = .offline
+      $0.phase = .reconnecting
+      $0.failure = nil
       $0.isOffline = true
     }
+    #expect(script.healthCalls.count == 0)
   }
 
   @Test("the path returning starts the connection again")
@@ -137,19 +142,95 @@ struct ConnectionFeatureTests {
     store.exhaustivity = .off
 
     await store.send(.networkPathChanged(.offline)) {
-      $0.phase = .failed
-      $0.failure = .offline
+      $0.phase = .reconnecting
       $0.isOffline = true
     }
     await store.send(.networkPathChanged(.online)) {
       $0.phase = .connecting
-      $0.failure = nil
       $0.isOffline = false
     }
-    await store.receive(.healthFinished(generation: 1_001, result: .success(probe())))
+    await store.receive(.healthFinished(attempt: 1_002, result: .success(probe())))
     #expect(store.state.server == TestServer.server)
     #expect(script.healthCalls.count == 1)
     await store.send(.scenePhaseChanged(isActive: false))
+  }
+
+  @Test("restoring while offline recovers when the path returns without a manual retry")
+  func offlineRestoreRecovers() async {
+    let script = ScriptedClient(
+      health: Script([.success(TestServer.info)]),
+      projects: Script([.success(TestServer.projects)])
+    )
+    let state = ConnectionFeature.State(id: 1, server: TestServer.server, isOffline: true)
+    let store = store(script: script, state: state)
+
+    await store.send(.task) {
+      $0.phase = .reconnecting
+    }
+    #expect(script.healthCalls.count == 0)
+
+    await store.send(.networkPathChanged(.online)) {
+      $0.isOffline = false
+      $0.phase = .connecting
+    }
+    await store.receive(.healthFinished(attempt: 1_002, result: .success(probe()))) {
+      $0.phase = .loading
+      $0.info = TestServer.info
+    }
+    await store.receive(.delegate(.verified(TestServer.server, TestServer.info)))
+    await store.receive(.streamPhase(token: token(attempt: 1_002, stream: 3), phase: .connected))
+    await store.receive(.refreshFinished(attempt: 1_002, result: .success(TestServer.projects))) {
+      $0.phase = .connected
+      $0.projects = TestServer.projects
+    }
+    await store.receive(.delegate(.projects(TestServer.server, TestServer.projects, TestServer.info)))
+    #expect(script.healthCalls.count == 1)
+
+    await store.send(.scenePhaseChanged(isActive: false)) {
+      $0.phase = .reconnecting
+      $0.isInForeground = false
+    }
+  }
+
+  @Test("a path return while backgrounded does not start work")
+  func backgroundPathReturnWaits() async {
+    let script = ScriptedClient(
+      health: Script([.success(TestServer.info)]),
+      projects: Script([.success(TestServer.projects)])
+    )
+    let state = ConnectionFeature.State(
+      id: 1,
+      server: TestServer.server,
+      phase: .reconnecting,
+      isOffline: true,
+      isInForeground: false
+    )
+    let store = store(script: script, state: state)
+
+    await store.send(.networkPathChanged(.online)) {
+      $0.isOffline = false
+    }
+    #expect(script.healthCalls.count == 0)
+
+    await store.send(.scenePhaseChanged(isActive: true)) {
+      $0.isInForeground = true
+      $0.phase = .connecting
+    }
+    await store.receive(.healthFinished(attempt: 1_002, result: .success(probe()))) {
+      $0.phase = .loading
+      $0.info = TestServer.info
+    }
+    await store.receive(.delegate(.verified(TestServer.server, TestServer.info)))
+    await store.receive(.streamPhase(token: token(attempt: 1_002, stream: 3), phase: .connected))
+    await store.receive(.refreshFinished(attempt: 1_002, result: .success(TestServer.projects))) {
+      $0.phase = .connected
+      $0.projects = TestServer.projects
+    }
+    await store.receive(.delegate(.projects(TestServer.server, TestServer.projects, TestServer.info)))
+    await store.send(.scenePhaseChanged(isActive: false)) {
+      $0.phase = .reconnecting
+      $0.isInForeground = false
+    }
   }
 
   @Test("a stream drop shows reconnecting and the next handshake refreshes REST")
@@ -163,19 +244,26 @@ struct ConnectionFeatureTests {
     store.exhaustivity = .off
 
     await store.send(.task)
-    await store.receive(.refreshFinished(generation: 1_001, result: .success(TestServer.projects)))
+    await store.receive(.refreshFinished(attempt: 1_001, result: .success(TestServer.projects)))
     #expect(store.state.phase == .connected)
 
-    await store.send(ConnectionFeature.Action.streamPhase(.disconnected(OpenCodeClientError(.transport(.notSent))))) {
+    let current = token(attempt: 1_001, stream: 2)
+    await store.send(
+      ConnectionFeature.Action.streamPhase(
+        token: current,
+        phase: .disconnected(OpenCodeClientError(.transport(.notSent)))
+      )
+    ) {
       $0.phase = .reconnecting
     }
-    await store.send(ConnectionFeature.Action.streamPhase(.connected))
-    await store.receive(.refreshFinished(generation: 1_001, result: .success(refreshed))) {
+    await store.send(ConnectionFeature.Action.streamPhase(token: current, phase: .connected))
+    await store.receive(.refreshFinished(attempt: 1_001, result: .success(refreshed))) {
       $0.phase = .connected
       $0.projects = refreshed
     }
 
     #expect(script.projectCalls.count == 2)
+    await store.send(.scenePhaseChanged(isActive: false))
   }
 
   @Test("an overflow resynchronizes from REST before the next handshake")
@@ -190,25 +278,26 @@ struct ConnectionFeatureTests {
     let store = store(script: script, state: ConnectionFeature.State(id: 1, server: TestServer.server))
 
     await store.send(.task)
-    await store.receive(.healthFinished(generation: 1_001, result: .success(probe()))) {
+    await store.receive(.healthFinished(attempt: 1_001, result: .success(probe()))) {
       $0.phase = .loading
       $0.info = TestServer.info
     }
     await store.receive(.delegate(.verified(TestServer.server, TestServer.info)))
+    let current = token(attempt: 1_001, stream: 2)
 
     events.push(.phase(.connected))
-    await store.receive(.streamPhase(.connected))
-    await store.receive(.refreshFinished(generation: 1_001, result: .success(TestServer.projects))) {
+    await store.receive(.streamPhase(token: current, phase: .connected))
+    await store.receive(.refreshFinished(attempt: 1_001, result: .success(TestServer.projects))) {
       $0.phase = .connected
       $0.projects = TestServer.projects
     }
     await store.receive(.delegate(.projects(TestServer.server, TestServer.projects, TestServer.info)))
 
     events.push(.phase(.resynchronizing))
-    await store.receive(.streamPhase(.resynchronizing)) {
+    await store.receive(.streamPhase(token: current, phase: .resynchronizing)) {
       $0.phase = .reconnecting
     }
-    await store.receive(.streamResynchronized(result: .success(refreshed))) {
+    await store.receive(.streamResynchronized(token: current, result: .success(refreshed))) {
       $0.projects = refreshed
     }
     await store.receive(.delegate(.projects(TestServer.server, refreshed, TestServer.info)))
@@ -230,7 +319,7 @@ struct ConnectionFeatureTests {
     store.exhaustivity = .off
 
     await store.send(.task)
-    await store.receive(.refreshFinished(generation: 1_001, result: .success(TestServer.projects)))
+    await store.receive(.refreshFinished(attempt: 1_001, result: .success(TestServer.projects)))
     #expect(store.state.phase == .connected)
 
     await store.send(.scenePhaseChanged(isActive: false)) {
@@ -240,19 +329,21 @@ struct ConnectionFeatureTests {
 
     await store.send(.scenePhaseChanged(isActive: true)) {
       $0.isInForeground = true
+      $0.phase = .reconnecting
     }
-    await store.receive(.healthFinished(generation: 1_002, result: .success(probe()))) {
+    await store.receive(.healthFinished(attempt: 1_003, result: .success(probe()))) {
       $0.phase = .loading
     }
-    await store.receive(.refreshFinished(generation: 1_002, result: .success(TestServer.projects))) {
+    await store.receive(.refreshFinished(attempt: 1_003, result: .success(TestServer.projects))) {
       $0.phase = .connected
     }
 
     #expect(script.healthCalls.count == 2)
     #expect(script.projectCalls.count == 2)
+    await store.send(.scenePhaseChanged(isActive: false))
   }
 
-  @Test("a stale attempt generation cannot replace the current server")
+  @Test("a stale attempt cannot replace the current server")
   func staleAttemptIsIgnored() async {
     let script = ScriptedClient(
       health: Script([.success(TestServer.info)]),
@@ -266,9 +357,49 @@ struct ConnectionFeatureTests {
       candidates: 1,
       elapsedMilliseconds: 0
     )
-    await store.send(.healthFinished(generation: 4, result: .success(stale)))
+    await store.send(.healthFinished(attempt: 4, result: .success(stale)))
     #expect(store.state.server == TestServer.server)
     #expect(store.state.phase == .connecting)
     #expect(script.healthCalls.count == 0)
+  }
+
+  @Test("delayed stream and refresh callbacks from cancelled work are ignored")
+  func delayedCallbacksAreIgnored() async {
+    let script = ScriptedClient(
+      health: Script([.success(TestServer.info)]),
+      projects: Script([.success(TestServer.projects), .success([])])
+    )
+    let store = store(script: script, state: ConnectionFeature.State(id: 1, server: TestServer.server))
+    store.exhaustivity = .off
+
+    await store.send(.task)
+    await store.receive(.refreshFinished(attempt: 1_001, result: .success(TestServer.projects)))
+    let old = token(attempt: 1_001, stream: 2)
+
+    await store.send(.scenePhaseChanged(isActive: false)) {
+      $0.phase = .reconnecting
+      $0.isInForeground = false
+    }
+    let projectsBefore = store.state.projects
+
+    await store.send(.healthFinished(attempt: 1_001, result: .success(probe())))
+    await store.send(.refreshFinished(attempt: 1_001, result: .success([])))
+    await store.send(
+      .streamPhase(token: old, phase: .ended(OpenCodeClientError(.status(401))))
+    )
+    await store.send(
+      .streamEvent(
+        token: old,
+        event: .projectUpdated(
+          ServerProject(id: "late", name: "Late", directory: "/work/late")
+        )
+      )
+    )
+    await store.send(.streamResynchronized(token: old, result: .success([])))
+
+    #expect(store.state.phase == .reconnecting)
+    #expect(store.state.failure == nil)
+    #expect(store.state.projects == projectsBefore)
+    #expect(store.state.isInForeground == false)
   }
 }

@@ -23,15 +23,19 @@ public struct AppLaunchConfiguration: Sendable {
   public let uiTestScenario: UITestScenario?
   public let uiTestOpenURL: String?
   public let uiTestClipboard: String?
+  /// Use the in-app deterministic client instead of the network. Test runner only.
+  public let usesFixtureClient: Bool
 
   public init(
     uiTestScenario: UITestScenario? = nil,
     uiTestOpenURL: String? = nil,
-    uiTestClipboard: String? = nil
+    uiTestClipboard: String? = nil,
+    usesFixtureClient: Bool = false
   ) {
     self.uiTestScenario = uiTestScenario
     self.uiTestOpenURL = uiTestOpenURL
     self.uiTestClipboard = uiTestClipboard
+    self.usesFixtureClient = usesFixtureClient
   }
 
   public var initialState: AppFeature.State {
@@ -76,9 +80,17 @@ public struct AppLaunchConfiguration: Sendable {
     case .failedUnreachable:
       return failure(.unreachable)
     case .storageUnavailable:
-      return AppFeature.State(restore: .storageUnavailable(.unavailable), isPinnedForUITest: true)
+      return AppFeature.State(
+        restore: .storageUnavailable(.unavailable),
+        isPinnedForUITest: true,
+        savedData: .unreadable(.storage(.unavailable))
+      )
     case .corruptSaved:
-      return AppFeature.State(restore: .corruptSavedServers, isPinnedForUITest: true)
+      return AppFeature.State(
+        restore: .corruptSavedServers,
+        isPinnedForUITest: true,
+        savedData: .unreadable(.corrupt)
+      )
     case .pairingConfirm:
       let link = PairingLink(
         origin: "https://studio.invalid",
@@ -157,7 +169,8 @@ public struct AppLaunchConfiguration: Sendable {
     return AppLaunchConfiguration(
       uiTestScenario: scenario.flatMap(UITestScenario.init(rawValue:)),
       uiTestOpenURL: process.environment["OPENCODE_UI_TEST_OPEN_URL"] ?? argumentValue(after: "-uiTestOpenURL"),
-      uiTestClipboard: process.environment["OPENCODE_UI_TEST_CLIPBOARD"] ?? argumentValue(after: "-uiTestClipboard")
+      uiTestClipboard: process.environment["OPENCODE_UI_TEST_CLIPBOARD"] ?? argumentValue(after: "-uiTestClipboard"),
+      usesFixtureClient: process.environment["OPENCODE_UI_TEST_FIXTURE"] == "connected"
     )
   }
 

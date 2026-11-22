@@ -122,6 +122,47 @@ final class LaunchSmokeTests: XCTestCase {
     XCTAssertTrue(app.buttons["Enter a Server Manually"].exists)
   }
 
+  func testManualEntryFromStorageUnavailableShowsConnectionAndWarning() {
+    let app = launch(scenario: "storage-unavailable")
+    app.buttons["Enter a Server Manually"].tap()
+
+    let address = app.textFields["server-form-address"]
+    XCTAssertTrue(address.waitForExistence(timeout: 5))
+    address.tap()
+    address.typeText("laptop.local:4096")
+    app.buttons["Connect"].tap()
+
+    XCTAssertTrue(
+      app.descendants(matching: .any)["root-phase-loading"].waitForExistence(timeout: 5)
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["saved-data-warning"].waitForExistence(timeout: 5)
+    )
+  }
+
+  func testManualEntryFromCorruptSavedShowsConnectionAndWarning() {
+    let app = launch(scenario: "corrupt-saved")
+    app.buttons["Enter a Server Manually"].tap()
+
+    let address = app.textFields["server-form-address"]
+    XCTAssertTrue(address.waitForExistence(timeout: 5))
+    address.tap()
+    address.typeText("laptop.local:4096")
+    app.buttons["Connect"].tap()
+
+    XCTAssertTrue(
+      app.descendants(matching: .any)["root-phase-loading"].waitForExistence(timeout: 5)
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["saved-data-warning"].waitForExistence(timeout: 5)
+    )
+    XCTAssertTrue(app.buttons["Replace Saved Servers"].exists)
+    app.buttons["Replace Saved Servers"].tap()
+    XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.alerts.staticTexts["Replace Saved Servers?"].exists)
+    app.alerts.buttons["Cancel"].tap()
+  }
+
   func testCorruptStorageOffersAnExplicitReset() {
     let app = launch(scenario: "corrupt-saved")
 

@@ -479,3 +479,57 @@ through Swift Testing.
 - Protocol constants, accessibility identifiers, log events and fixture data stay literals.
 - Custom request headers and the copied error report are deferred with the manual form follow-up;
   the model and wire support already exist from P4.
+
+### D-39 Unreadable saved data is write-protected until explicitly replaced
+`SavedDataState` records whether the saved-server list was actually read. Only `.read` permits
+automatic persistence. A storage failure or an undecodable key leaves the state `.unreadable`; a
+manual connection is shown and kept in memory, but no write occurs until either:
+
+1. a retry reads the data successfully, in which case the preserved entries are reconciled with the
+   pending server and written; or
+2. the person confirms **Replace Saved Servers**, which deletes the unreadable keys and then writes
+   the reconciled list.
+
+- Partial corruption (a corrupt `saved-server` beside a readable list, or the reverse) is still
+  unreadable: the usable entries are preserved, but automatic writes are blocked.
+- A delete or write failure leaves the warning in place and reports the storage outcome; the app never
+  claims the replacement succeeded.
+- Gate: `AppFeatureTests` cover a manual connection over an unreadable list, a temporary read failure
+  followed by a successful retry with two preserved servers, a failed replacement, and partial
+  corruption; UI tests enter a server manually from both storage-error screens.
+
+### D-40 Attempt and stream identity cover every asynchronous stream callback
+`ConnectionFeature.Token` carries an attempt number and a stream number. Health and refresh results
+carry the attempt; stream phases, events and overflow resynchronization results carry both. Every
+reducer guard requires the current token.
+
+- Retry and replace start a new attempt; backgrounding and path loss cancel and invalidate; failure
+  invalidates before reporting. A delayed callback from cancelled work therefore cannot change the
+  server, phase, projects or failure.
+- The tokens are deliberately outside `State` equality; tests assert visible state and send stale
+  callbacks explicitly.
+- Gate: `ConnectionFeatureTests.delayedCallbacksAreIgnored` sends old health, refresh, stream phase,
+  project event and resynchronization results after backgrounding.
+
+### D-41 One connection-eligibility gate
+`ConnectionFeature.State.canAttempt` is `isInForeground && !isOffline`. Every start path (task, retry,
+foreground, path return) goes through `startIfEligible`; when ineligible the child cancels and
+invalidates work and shows the reconnecting/offline state. A path return while backgrounded does not
+start anything; becoming active does. An offline restore waits and then connects when the path
+returns, with no manual retry.
+
+- The child stores the path state passed by the shell; the parent forwards every path and scene change.
+- Gate: `ConnectionFeatureTests` cover offline restore, background path return, foreground recovery and
+  the lifecycle restart.
+
+### D-42 Child stores are scoped for observation, and fixtures are test-only
+`RootView` passes `store.scope(state: \.connection, action: \.connection)` to `ConnectionView`, so a
+child phase or project change updates the screen. Passing a child state value loses observation of its
+nested fields; a lifecycle UI test covers the connected → background → active transition.
+
+- `UITestFixture` is compiled only under `DEBUG` and is selected only by `-uiTesting` plus
+  `OPENCODE_UI_TEST_FIXTURE=connected`. It opens no socket.
+- `SavedServerProbe` is `DEBUG`-only, uses a disposable Keychain service, writes fake servers, reads
+  them through `AppRestoreResult`, and deletes them. It does not touch production credentials.
+- These hooks exist for device checks; neither is reachable in a release build or without its explicit
+  launch argument.

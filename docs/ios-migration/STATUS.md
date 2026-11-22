@@ -39,8 +39,11 @@ though the squash merge makes `2326a49b` not an ancestor.
 
 | Area | New or changed path | Gate |
 | --- | --- | --- |
-| Connection child reducer with identified state | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` (`ConnectionFeature`) | `ConnectionFeatureTests` — connect, auth, incompatible, malformed, offline, reconnect, overflow, lifecycle, stale generation |
-| App shell reducer: restore, form, pairing, persistence | same (`AppFeature`) | `AppFeatureTests` — restore outcomes, manual entry, pairing, persistence, disconnect, scene forwarding |
+| Connection child reducer with identified state | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` (`ConnectionFeature`) | `ConnectionFeatureTests` — connect, auth, incompatible, malformed, offline, reconnect, overflow, lifecycle, stale attempt/stream tokens |
+| App shell reducer: restore, form, pairing, persistence | same (`AppFeature`) | `AppFeatureTests` — restore outcomes, manual entry, pairing, persistence, disconnect, scene forwarding, unreadable-data recovery, multiple saved servers |
+| Saved-data trust and explicit replacement | same (`SavedDataState`, `SavedDataWarningBanner`) | `AppFeatureTests` — temporary read failure, preserved list, replace confirmation/failure; UI tests from both storage-error screens |
+| Attempt and stream identity | same (`ConnectionFeature.Token`) | `ConnectionFeatureTests` — delayed callbacks from cancelled work are ignored |
+| Central connection eligibility | same (`canAttempt`, `startIfEligible`) | `ConnectionFeatureTests` — offline restore, background path return, foreground recovery |
 | Address race over every candidate with a preferred head start | `OpenCodeKit/Sources/OpenCodeServer/Address/ServerLink.swift` | `ServerLinkTests` — first answer, 401 preference, head start, order |
 | Stream lifecycle phases | `OpenCodeKit/Sources/OpenCodeServer/Events/EventStream.swift` (`EventStreamPhase`, `onPhase`) | `EventStreamPhaseTests` — connected/disconnected/ended, 401, overflow order |
 | Client event seam with awaited phase callback | `OpenCodeKit/Sources/OpenCodeServer/Client/OpenCodeClient.swift` | `ConnectionFeatureTests`; `LocalFixtureServerTests.compatibleFixtureConnection` |
@@ -48,8 +51,8 @@ though the squash merge makes `2326a49b` not an ancestor.
 | SharedStore dependency and derived Keychain service | `OpenCodeKit/Sources/OpenCodeCore/Storage/SharedKeys.swift` | `SharedStoreTests`; app keychain probe |
 | Network path observation | `OpenCodeKit/Sources/OpenCodeCore/Network/NetworkPathClient.swift`, `OpenCodeKit/Sources/OpenCodeServer/Retry/NetworkPathRetry.swift` | injected path in `ConnectionFeatureTests`; live monitor is device-only |
 | Clipboard and UUID/date dependency names | `OpenCodeKit/Sources/OpenCodeCore/Dependencies/{PasteboardClient,FoundationClients}.swift` | dependency isolation; pairing tests |
-| Launch scenarios and URL scheme | `OpenCodeKit/Sources/OpenCodeApp/AppLaunchConfiguration.swift`, `ios/OpenCode/Info.plist`, `ios/OpenCode/App/OpenCodeApp.swift` | 13 UI tests |
-| Connection UI and string catalog | `ios/OpenCode/App/RootView.swift`, `ios/OpenCode/Resources/Localizable.xcstrings` | UI tests assert English copy |
+| Launch scenarios, URL scheme and device probes | `OpenCodeKit/Sources/OpenCodeApp/AppLaunchConfiguration.swift`, `ios/OpenCode/Info.plist`, `ios/OpenCode/App/{OpenCodeApp,SavedServerProbe,UITestFixture}.swift` | 18 UI tests, including lifecycle fixture and Keychain restore probe |
+| Connection UI and string catalog | `ios/OpenCode/App/RootView.swift`, `ios/OpenCode/Resources/Localizable.xcstrings` | child store scoped for observation; UI tests assert English copy |
 | Screenshots | `docs/ios-migration/screens/p5-{disconnected,connected,failed-unreachable}[-dark].png` | simulator, fixture data only, light and dark |
 
 ## Adopted values and freshness (baseline `dev = 7358160e`)
@@ -69,25 +72,28 @@ though the squash merge makes `2326a49b` not an ancestor.
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | **271 tests pass**: 161 server, 67 core, 43 app (live suite skipped without environment variables) |
-| `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; `OpenCodeTests` passes; **14 UI tests pass** (13 launch/connection shell + keychain probe); package suites pass |
+| `swift test --package-path ios/OpenCodeKit` | **279 tests pass**: 161 server, 67 core, 51 app (live suite skipped without environment variables) |
+| `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; `OpenCodeTests` passes; **18 UI tests pass**; package suites pass |
 | Loopback compatible fixture | `LocalFixtureServerTests.compatibleFixtureConnection` serves `/api/info`, `/api/project`, `/api/event` over the real `URLSession` stack; health, projects and the handshake all arrive |
-| Device compile | `xcodebuild -destination id=<device> CODE_SIGNING_ALLOWED=NO build` succeeds for arm64 iPhoneOS |
+| Signed device build and install | with the existing local development identity (identifier not recorded): build, install and launch on the connected iPhone succeed |
+| Device Keychain | `KeychainProbeTests` and `SavedServerProbeTests` pass on the device; the latter reads two fake servers through `AppRestoreResult` using a disposable service and removes them |
+| Device lifecycle | `ConnectionLifecycleUITests` passes on the device with the deterministic in-app client: connected → Home → activate → connected |
 | Screenshots | disconnected, connected and unreachable failure states captured in light and dark on the iPhone 18 Pro Max simulator with fixture-only data |
 
 One `BoundedChannelTests.waiterHandoff` run failed on a timing-sensitive expectation during the first
-`verify.sh`; the test passed alone and the full gate passed on the next run. This is a pre-existing
-test race (it sleeps 20 ms and assumes the consumer already took the first element), not a P5 change.
+`verify.sh`. The test sleeps 20 ms and assumes the consumer already took the first element. It was not
+changed in P5; the failing run and later green runs are recorded, but the reruns do **not** establish
+that the race is fixed or that P5 did not contribute to its timing. The cause remains unresolved.
 
 ## Not verified
 
-- **Signed install and on-device permission/lifecycle checks**: no development team is configured;
-  `xcodebuild` stops at “Signing for OpenCode requires a development team”. The unsigned arm64 build
-  compiles, but local-network prompts, background/foreground stream restart and real Keychain access
-  on hardware remain unverified.
+- **A real V2 server on the device**: the device lifecycle check uses the in-app deterministic client,
+  not a LAN server. Local-network prompts and a real socket's background/foreground restart remain
+  unverified on hardware.
 - **A real V2 server**: no build with the audited `/api/info` and `/api/project` routes was available.
   The P4 live build returns its web shell for those paths; P5 preserves `.incompatibleAPI` and does
-  not remap routes. Fixture coverage is separate from live evidence.
+  not remap routes. Fixture coverage is separate from live evidence. No P5 live connection succeeded
+  against a real V2 server.
 - **Camera QR pairing**: deferred; no scanner is implemented in P5. Paste and deep-link flows are
   implemented and tested.
 - **Custom request headers** in the manual form: deferred. The model (`OpenCodeServer.headers`) and

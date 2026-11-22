@@ -171,6 +171,7 @@ public enum AppNotice: Equatable, Sendable {
   case couldNotSaveServer(StorageFailure)
   case couldNotReadSavedServers
   case couldNotReadCache
+  case couldNotReplaceSavedData(StorageFailure)
 }
 
 public enum AppRestore: Equatable, Sendable {
@@ -178,6 +179,25 @@ public enum AppRestore: Equatable, Sendable {
   case ready
   case storageUnavailable(StorageFailure)
   case corruptSavedServers
+}
+
+/// Whether the saved server list was actually read. Only `.read` permits persistence; an unreadable
+/// list is preserved until the person explicitly replaces it.
+public enum SavedDataState: Equatable, Sendable {
+  case notLoaded
+  case read
+  case unreadable(SavedDataProblem)
+
+  public var isReadable: Bool { self == .read }
+  public var isUnreadable: Bool {
+    if case .unreadable = self { return true }
+    return false
+  }
+}
+
+public enum SavedDataProblem: Equatable, Sendable {
+  case storage(StorageFailure)
+  case corrupt
 }
 
 /// A read of the launch keys. Missing, corrupt and unavailable are separate answers; only an
@@ -275,10 +295,12 @@ public struct ConnectionFeature {
     /// A UI-test scenario is pinned: no effect may reach the network.
     public var isPinned: Bool
 
-    var generation = 0
-    var streamStarted = false
+    /// One gate for every start: foreground and a known non-offline path.
+    public var canAttempt: Bool { isInForeground && !isOffline }
+
+    var attempt = 0
+    var streamID = 0
     var hasBeenConnected = false
-    var wasOffline = false
 
     public init(
       id: Int,
@@ -300,7 +322,7 @@ public struct ConnectionFeature {
       self.isOffline = isOffline
       self.isInForeground = isInForeground
       self.isPinned = isPinned
-      self.generation = id * 1_000
+      self.attempt = id * 1_000
     }
 
     /// Effect bookkeeping is deliberately outside equality: a test asserts the visible connection,
@@ -318,16 +340,28 @@ public struct ConnectionFeature {
     }
   }
 
+  /// Identity for one attempt's stream. A retry, replacement, backgrounding, path loss or
+  /// disconnect changes the token, so delayed callbacks from the old work cannot touch state.
+  public struct Token: Equatable, Sendable {
+    public let attempt: Int
+    public let stream: Int
+
+    public init(attempt: Int, stream: Int) {
+      self.attempt = attempt
+      self.stream = stream
+    }
+  }
+
   public enum Action: Equatable, Sendable {
     case task
     case retryTapped
     case scenePhaseChanged(isActive: Bool)
     case networkPathChanged(NetworkPath)
-    case healthFinished(generation: Int, result: Result<ServerLinkProbe, OpenCodeClientError>)
-    case refreshFinished(generation: Int, result: Result<[ServerProject], OpenCodeClientError>)
-    case streamResynchronized(result: Result<[ServerProject], OpenCodeClientError>)
-    case streamPhase(EventStreamPhase)
-    case streamEvent(ServerEvent)
+    case healthFinished(attempt: Int, result: Result<ServerLinkProbe, OpenCodeClientError>)
+    case refreshFinished(attempt: Int, result: Result<[ServerProject], OpenCodeClientError>)
+    case streamResynchronized(token: Token, result: Result<[ServerProject], OpenCodeClientError>)
+    case streamPhase(token: Token, phase: EventStreamPhase)
+    case streamEvent(token: Token, event: ServerEvent)
     case delegate(Delegate)
   }
 
@@ -351,69 +385,59 @@ public struct ConnectionFeature {
   public var body: some Reducer<State, Action> {
     Reduce { state, action in
       switch action {
-      case .task:
+      case .task, .retryTapped:
         guard !state.isPinned else { return .none }
-        return startConnecting(&state)
-
-      case .retryTapped:
-        guard !state.isPinned else { return .none }
-        return startConnecting(&state)
+        return startIfEligible(&state)
 
       case .scenePhaseChanged(let isActive):
         state.isInForeground = isActive
         guard !state.isPinned else { return .none }
         if !isActive {
-          if state.phase == .failed { return .none }
+          if state.phase == .failed { return stopWork(&state) }
           if state.hasBeenConnected { state.phase = .reconnecting }
-          state.streamStarted = false
-          return .merge(.cancel(id: CancelID.health), .cancel(id: CancelID.refresh), .cancel(id: CancelID.stream))
+          return stopWork(&state)
         }
         if state.phase == .failed && state.failure != .offline { return .none }
-        return startConnecting(&state)
+        return startIfEligible(&state)
 
       case .networkPathChanged(let path):
-        let wasOffline = state.wasOffline
-        state.wasOffline = path.isOffline
+        let wasOffline = state.isOffline
         state.isOffline = path.isOffline
         guard !state.isPinned else { return .none }
-        if path.isOffline && !wasOffline {
-          if state.phase != .failed {
-            if state.hasBeenConnected {
-              state.phase = .reconnecting
-            } else {
-              state.phase = .failed
-              state.failure = .offline
-            }
-          }
-          state.streamStarted = false
-          return .merge(.cancel(id: CancelID.health), .cancel(id: CancelID.refresh), .cancel(id: CancelID.stream))
+        if path.isOffline {
+          if state.phase != .failed { state.phase = .reconnecting }
+          return stopWork(&state)
         }
-        if !path.isOffline && wasOffline {
-          if state.phase != .failed || state.failure == .offline {
-            return startConnecting(&state)
-          }
+        if wasOffline, state.phase != .failed || state.failure == .offline {
+          return startIfEligible(&state)
         }
         return .none
 
-      case .healthFinished(let generation, let result):
-        guard generation == state.generation else { return .none }
+      case .healthFinished(let attempt, let result):
+        guard attempt == state.attempt else { return .none }
         switch result {
         case .success(let probe):
+          guard state.canAttempt else {
+            state.server = probe.server
+            state.info = probe.info
+            state.phase = .reconnecting
+            return stopWork(&state)
+          }
           state.server = probe.server
           state.info = probe.info
           state.failure = nil
           state.phase = .loading
-          state.streamStarted = true
+          let token = nextStreamToken(&state)
           return .merge(
             .send(.delegate(.verified(probe.server, probe.info))),
-            streamEffect(server: probe.server)
+            streamEffect(server: probe.server, token: token)
           )
         case .failure(let error):
           return fail(&state, .from(error, isOffline: state.isOffline))
         }
 
-      case .refreshFinished(let generation, let result):
-        guard generation == state.generation else { return .none }
+      case .refreshFinished(let attempt, let result):
+        guard attempt == state.attempt else { return .none }
         switch result {
         case .success(let projects):
           state.projects = projects
@@ -426,29 +450,26 @@ public struct ConnectionFeature {
           )
           return .send(.delegate(.projects(state.server, projects, state.info)))
         case .failure(let error):
-          state.streamStarted = false
-          return .merge(.cancel(id: CancelID.stream), fail(&state, .from(error, isOffline: state.isOffline)))
+                return .merge(.cancel(id: CancelID.stream), fail(&state, .from(error, isOffline: state.isOffline)))
         }
 
-      case .streamResynchronized(let result):
-        guard !state.isPinned else { return .none }
+      case .streamResynchronized(let token, let result):
+        guard token == currentToken(state), !state.isPinned else { return .none }
         if case .success(let projects) = result {
           state.projects = projects
           return .send(.delegate(.projects(state.server, projects, state.info)))
         }
         return .none
 
-      case .streamPhase(let phase):
-        guard !state.isPinned else { return .none }
+      case .streamPhase(let token, let phase):
+        guard token == currentToken(state), !state.isPinned else { return .none }
         switch phase {
         case .connected:
           guard state.phase != .failed else { return .none }
-          state.streamStarted = true
-          return refreshEffect(generation: state.generation, server: state.server)
+          return refreshEffect(attempt: state.attempt, server: state.server)
         case .disconnected(let error):
           if let error, error.statusCode == 401 {
-            state.streamStarted = false
-            return .merge(.cancel(id: CancelID.stream), fail(&state, .credentialsRejected))
+            return fail(&state, .credentialsRejected)
           }
           if state.phase != .failed {
             state.phase = .reconnecting
@@ -460,13 +481,12 @@ public struct ConnectionFeature {
           return .none
         case .ended(let error):
           guard state.phase != .failed else { return .none }
-          state.streamStarted = false
           let failure = error.map { ConnectionFailure.from($0, isOffline: state.isOffline) } ?? .streamEnded
           return fail(&state, failure)
         }
 
-      case .streamEvent(let event):
-        guard !state.isPinned else { return .none }
+      case .streamEvent(let token, let event):
+        guard token == currentToken(state), !state.isPinned else { return .none }
         switch event {
         case .projectUpdated(let project):
           if let index = state.projects.firstIndex(where: { $0.id == project.id }) {
@@ -485,12 +505,42 @@ public struct ConnectionFeature {
     }
   }
 
+  private func startIfEligible(_ state: inout State) -> Effect<Action> {
+    guard state.canAttempt else { return stopWork(&state, phase: .reconnecting) }
+    return startConnecting(&state)
+  }
+
+  private func currentToken(_ state: State) -> Token {
+    Token(attempt: state.attempt, stream: state.streamID)
+  }
+
+  private func nextStreamToken(_ state: inout State) -> Token {
+    state.streamID += 1
+    return currentToken(state)
+  }
+
+  /// Invalidates every callback from the work being cancelled. Called for backgrounding, path
+  /// loss, retry, replacement and failure, so a delayed answer cannot touch the new attempt.
+  private func stopWork(
+    _ state: inout State,
+    phase: State.Phase? = nil
+  ) -> Effect<Action> {
+    state.attempt += 1
+    state.streamID += 1
+    if let phase { state.phase = phase }
+    return .merge(
+      .cancel(id: CancelID.health),
+      .cancel(id: CancelID.refresh),
+      .cancel(id: CancelID.stream)
+    )
+  }
+
   private func startConnecting(_ state: inout State) -> Effect<Action> {
-    state.generation += 1
-    let generation = state.generation
+    state.attempt += 1
+    state.streamID += 1
+    let attempt = state.attempt
     state.phase = state.hasBeenConnected ? .reconnecting : .connecting
     state.failure = nil
-    state.streamStarted = false
     let server = state.server
     let client = client
     let clock = clock
@@ -502,13 +552,13 @@ public struct ConnectionFeature {
     let health = Effect<Action>.run { send in
       do {
         let probe = try await ServerLink.probe(server, health: client.health, clock: clock)
-        await send(.healthFinished(generation: generation, result: .success(probe)))
+        await send(.healthFinished(attempt: attempt, result: .success(probe)))
       } catch let error as OpenCodeClientError {
-        await send(.healthFinished(generation: generation, result: .failure(error)))
+        await send(.healthFinished(attempt: attempt, result: .failure(error)))
       } catch is CancellationError {
         return
       } catch {
-        await send(.healthFinished(generation: generation, result: .failure(OpenCodeClientError(.unreachable))))
+        await send(.healthFinished(attempt: attempt, result: .failure(OpenCodeClientError(.unreachable))))
       }
     }
     .cancellable(id: CancelID.health, cancelInFlight: true)
@@ -520,63 +570,67 @@ public struct ConnectionFeature {
     )
   }
 
-  private func refreshEffect(generation: Int, server: OpenCodeServer) -> Effect<Action> {
+  private func refreshEffect(attempt: Int, server: OpenCodeServer) -> Effect<Action> {
     let client = client
     return .run { send in
       do {
         let projects = try await client.projects(server)
-        await send(.refreshFinished(generation: generation, result: .success(projects)))
+        await send(.refreshFinished(attempt: attempt, result: .success(projects)))
       } catch let error as OpenCodeClientError {
-        await send(.refreshFinished(generation: generation, result: .failure(error)))
+        await send(.refreshFinished(attempt: attempt, result: .failure(error)))
       } catch is CancellationError {
         return
       } catch {
-        await send(.refreshFinished(generation: generation, result: .failure(OpenCodeClientError(.unreachable))))
+        await send(.refreshFinished(attempt: attempt, result: .failure(OpenCodeClientError(.unreachable))))
       }
     }
     .cancellable(id: CancelID.refresh, cancelInFlight: true)
   }
 
-  private func streamEffect(server: OpenCodeServer) -> Effect<Action> {
+  private func streamEffect(server: OpenCodeServer, token: Token) -> Effect<Action> {
     let client = client
     return .run { send in
       let stream = client.events(server) { phase in
         if case .resynchronizing = phase {
-          await send(.streamPhase(phase))
+          await send(.streamPhase(token: token, phase: phase))
           do {
             let projects = try await client.projects(server)
-            await send(.streamResynchronized(result: .success(projects)))
+            await send(.streamResynchronized(token: token, result: .success(projects)))
           } catch let error as OpenCodeClientError {
-            await send(.streamResynchronized(result: .failure(error)))
+            await send(.streamResynchronized(token: token, result: .failure(error)))
           } catch is CancellationError {
             return
           } catch {
-            await send(.streamResynchronized(result: .failure(OpenCodeClientError(.unreachable))))
+            await send(.streamResynchronized(token: token, result: .failure(OpenCodeClientError(.unreachable))))
           }
         } else {
-          await send(.streamPhase(phase))
+          await send(.streamPhase(token: token, phase: phase))
         }
       }
       do {
         for try await event in stream {
-          await send(.streamEvent(event))
+          await send(.streamEvent(token: token, event: event))
         }
-        await send(.streamPhase(.ended(nil)))
+        await send(.streamPhase(token: token, phase: .ended(nil)))
       } catch is CancellationError {
         return
       } catch let error as OpenCodeClientError {
-        await send(.streamPhase(.ended(error)))
+        await send(.streamPhase(token: token, phase: .ended(error)))
       } catch {
-        await send(.streamPhase(.ended(OpenCodeClientError(.unreachable))))
+        await send(.streamPhase(token: token, phase: .ended(OpenCodeClientError(.unreachable))))
       }
     }
     .cancellable(id: CancelID.stream, cancelInFlight: true)
   }
 
   private func fail(_ state: inout State, _ failure: ConnectionFailure) -> Effect<Action> {
+    state.attempt += 1
+    state.streamID += 1
     state.phase = .failed
     state.failure = failure
-    state.streamStarted = false
+
+    state.phase = .failed
+    state.failure = failure
     AppLog(category: .app).event(
       .connectionFailed,
       [
@@ -612,8 +666,11 @@ public struct AppFeature {
     public var isInForeground: Bool
     public var networkPath: NetworkPath
     public var isPinnedForUITest: Bool
+    public var savedData: SavedDataState
+    public var showsReplaceSavedDataConfirmation: Bool
 
     var didStart = false
+    var pendingSave: OpenCodeServer?
     var nextConnectionID = 1
     var nextPairingAttempt = 1
 
@@ -630,7 +687,9 @@ public struct AppFeature {
       notice: AppNotice? = nil,
       isInForeground: Bool = true,
       networkPath: NetworkPath = .online,
-      isPinnedForUITest: Bool = false
+      isPinnedForUITest: Bool = false,
+      savedData: SavedDataState = .notLoaded,
+      showsReplaceSavedDataConfirmation: Bool = false
     ) {
       self.restore = restore
       self.connection = connection
@@ -645,6 +704,8 @@ public struct AppFeature {
       self.isInForeground = isInForeground
       self.networkPath = networkPath
       self.isPinnedForUITest = isPinnedForUITest
+      self.savedData = savedData
+      self.showsReplaceSavedDataConfirmation = showsReplaceSavedDataConfirmation
     }
 
     public static func == (lhs: State, rhs: State) -> Bool {
@@ -661,6 +722,8 @@ public struct AppFeature {
         && lhs.isInForeground == rhs.isInForeground
         && lhs.networkPath == rhs.networkPath
         && lhs.isPinnedForUITest == rhs.isPinnedForUITest
+        && lhs.savedData == rhs.savedData
+        && lhs.showsReplaceSavedDataConfirmation == rhs.showsReplaceSavedDataConfirmation
     }
   }
 
@@ -688,6 +751,15 @@ public struct AppFeature {
     case disconnectTapped
     case noticeDismissed
     case persisted(saved: StorageWrite, list: StorageWrite)
+    case replaceSavedDataTapped
+    case replaceSavedDataCancelled
+    case replaceSavedDataConfirmed
+    case replaceSavedDataFinished(
+      deleteSaved: StorageWrite,
+      deleteList: StorageWrite,
+      save: StorageWrite,
+      list: StorageWrite
+    )
     case connection(ConnectionFeature.Action)
   }
 
@@ -719,11 +791,20 @@ public struct AppFeature {
         switch result {
         case .missing:
           state.restore = .ready
+          state.savedData = .read
           AppLog(category: .app).event(.launchStarted, [LogField("restored", .flag(false))])
+          if let pending = state.pendingSave {
+            let servers = SavedServers.remembering(pending, among: state.savedServers)
+            state.savedServer = servers.first ?? pending
+            state.savedServers = servers
+            state.pendingSave = nil
+            return persistEffect(server: pending, servers: servers)
+          }
           return .none
 
         case .storageUnavailable(let failure):
           state.restore = .storageUnavailable(failure)
+          state.savedData = .unreadable(.storage(failure))
           AppLog(category: .app).event(
             .launchFailed,
             [LogField("storage", .flag(true))]
@@ -732,6 +813,7 @@ public struct AppFeature {
 
         case .corrupt:
           state.restore = .corruptSavedServers
+          state.savedData = .unreadable(.corrupt)
           AppLog(category: .app).event(
             .launchFailed,
             [LogField("corrupt", .flag(true))]
@@ -739,9 +821,9 @@ public struct AppFeature {
           return .none
 
         case .restored(let server, let servers, let cache, let notice):
+          let corruptCredentialData = notice == .couldNotReadSavedServers
           state.restore = .ready
-          state.savedServer = server
-          state.savedServers = servers
+          state.savedData = corruptCredentialData ? .unreadable(.corrupt) : .read
           state.notice = notice
           AppLog(category: .app).event(
             .launchStarted,
@@ -751,6 +833,24 @@ public struct AppFeature {
               LogField("servers", .count(servers.count)),
             ]
           )
+
+          var persistence: Effect<Action> = .none
+          if let pending = state.pendingSave {
+            let reconciled = SavedServers.remembering(pending, among: servers)
+            state.savedServer = reconciled.first ?? pending
+            state.savedServers = reconciled
+            if corruptCredentialData {
+              state.pendingSave = pending
+            } else {
+              state.pendingSave = nil
+              persistence = persistEffect(server: pending, servers: reconciled)
+            }
+          } else {
+            state.savedServer = server
+            state.savedServers = servers
+          }
+
+          guard state.connection == nil else { return persistence }
           let id = state.nextConnectionID
           state.nextConnectionID += 1
           state.connection = ConnectionFeature.State(
@@ -762,7 +862,7 @@ public struct AppFeature {
             isInForeground: state.isInForeground,
             isPinned: state.isPinnedForUITest
           )
-          return .send(.connection(.task))
+          return .merge(persistence, .send(.connection(.task)))
         }
 
       case .scenePhaseChanged(let isActive):
@@ -786,8 +886,67 @@ public struct AppFeature {
         if case .failure(let failure) = list { return .send(.restored(.storageUnavailable(failure))) }
         state.savedServer = nil
         state.savedServers = []
+        state.savedData = .read
+        state.pendingSave = nil
         state.restore = .ready
         state.connection = nil
+        state.notice = nil
+        return .none
+
+      case .replaceSavedDataTapped:
+        state.showsReplaceSavedDataConfirmation = true
+        return .none
+
+      case .replaceSavedDataCancelled:
+        state.showsReplaceSavedDataConfirmation = false
+        return .none
+
+      case .replaceSavedDataConfirmed:
+        state.showsReplaceSavedDataConfirmation = false
+        guard let server = state.savedServers.first ?? state.savedServer else {
+          return .none
+        }
+        let servers = state.savedServers.isEmpty ? [server] : state.savedServers
+        let store = store
+        return .run { send in
+          let deleteSaved = store.delete(ServerSharedKeys.savedServer)
+          let deleteList = store.delete(ServerSharedKeys.savedServers)
+          var save: StorageWrite = .failure(.unavailable)
+          var list: StorageWrite = .failure(.unavailable)
+          if case .success = deleteSaved, case .success = deleteList {
+            save = store.write(server, for: ServerSharedKeys.savedServer)
+            list = store.write(servers, for: ServerSharedKeys.savedServers)
+          }
+          await send(
+            .replaceSavedDataFinished(
+              deleteSaved: deleteSaved,
+              deleteList: deleteList,
+              save: save,
+              list: list
+            )
+          )
+        }
+
+      case .replaceSavedDataFinished(let deleteSaved, let deleteList, let save, let list):
+        if case .failure(let failure) = deleteSaved {
+          state.notice = .couldNotReplaceSavedData(failure)
+          return .none
+        }
+        if case .failure(let failure) = deleteList {
+          state.notice = .couldNotReplaceSavedData(failure)
+          return .none
+        }
+        if case .failure(let failure) = save {
+          state.notice = .couldNotReplaceSavedData(failure)
+          return .none
+        }
+        if case .failure(let failure) = list {
+          state.notice = .couldNotReplaceSavedData(failure)
+          return .none
+        }
+        state.savedData = .read
+        state.pendingSave = nil
+        state.restore = .ready
         state.notice = nil
         return .none
 
@@ -893,6 +1052,7 @@ public struct AppFeature {
         state.connection = nil
         state.pairingAttempt = nil
         state.pendingPairing = nil
+        state.pendingSave = nil
         return .cancel(id: CancelID.pairing)
 
       case .noticeDismissed:
@@ -905,12 +1065,11 @@ public struct AppFeature {
         state.savedServer = remembered
         state.savedServers = servers
         _ = info
-        let store = store
-        return .run { send in
-          let saved = store.write(remembered, for: ServerSharedKeys.savedServer)
-          let list = store.write(servers, for: ServerSharedKeys.savedServers)
-          await send(.persisted(saved: saved, list: list))
+        guard state.savedData.isReadable else {
+          state.pendingSave = remembered
+          return .none
         }
+        return persistEffect(server: remembered, servers: servers)
 
       case .persisted(let saved, let list):
         if case .failure(let failure) = saved {
@@ -952,6 +1111,15 @@ public struct AppFeature {
   }
 
   // MARK: Effects
+
+  private func persistEffect(server: OpenCodeServer, servers: [OpenCodeServer]) -> Effect<Action> {
+    let store = store
+    return .run { send in
+      let saved = store.write(server, for: ServerSharedKeys.savedServer)
+      let list = store.write(servers, for: ServerSharedKeys.savedServers)
+      await send(.persisted(saved: saved, list: list))
+    }
+  }
 
   private func restoreEffect() -> Effect<Action> {
     let store = store

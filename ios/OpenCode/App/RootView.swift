@@ -29,6 +29,9 @@ struct RootView: View {
             if let problem = store.pairingProblem, store.connection != nil {
               PairingProblemBanner(problem: problem) { store.send(.pairingProblemDismissed) }
             }
+            if store.connection != nil, store.savedData.isUnreadable {
+              SavedDataWarningBanner { store.send(.replaceSavedDataTapped) }
+            }
             if let notice = store.notice {
               NoticeBanner(notice: notice) { store.send(.noticeDismissed) }
             }
@@ -60,6 +63,19 @@ struct RootView: View {
     } message: { pending in
       Text(pairingMessage(pending))
     }
+    .alert(
+      Text(AppCopy.text("saved_data.confirm.title")),
+      isPresented: replaceConfirmationPresented
+    ) {
+      Button(AppCopy.text("saved_data.confirm.action"), role: .destructive) {
+        store.send(.replaceSavedDataConfirmed)
+      }
+      Button(AppCopy.text("common.cancel"), role: .cancel) {
+        store.send(.replaceSavedDataCancelled)
+      }
+    } message: {
+      Text(AppCopy.text("saved_data.confirm.message"))
+    }
   }
 
   @ViewBuilder
@@ -76,6 +92,12 @@ struct RootView: View {
         store.send(.pairingProblemDismissed)
         store.send(.manualEntryTapped)
       }
+    } else if let connectionStore = store.scope(state: \.connection, action: \.connection) {
+      ConnectionView(
+        store: connectionStore,
+        edit: { store.send(.manualEntryTapped) },
+        disconnect: { store.send(.disconnectTapped) }
+      )
     } else if case .storageUnavailable(let failure) = store.restore {
       StorageFailureView(failure: failure) {
         store.send(.restoreRetried)
@@ -86,13 +108,6 @@ struct RootView: View {
       CorruptStorageView(
         forget: { store.send(.forgetSavedServersTapped) },
         enterManually: { store.send(.manualEntryTapped) }
-      )
-    } else if let connection = store.connection {
-      ConnectionView(
-        state: connection,
-        retry: { store.send(.connection(.retryTapped)) },
-        edit: { store.send(.manualEntryTapped) },
-        disconnect: { store.send(.disconnectTapped) }
       )
     } else {
       DisconnectedView(
@@ -122,6 +137,13 @@ struct RootView: View {
 
   private var pairingTitle: String {
     AppCopy.format("pairing.confirm.title", store.pendingPairing?.hosts.first ?? "")
+  }
+
+  private var replaceConfirmationPresented: Binding<Bool> {
+    Binding(
+      get: { store.showsReplaceSavedDataConfirmation },
+      set: { if !$0 { store.send(.replaceSavedDataCancelled) } }
+    )
   }
 
   private func pairingMessage(_ pending: PairingConfirmation) -> String {
@@ -341,36 +363,51 @@ private struct ServerFormView: View {
 // MARK: - Connection states
 
 private struct ConnectionView: View {
-  let state: ConnectionFeature.State
-  let retry: () -> Void
+  let store: StoreOf<ConnectionFeature>
   let edit: () -> Void
   let disconnect: () -> Void
 
   var body: some View {
-    switch state.phase {
+    let phase = store.phase
+    let projects = store.projects
+    let server = store.server
+    let info = store.info
+    let failure = store.failure
+    let isOffline = store.isOffline
+    let state = ConnectionFeature.State(
+      id: store.id,
+      server: server,
+      phase: phase,
+      info: info,
+      projects: projects,
+      failure: failure,
+      isOffline: isOffline
+    )
+
+    switch phase {
     case .connected:
       ConnectedView(state: state, disconnect: disconnect)
     case .connecting:
       LoadingView(
         identifier: "root-phase-loading",
         label: AppCopy.text("connection.phase.connecting"),
-        detail: state.server.displayName,
-        projects: state.projects
+        detail: server.displayName,
+        projects: projects
       )
     case .loading:
       LoadingView(
         identifier: "root-phase-loading",
         label: AppCopy.text("connection.phase.loading"),
-        detail: state.server.displayName,
-        projects: state.projects
+        detail: server.displayName,
+        projects: projects
       )
     case .reconnecting:
-      ReconnectingView(state: state, retry: retry, disconnect: disconnect)
+      ReconnectingView(state: state, retry: { store.send(.retryTapped) }, disconnect: disconnect)
     case .failed:
       FailureView(
-        failure: state.failure ?? .unknown,
-        isOffline: state.isOffline,
-        retry: retry,
+        failure: failure ?? .unknown,
+        isOffline: isOffline,
+        retry: { store.send(.retryTapped) },
         edit: edit,
         disconnect: disconnect
       )
@@ -747,6 +784,34 @@ private struct NoticeBanner: View {
   }
 }
 
+private struct SavedDataWarningBanner: View {
+  let replace: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: OpenCodeSpacing.s8) {
+      Text(AppCopy.text("saved_data.warning"))
+        .font(OpenCodeFonts.font(.footnote))
+        .foregroundStyle(OpenCodeColors.color(.warning))
+      Button(action: replace) {
+        Text(AppCopy.text("saved_data.replace"))
+          .font(OpenCodeFonts.font(.footnote))
+          .foregroundStyle(OpenCodeColors.color(.link))
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("saved-data-replace")
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(OpenCodeSpacing.s12)
+    .background(OpenCodeColors.color(.surfaceStrong))
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(OpenCodeColors.color(.border))
+        .frame(height: 0.5)
+    }
+    .accessibilityIdentifier("saved-data-warning")
+  }
+}
+
 private struct PairingProblemBanner: View {
   let problem: PairingProblem
   let dismiss: () -> Void
@@ -887,6 +952,8 @@ private func noticeText(_ notice: AppNotice) -> String {
     return AppCopy.text("notice.saved_list_unreadable")
   case .couldNotReadCache:
     return AppCopy.text("notice.cache_unreadable")
+  case .couldNotReplaceSavedData:
+    return AppCopy.text("notice.replace_failed")
   }
 }
 
