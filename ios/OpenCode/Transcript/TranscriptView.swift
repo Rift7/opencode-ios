@@ -79,11 +79,11 @@ struct TranscriptView: View {
           withAnimation(nil) { proxy.scrollTo(anchor, anchor: .top) }
           return
         }
-        guard isFollowing, let lastEntryID else { return }
+        guard isFollowing, !readerIsScrolling, let lastEntryID else { return }
         withAnimation(nil) { proxy.scrollTo(lastEntryID, anchor: .bottom) }
       }
       .onChange(of: lastEntryID) { _, _ in
-        guard isFollowing, let lastEntryID else { return }
+        guard isFollowing, !readerIsScrolling, let lastEntryID else { return }
         withAnimation(nil) { proxy.scrollTo(lastEntryID, anchor: .bottom) }
       }
       .overlay(alignment: .bottomTrailing) {
