@@ -203,7 +203,7 @@ public struct AppLaunchConfiguration: Sendable {
       uiTestScenario: scenario.flatMap(UITestScenario.init(rawValue:)),
       uiTestOpenURL: process.environment["OPENCODE_UI_TEST_OPEN_URL"] ?? argumentValue(after: "-uiTestOpenURL"),
       uiTestClipboard: process.environment["OPENCODE_UI_TEST_CLIPBOARD"] ?? argumentValue(after: "-uiTestClipboard"),
-      usesFixtureClient: fixture?.hasPrefix("connected") == true,
+      usesFixtureClient: fixture != nil,
       uiTestFixture: fixture,
       uiTestAppearance: process.environment["OPENCODE_UI_TEST_APPEARANCE"]
     )

@@ -41,6 +41,9 @@ public enum LogEvent: String, Sendable, CaseIterable {
   case sessionInterrupt = "session.interrupt"
   case requestReplied = "request.replied"
   case shellOutputLoaded = "shell.output.loaded"
+  case transcriptLoaded = "transcript.loaded"
+  case transcriptEarlierLoaded = "transcript.earlier.loaded"
+  case transcriptCopied = "transcript.copied"
 }
 
 /// The only values that may be published with public visibility: numbers and booleans. There is no

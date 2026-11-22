@@ -51,9 +51,9 @@ uses: unknown keys ignored, absent optionals nil, a present wrong type rejects t
 | GET | `/api/session/{id}` | same | `Operations.getSession` | implemented + tested: `time.updated` ms, title placeholder, archive, revert, notification metadata |
 | GET | `/api/session/active` | `live/LiveSessions.kt`, `live/LiveFamily.kt` | `Operations.activeSessionIDs`, `Operations.sessionIsActive` | implemented + tested: map envelope; the single-session check is the Stop settlement read |
 | GET | `/api/event` | `live/LiveEvents.kt` (`4c1e0054`, 2026-11-20) | `EventStream`, `EventStreamRunner` | implemented + tested: SSE, batching, watchdog, 401 stop, reconnect |
-| GET | `/api/session/{id}/message?order=desc&limit=N` | `live/LiveTranscript.kt` | — | deferred to P8 (transcript) |
-| GET | `/api/session/{id}/message?limit=N&cursor=…` | same | — | deferred to P8 |
-| GET | `/api/session/{id}/message/{messageID}` | same | — | deferred to P8 |
+| GET | `/api/session/{id}/message?order=desc&limit=N` | `live/LiveTranscript.kt` (`requestTranscript`) | `Operations.transcript`, `TranscriptDecoder.page` | implemented + tested: newest window (30), oldest-first rows, cursor, all audited message types |
+| GET | `/api/session/{id}/message?limit=N&cursor=…` | same (`requestHistoryPage`) | `Operations.transcriptHistory` | implemented + tested: 80 per page, 20 s, `order=desc` when the edge is unknown, same-cursor loop rejected |
+| GET | `/api/session/{id}/message/{messageID}` | same (`requestMessage`) | `Operations.message` | implemented + tested: ordered rows, strict decode |
 | POST | `/api/session/{id}/prompt` (30 s, idempotent by message id) | `live/LivePrompts.kt` | `PromptBody` (core fields only) | modelled + encoded in tests; call site deferred to P9 (composer) |
 | POST | `/api/session/{id}/interrupt?resume=true` | `live/LiveSessions.kt` `requestInterrupt` | `Operations.interruptSession` | implemented + tested: `{interrupted}`, unsafe, one attempt per caller-owned retry; ambiguity reads active/inbox before another try |
 | POST | `/api/session` (create; idempotent only with a client id) | `live/LiveSessions.kt` `requestCreateSession` | — | deferred to P11 (What's New Try It) |
@@ -67,7 +67,7 @@ uses: unknown keys ignored, absent optionals nil, a present wrong type rejects t
 | POST | `/api/session/{id}/revert/stage`, `DELETE …/revert` | same | — | deferred (not in P7 scope) |
 | POST | `/api/session/{id}/background` | same | — | deferred (not in P7 scope) |
 | GET | `/api/experimental/session/{id}/export` (60 s) | same `requestExportSession` | — | deferred (not in P7 scope) |
-| POST | `/api/experimental/session/{id}/wait` (25 s poll, idempotent) | same `requestWaitForIdle` | — | deferred to P8 (the transcript wait loop owns its retries) |
+| POST | `/api/experimental/session/{id}/wait` (25 s poll, idempotent) | same `requestWaitForIdle` | — | deferred to P9: the send path owns the wait loop; P8 settlement reads do not poll |
 | GET | `/api/session?parentID={id}&order=desc&limit=100` | `live/LiveFamily.kt` `requestSessionFamily` | `Operations.sessionFamily` | implemented + tested: BFS, six pages in flight, 100-session cap, cycle/dedupe, bounded running ancestry |
 | GET | `/api/session/{id}/inbox` | `live/LivePrompts.kt` | `Operations.pendingInputs` | implemented + tested: user/synthetic/compaction rows, delivery steer/queue. The composer sheet is P9 |
 | PATCH | `/api/session/{id}/inbox/{inputID}` (unsafe; 409 or read-back settles) | same | `Operations.setPendingInputDelivery` | implemented + tested: reads the inbox back after ambiguity or 409; stranded steer queues then steers |
@@ -133,7 +133,7 @@ types skipped without decoding data, `_tag` frames fail the connection, EOF is a
 | `session.moved` | `.sessionMoved`, else `.messageInvalidated` | implemented + tested |
 | `session.viewed` | `.sessionViewChanged` (ms) | implemented + tested |
 | `session.inbox.enqueued`/`delivery.changed`/`delivered`/`cancelled` | `.inputEnqueued`, `.inputQueueChanged`, `.inputCancelled` | implemented + tested; P7 re-reads the inbox and the session screen shows steering/queued rows. The composer sheet is P9 |
-| `session.step.*`, `text.*`, `reasoning.*`, `tool.input.*`, `tool.*` | `.contentBatch` with `LiveContentEvent` | implemented + tested (delta coalescing, durable boundaries, part identity) |
+| `session.step.*`, `text.*`, `reasoning.*`, `tool.input.*`, `tool.*` | `.contentBatch` with `LiveContentEvent` | implemented + tested (delta coalescing, durable boundaries, part identity); P8 projects text/tool events into transcript rows, reasoning adds no row |
 | `session.message.content.updated`, `session.synthetic`, `session.instructions.updated`, `session.agent.selected`, `session.model.selected`, `session.permissions`, `session.retry.scheduled`, `session.compaction.*`, `session.shell.*` | `.messageInvalidated` | implemented + tested |
 | `session.revert.staged`/`cleared`/`committed` | `.revertChanged` | implemented + tested |
 | `permission.asked`, `form.created` | `.attentionChanged(askedSessionID:)`, `global` ignored | implemented + tested |
@@ -150,9 +150,12 @@ bounded at 128; falling behind ends the connection with `EventStreamOverflow` so
 hydrates from REST, rather than silently losing a delta. `EventStreamRunner.onResynchronize` is that
 hand-off; recovery is bounded (D-27).
 
-Not adopted from `EventBatcher` (deliberate, recorded in `DECISIONS.md` D-23): the off-screen pressure
-shedding and the Markdown pre-projection hooks. Both exist to protect a transcript reducer that this phase
-does not have; they belong with P8, where they can be measured.
+P8 adopts the pressure policy (D-61) as **coalescing, not shedding**: `EventBatcher` merges adjacent deltas
+for one part per 75 ms flush, the downstream buffer stays bounded (overflow reconnects and rehydrates), and
+Markdown parses only visible rows off the main actor into a bounded cache (256 entries / 4 MiB) cleared on a
+memory warning. No delta is dropped, so the stream tail and durable content are never silently lost. The
+transcript extends the session's one authoritative read (D-54); `session.message.content.updated` and the
+other invalidating events now trigger that read rather than being ignored.
 
 ## Compatible server requirements
 

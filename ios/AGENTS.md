@@ -18,9 +18,10 @@ where a migration instruction says so; this file is authoritative for `ios/`.
 | `ios/OpenCodeKit/Sources/OpenCodeCore` | design tokens, motion vocabulary, haptics, logging, dependency clients, storage |
 | `ios/OpenCodeKit/Sources/OpenCodeServer` | server address, pairing, wire models, retry, SSE and the client |
 | `ios/OpenCodeKit/Sources/OpenCodeApp` | app reducer and launch configuration |
+| `ios/OpenCodeKit/Sources/OpenCodeTranscript` | transcript grouping, REST/live projection, Markdown parsing and the bounded parse cache |
 | `ios/OpenCodeKit/Sources/OpenCodeTestSupport` | isolated test environment, scripted network guard (fixtures, chunks, redirects), loopback HTTP fixture server |
 | `ios/OpenCode/App/` | app target: entry point, root view, scenes |
-| `ios/OpenCode/{Drawer,Session,Transcript,Composer,Media,Voice,Settings,System}/` | UI areas, filled by their phases |
+| `ios/OpenCode/{Drawer,Session,Transcript,Composer,Media,Voice,Settings,System}/` | UI areas, filled by their phases; `Transcript/` is P8's SwiftUI surface |
 | `ios/OpenCodeTests/` | hostless unit tests (no TCA dependency) |
 | `ios/OpenCode/Info.plist` | app plist: local-network use, ATS local/overlay exceptions |
 | `ios/OpenCodeUITests/` | XCUITest launch smoke tests |
@@ -64,6 +65,8 @@ regeneration is always available rather than a stale binary file. Add a target o
   and `TestStore` come from it; do not replace them with view models.
 - Add a dependency only with a written reason in `docs/ios-migration/DECISIONS.md`. Pin exact versions.
 - No font packages. Interface text uses the system font, code uses the system monospaced design.
+- No web view renders the transcript. Markdown is parsed locally and drawn by SwiftUI; WebKit is reserved for the audited browser/rich-content feature behind its limited interface.
+- The transcript extends `SessionFeature`'s one authoritative read. Do not add a second refresh queue; older pages carry session + generation + cursor identity and are cancelled on a page change.
 
 ## Isolation
 

@@ -271,6 +271,9 @@ buffered into a completed response and is never replaced by polling.
   therefore tested as a pure rule, and the session wiring stays thin. `PROTOCOL_COVERAGE.md` says so.
 
 ### D-23 Event batching adopts ordering and bounds; transcript pressure shedding waits for P8
+
+_Superseded in P8 by D-61: the pressure policy is batched coalescing plus on-demand Markdown parsing, with
+no delta shedding._
 `EventBatcher` adopts the audited flush (`75 ms` or 256 pending mutations), delta coalescing, per-session
 order, the non-content flush barrier and the bounded downstream (`128`, overflow ends the connection).
 
@@ -761,3 +764,76 @@ semantics, not test-only patches:
   uncertain outcome and is left to the normal request/response path. A failed or incomplete drain keeps
   the output and asks for an explicit Discard Unread Output decision. This prevents silently destroying
   output the person never saw.
+
+### D-58 The transcript extends the session's one authoritative read
+`SessionFeature` keeps one `SessionRefresh` and one request ID. Every authoritative read now also reads
+`GET /api/session/{id}/message?order=desc&limit=30` in the same effect; the transcript does not start a
+second refresh queue. `RefreshReason.settlement` still waits the audited 200 ms and the same raced-event
+buffer (512) is replayed onto the snapshot.
+
+- Older history has its own request identity: session ID + transcript generation + cursor. A newer
+  authoritative window bumps the generation when it loses overlap or reaches the start, so a late older
+  page cannot alter a later incarnation. A page change cancels the earlier request.
+- `session.message.content.updated` and the other invalidating events now schedule `.invalidation`; they
+  previously did nothing at the session boundary.
+- A selected session with no cache gets an empty `TranscriptState` before its first read, so loading,
+  empty and failed states are distinguishable.
+- Nothing about P7's newest-wins behavior, follow-up rule or cancellation is replaced.
+
+### D-59 Transcript motion is SwiftUI-native
+The transcript is a normal SwiftUI `ScrollView` with a `LazyVStack` and stable entry IDs. It follows new
+rows only while the reader is at the end, shows **Jump to Latest** when they are not, restores an earlier
+page's anchor after a prepend, and restores a covered page's position and disclosures. The jump glide is
+the only custom animation and uses `OpenCodeMotionRole.microIn`; Reduce Motion replaces it with the shared
+reduced fade.
+
+- Not ported: the historical UIKit follower, row growth, send flights, mark hand-off, promotion morphs and
+  the Android reversed `LazyColumn` motion. Their numbers are evidence of an intended feel, not a spec.
+- P9 can insert a composer without changing this surface: transcript state is value-typed and observed only
+  where used, and the list does not depend on composer state.
+
+### D-60 Markdown is parsed natively, not rendered by a web view
+`MarkdownParser` reads headings, paragraphs, lists/tasks, quotes, fenced code, tables, rules, image links
+and display math into values. Inline formatting uses Foundation's `AttributedString` Markdown parser with a
+literal-text fallback. SwiftUI draws the blocks with the system font and SF Mono; there is no `WKWebView`
+and no bundled font.
+
+- Math and Mermaid have no renderer in P8: math shows its source in a code band; Mermaid is an ordinary
+  fenced code block. A maintained renderer is evaluated in P10.
+- Remote images are link cards. Nothing fetches an image, executes HTML, or runs a command from server text.
+- Quotes from `metadata.comments` are display-only cards; the composer action is P9.
+
+### D-61 Pressure is coalescing plus bounded on-demand parsing, never shedding
+The stream keeps the P4 bound: adjacent deltas for one part coalesce per 75 ms flush (or 256 mutations), the
+downstream buffer is 128, and overflow ends the connection so REST rehydrates. P8 does not add a second
+shedding layer; it makes the consumer cheap instead.
+
+- Only visible Markdown rows request parsing. Parsing runs off the main actor through
+  `MarkdownBlockCache`, which keeps at most 256 entries and 4 MiB of source, evicts least-recently used
+  entries, and clears on a memory warning.
+- Item and stream buffers stay bounded by the P4 transport/frame limits and the 20,000-byte tool-text bound.
+  The transcript itself keeps loaded pages until the person leaves the session; earlier pages are only
+  loaded on request, so loading is bounded by user action rather than an undocumented truncation.
+- Recording a limit: the server transcript window is 30 rows and an older page is 80; the UI lazily draws
+  whatever is loaded.
+
+### D-62 Server content cannot open or fetch anything by itself
+A Markdown link or image card routes to `SessionFeature` as a typed URL. The confirmation sheet offers
+**Open**, **Copy Link** or Cancel. Only an explicit Open calls `OpenURLClient`; only `http`, `https` and
+`mailto` are allowed. Images never load in P8; file chips open a name/path/MIME sheet with Copy Path.
+
+- `OpenURLClient` is a dependency: live uses `UIApplication.open`, tests are inert and assert the call.
+- Selection is native per block (`textSelection`) plus explicit reply and code Copy through
+  `PasteboardClient`. The historical cross-block single-document selection is not rebuilt; it can be
+  revisited with measurement in a later phase.
+- Tool output is rendered as text with selection, never as JSON commands or HTML.
+
+### D-63 The transcript target sits below the session feature
+`OpenCodeTranscript` (package target) owns grouping, projection and Markdown parsing and depends only on
+Core and Server. `OpenCodeSession` depends on it; the app target owns the SwiftUI rows and the scroll
+surface. This keeps P9's composer and P10's media above the transcript rather than adding upward edges.
+
+- Files: `OpenCodeKit/Sources/OpenCodeTranscript/*`, `OpenCodeKit/Sources/OpenCodeSession/TranscriptState.swift`,
+  `ios/OpenCode/Transcript/*`.
+- P10 owns image decoding, viewers, file opening, the browser and richer math/Mermaid. P8's placeholders and
+  link cards are the routing boundary, not a claim that media is complete.

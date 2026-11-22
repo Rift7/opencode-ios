@@ -8,6 +8,8 @@
 | Behaviour baseline | `7358160e808fb1870eeb20f5da8df832667019d1` (`origin/dev`) |
 | P7 base | `7966dcfea6348a70dee7df05ddc2bec9a4b95048` (`origin/ios`, PR #5) |
 | P7 branch | `ios-session`, created from `origin/ios` after `git fetch origin` |
+| P8 base | `92a7c677cb1f1007f1acc1e441603af757e51dfa` (`origin/ios`, PR #6 merged) |
+| P8 branch | `ios-transcript`, created from `origin/ios` |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
 `git fetch origin` moved `origin/ios` from `3b34932c` to `7966dcfe`. PR #5 (`ios: add the native Home,
@@ -26,8 +28,8 @@ is the hand-off check.
 | 4 | Server: transport, retry, models, SSE, pairing | complete — `5f143ea7` (PR #3, tree `2326a49b`) |
 | 5 | App shell: launch, connection, pairing, reconnect | complete — `3b34932c` (PR #4) |
 | 6 | Home, drawer, projects, Catch Up, What's New | complete — `7966dcfe` (PR #5, tree `25b6d297`) |
-| 7 | Session, subagents, background work, request review | **complete on `ios-session`** (draft PR #6) |
-| 8 | Transcript | not started |
+| 7 | Session, subagents, background work, request review | complete — `92a7c677` (PR #6); merged tree `e8e1db5b` equals reviewed `56c10086` |
+| 8 | Transcript | **complete on `ios-transcript`** (draft PR) |
 | 9 | Composer | not started |
 | 10 | Media | not started |
 | 11 | Settings, experiments, diagnostics, onboarding | not started |
@@ -171,46 +173,123 @@ intervals during the measured swipes; the p95 stays at one interval.
 | Trimmed output ranges were not contiguous | Trimming returns the discarded byte count, which advances `startCursor`; Load Earlier joins the retained start and never exceeds 4 MiB. | `shellRangeContiguity`, `shellTrimThenEarlier`, `shellEarlierBounded` (multibyte and page crossing the cap). |
 | Stop deleted after one page read | Stop cancels polling, drains to the probing completion boundary, retains bounded output, and only then deletes. Cooperative cancellation is checked throughout the drain and immediately before DELETE; a dependency that succeeds after cancellation cannot reach the stop. A failed/incomplete drain needs an explicit discard. | `shellDrainAndFailure`, `shellDrainCancellationAtProbe`, `shellDrainCancellationAtPage`, `shellDrainControl`: multiple pages, failure, discard decision, cancellation at the probe/page and a successful control. |
 
+## Phase 8 — what landed
+
+Base: `origin/ios = 92a7c677cb1f1007f1acc1e441603af757e51dfa` (PR #6 squash-merged). The merged tree is
+`e8e1db5b`, byte-identical to the reviewed P7 head `56c1008632f73aea905cce41dee1e8c8b0784cb0`; the
+corrections named in the P7 STATUS survived the squash merge. The Phase 8 branch `ios-transcript` was
+created from that commit; no branch was reset or overwritten.
+
+| Area | New or changed path | Gate |
+| --- | --- | --- |
+| Transcript wire model and decoder: message types, part identities, tool calls, images, files, compaction, notices, errors, retries, bounds, media references, prompt references and quotes | `OpenCodeKit/Sources/OpenCodeServer/Models/{TranscriptModels,TranscriptDecoder}.swift` | `TranscriptDecodingTests` — 11 cases |
+| Transcript routes: newest descending window, older cursor page (20 s, 80 messages), one message | `.../OpenCodeServer/Client/{OpenCodeClient,TranscriptOperations}.swift` | request-shape tests in `TranscriptDecodingTests` |
+| Grouping, stable entry identity, window/entry-start rules, newest/older reconciliation, live delta and tool projection | `OpenCodeKit/Sources/OpenCodeTranscript/{TranscriptGrouping,TranscriptProjection}.swift` | `TranscriptGroupingTests` — 17 cases, `MarkdownTests` — 6, including 600-token tail and 1,000-row identity |
+| Native Markdown blocks and inline text; bounded parse cache; no remote image fetch | `.../OpenCodeTranscript/Markdown.swift` | `MarkdownTests` — 6 cases; cache bound/clear tested |
+| Per-session transcript state, earlier-cursor chain, page/session/generation fencing, disclosure and scroll view state | `.../OpenCodeSession/TranscriptState.swift` | `TranscriptFeatureTests` — 14 cases |
+| The transcript joins the existing authoritative refresh (one request identity, same 200 ms settlement window) and live content batches apply in order, including replay of raced events | `.../OpenCodeSession/SessionFeature.swift` | read-plan, race, invalidation, reconnect and settlement tests |
+| Transcript surface: user bubbles, quotes, files, assistant Markdown, tool groups, compaction, notices, run errors/retries, run-end Copy, disclosure, Jump to Latest, earlier-history states | `ios/OpenCode/Transcript/{TranscriptView,TranscriptRows,MarkdownViews}.swift`; `ios/OpenCode/Session/SessionView.swift` | `TranscriptUITests` — 8 journeys |
+| Link routing boundary and explicit link opener | `OpenCodeCore/Dependencies/OpenURLClient.swift`, transcript link confirmation | reducer + UI link-confirmation tests |
+| Memory-warning clearing for the parse cache | `ios/OpenCode/App/OpenCodeApp.swift` | cache clear exercised at the actor; the notification is a thin hand-off |
+| Deterministic transcript fixtures, long history, streaming and 1,000-row modes | `ios/OpenCode/App/UITestFixture.swift` | UI and trace tests |
+| Screenshots | `docs/ios-migration/screens/p8-{transcript,transcript-dark,transcript-tools,transcript-tools-dark,transcript-jump,transcript-jump-dark}.png` | synthetic fixture, iPhone 18 Pro Max simulator, iOS 27.2 |
+
+### P8 acceptance matrix
+
+| Contract | Current `dev` source (`7358160e`) | Adopted behaviour | Evidence |
+| --- | --- | --- | --- |
+| Routes, pagination and ordering | `server/live/LiveTranscript.kt` (`requestTranscript`, `requestHistoryPage`, `requestMessage`), `live/Payloads.kt` (`MessagesPayload`, `MessagePayload`) | Newest window is `order=desc&limit=30`; history is `limit=80` plus `cursor`, or a newest re-read when the edge is unknown; one message reads `/message/{id}`. Responses are oldest-first; duplicates are skipped by ID | `TranscriptDecodingTests.ordering`, `clientTranscriptRoute`, `clientHistoryRoutes`, `clientMessageRoute`; `TranscriptFeatureTests.earlierHistory` |
+| Message/part identity and streaming | `LiveTranscript.kt` (`transcriptItems`), `SessionFeatureStream.kt` (`mergeTranscript`), `server/model/OpenCodeTranscriptItem.kt` | `<message>-text-<ordinal>` and `<message>-tool-<id>` identities match REST and SSE; a delta updates its part, an ended part is durable, and a snapshot replaces its window without reordering | `streamTailGate`, `liveAndSettlement`, `TranscriptGroupingTests.streamedTail`, `toolLifecycle` |
+| Grouping and disclosure | `TranscriptEntry.kt` (`TranscriptEntry.build`, `entryStart`, `sessionStartModelIDs`) | Consecutive tools/notices group; user rows group per prompt; a finished reply ends with Copy; a session-start model switch is hidden; a running question stays out of history | `TranscriptGroupingTests.grouping`, `replyEndWaits`, `pendingQuestion`, `startModel`, `entryStart`; `TranscriptUITests.testTranscriptRendersMarkdownToolsAndNotices` |
+| Content types and interactions | `LiveTranscript.kt`, `markdown/*`, `rows/*`, `user/*` | User text/images/files/quotes, assistant Markdown, tools, compaction, notices, model switches, run errors/retries, undone rows; links and images are safe routes; reasoning text is not shown because current `dev` does not decode it | Decoder tests; `MarkdownTests`; UI transcript, disclosure, link journeys |
+| Scrolling and restoration | `list/TranscriptList.kt`, `TranscriptListSnapshot.kt`, `SessionFeatureStateTranscript.kt` | Standard SwiftUI scroll view and `LazyVStack`: follow only at the end, Jump to Latest when browsing, earlier-page anchor preserved, per-session disclosure/scroll state restored on a covered subagent page; Reduce Motion removes the jump glide | `pageRestoration`; `testJumpToLatestAfterReadingOlderContent`, `testLoadEarlierRetainsTheReadingPosition`, `testDisclosureStaysOpenAcrossASubagentPage` |
+| Settlement, invalidation and overflow | `SessionFeatureRefresh.kt` (`acceptWindow`, `mergeTranscript`), `SessionFeatureHistory.kt` (`mergeOlderPage`, generations), `EventBatcher.kt` | The transcript extends P7's single read; `messageInvalidated` re-reads through it; a durable boundary waits 200 ms; an older page is fenced by session + generation + cursor; reconnect re-reads; overflow still resynchronizes from REST | `readPlan`, `eventRace`, `invalidationReads`, `staleEarlierPage`, `reconnect`, `earlierRetry` |
+
+### Baseline vs. branch-only
+
+- **Baseline (adopted):** current `dev` message types, grouping, cursor semantics, durable boundaries, tool
+  text bounds (20,000 bytes per output), 16 images / 20 MB each / 32 MB total, and the `media:` capability.
+- **Not adopted:** Android-only session-media pages, failed-send Edit/Delete placement, the selection-mode
+  drawer, and any behavior from unmerged Android branches. Quotes are adopted because current `dev` reads
+  `metadata.comments`; they are display-only here.
+- **Native adaptation:** a plain `ScrollView` + `LazyVStack` instead of iOS's UIKit follower and Android's
+  reversed `LazyColumn` motion. This is a recorded decision, not a claim of recovered feel.
+- **Uncertain reconstruction:** the October capture harness used `transcript-list` and `tool-image-mosaic`;
+  both identifiers are reused where they still describe the surface. No visual claim is made against them.
+
+### Performance evidence (simulator only)
+
+| Run | Fixture | Method | Result |
+| --- | --- | --- | --- |
+| Long transcript scroll | `connected-transcript-long`: 1,000 rows (500 prompts, 500 replies), no earlier page | `TranscriptScrollTraceUITests.testLongTranscriptScroll`, 3 iterations, fast up/up/down, `CADisplayLink` probe | 143/142/144/143 frames; p50 16.7 ms, p95 16.7 ms, max 43.1/34.7/33.3/34.3 ms; scroll deceleration 2.417 s (RSD 0.002%); peak physical memory 23.9–24.1 MB |
+| Streaming while scrolling | `connected-transcript-stream`: one prompt, 600 live text deltas at 20 ms, 3 iterations | `testStreamingTranscriptScroll` | 48/117/111/114 frames; p50/p95 16.7 ms, max 16.7 ms; deceleration 2.423 s; peak physical memory 25.7 MB |
+| Device/runtime | iPhone 18 Pro Max simulator, iOS 27.2 (24B8117), debug build | `xcodebuild -only-testing:OpenCodeUITests/TranscriptScrollTraceUITests` | Simulator evidence; not a device claim |
+
+The long-transcript run shows single deferred frames (33–43 ms) during the measured swipes; p95 stays at one
+display interval. Streaming added no missed interval in this run. These are not frame-budget assertions.
+
+### P8 screenshot provenance
+
+`TranscriptScreenshotUITests` captured light and dark surfaces on the same simulator and fixture
+(`connected`, plus `connected-transcript-long` for Jump to Latest) on 2026-11-22. All names, messages and
+paths are synthetic. The October iOS screenshots remain historical evidence only.
+
+### P8 scope boundaries and limitations
+
+- Cross-block selection (`TranscriptReplySelectionView` on iOS) is not rebuilt. Native per-block text selection
+  is enabled, and every finished reply has an explicit Copy action that uses the pasteboard dependency.
+- Files open only a name/path/MIME sheet with Copy Path; image tiles and tool videos are placeholders or file
+  rows until P10. Markdown remote images are link cards, never fetches.
+- Math renders its source in a code band; Mermaid is not rendered. A maintained math/Mermaid renderer is a P10
+  media decision.
+- Composer editing, sending, queued-input presentation, the request dock folds and quote-to-composer are P9.
+- `/api/experimental/session/{id}/wait` has no call site yet; the wait loop belongs to the P9 send path.
+
 ## Verified in this phase
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | **365 tests pass**: 174 server, 67 core, 61 app, 38 drawer, 25 session; live and loopback opt-outs behave as before |
-| `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **34 UI tests pass**; package suites pass |
-| `xcodebuild ... -only-testing:OpenCodeUITests/SessionUITests` | 6 journeys: session/subagent navigation, permission approval, permission rejection, form validation/submission, failed reply retry, shell output and stop |
-| `xcodebuild ... -only-testing:OpenCodeUITests/HomeUITests` | 8 tests including Mark All from the drawer menu |
-| Screenshots | `docs/ios-migration/screens/p7-{session,request,background}[-dark].png` |
+| `swift test --package-path ios/OpenCodeKit` | **413 tests pass**: 185 server, 67 core, 61 app, 38 drawer, 39 session, 23 transcript; live and loopback opt-outs unchanged |
+| `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **45 UI tests pass**; package suites pass (exit 0) |
+| `xcodebuild ... -only-testing:OpenCodeUITests/TranscriptUITests` | 8 journeys: Markdown/tools, disclosure restoration across a subagent page, native text selection, copy, link confirmation, Jump to Latest, Load Earlier anchor, Dynamic Type + dark + Reduce Motion launch flag |
+| `xcodebuild ... -only-testing:OpenCodeUITests/TranscriptScrollTraceUITests` | 1,000-row scroll and 600-delta streaming traces; results in the performance table above |
+| `xcodebuild ... -only-testing:OpenCodeUITests/HomeUITests` | 8 tests; the drawer journey now asserts a real transcript row instead of the P7 placeholder |
+| Screenshots | `docs/ios-migration/screens/p8-{transcript,transcript-dark,transcript-tools,transcript-tools-dark,transcript-jump,transcript-jump-dark}.png` |
 
-The counts are the numbers the package runner printed; the gate log is in `ios/.build-results/`.
+The 413 package tests are the sum of the six target runs the package runner printed; the gate log is in
+`ios/.build-results/`.
 
 ## Not verified
 
-- **Physical device**: no P7 run on hardware. VoiceOver order, Taptic feel, real LAN reconnection and the
-  local-network prompt remain device checks; the simulator covers accessibility identifiers and Dynamic
-  Type layout only.
-- **Reduce Motion**: P7 adds no custom animation; sheets, navigation and system controls keep platform
-  motion. The policy is inherited, not separately exercised.
-- **Live V2 server**: no build with the audited request, family, shell or job routes was tested. The P4/P5
-  `.incompatibleAPI` outcome is preserved; nothing was remapped.
-- **Real session mutations**: no real interrupt, reply, shell stop or job cancel ran against a live
-  server. Reducer and UI tests use the fixture client only.
+- **Physical device**: no P8 run on hardware. VoiceOver reading order, cross-block selection feel, touch
+  selection, real LAN streaming and memory pressure remain device checks. Simulator evidence covers layout,
+  identifiers, Dynamic Type, dark appearance and frame timing only.
+- **Reduce Motion**: the UI test passes the launch flag and asserts the Jump-to-Latest path renders; the
+  simulator's system setting was not toggled separately. The only custom transcript animation is that jump
+  glide, which reads `accessibilityReduceMotion`.
+- **Cross-block selection**: not rebuilt; native per-block selection and reply Copy are what exist.
+- **Live V2 server**: no compatible server with the audited `/api/session/{id}/message` routes was available.
+  The documented `/api/*` route mismatch is unchanged; nothing was remapped.
+- **Real transcript mutations**: no live stream or settled read ran against a production session. All tests
+  use the fixture client and synthetic content.
+- **Math and Mermaid**: source text only; no typesetting engine was added.
 - **Visual comparison with the original app**: unavailable; October captures are evidence, not a target.
 - **iPad**: out of scope (D-16).
 
-## Deferred P7 items — later phase and acceptance check
+## Deferred P8 items — later phase and acceptance check
 
 | Deferred item | Later phase | Acceptance check |
 | --- | --- | --- |
-| Transcript rows, grouping, markdown and the off-screen pressure policy | P8 | A 600-token stream loses no tail; 1,000 rows scroll without binding churn; settlement reads extend the P7 refresh identity |
-| Composer editing, drafts, sends, queued-message sheet and steer menu | P9 | Draft survives termination; a failed send retries with a new message id; the queued INPUT model from P7 is the only data source |
-| Full request dock in the composer (fold, pages, answer bar) | P9 | Keyboard Send cannot become chat input while a request is docked; the sheet path remains for large forms |
-| Shell output copy/share and background subagent stop | P9/P10 | Copy uses the pasteboard dependency; stopping a subagent interrupts and cancels every job in its tree |
-| Global form location directory from the composer context | P9 | A global form replies with the session's directory; the P7 client already accepts it |
-| Camera QR pairing, custom headers, settings and diagnostics | P11 | Device QR redemption; header round-trip; redacted report |
-| Haptics live feel and local-network prompt | P14 | Each haptic is distinguished on a device; denied prompt shows unreachable, allowed prompt reaches the fixture |
+| Composer editing, drafts, sends, queued-input sheet, steer menu and quote-to-composer | P9 | Draft survives termination; a failed send retries with a new message id; the P7 inbox remains the only input source; a quote arrives from the transcript selection |
+| `/api/experimental/session/{id}/wait` loop | P9 | The send path waits for idle through the audited route without nesting retries |
+| Image/media viewer, tool image mosaic, full-screen viewer and file opening | P10 | Cached media, no automatic remote fetch, safe routing; a tool image opens the viewer |
+| Math typesetting and Mermaid diagrams | P10 | A maintained renderer is evaluated and pinned, or the source fallback is recorded as final |
+| Cross-block selection as one document | P10/P14 | A reply selects across blocks with native handles; the current per-block selection is replaced only with measured need |
+| Physical VoiceOver, selection and scroll checks | P14 | Each transcript row reads in order; selection handles and copy work on device |
 
 ## Next
 
-1. P8 (`ios-transcript`): transcript windows, markdown and settlement using the P7 refresh identity.
-2. P9: composer, drafts, sends and the queued-input UI over the P7 inbox model.
+1. P9 (`ios-composer`): composer editing, drafts, sends, the queued-input sheet and the request dock over the
+   P7 inbox model; add the `/experimental/session/{id}/wait` loop to the send path.
+2. P10: media, agent files, the browser and richer math/Mermaid rendering.
 3. P11: settings, shipped What's New catalogue, custom headers and camera pairing.

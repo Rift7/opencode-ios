@@ -16,46 +16,31 @@ struct SessionView: View {
 
   var body: some View {
     NavigationStack {
-      ScrollView {
-        VStack(alignment: .leading, spacing: OpenCodeSpacing.s16) {
-          if !store.isAtRoot {
-            pageBackRow
-          }
-          if store.isLoading, store.root == nil {
-            HStack(spacing: OpenCodeSpacing.s8) {
-              ProgressView()
-              Text(AppCopy.text("session.loading"))
-                .font(OpenCodeFonts.font(.footnote))
-                .foregroundStyle(OpenCodeColors.color(.textWeak))
-            }
-            .accessibilityIdentifier("session-loading")
-          } else if let problem = store.loadProblem, store.root == nil {
-            VStack(alignment: .leading, spacing: OpenCodeSpacing.s8) {
-              Text(AppCopy.text("session.load_failed"))
-                .font(OpenCodeFonts.font(.headline))
-                .foregroundStyle(OpenCodeColors.color(.danger))
-              Button(AppCopy.text("common.try_again")) {
-                store.send(.retryTapped)
-              }
-              .buttonStyle(.bordered)
-              .accessibilityIdentifier("session-load-retry")
-            }
-          }
-          header
-          if let notice = store.notice {
-            NoticeRow(text: noticeText(notice)) { store.send(.noticeDismissed) }
-          }
-          if store.requests.hasPending {
-            requestBar
-          }
-          if !store.pendingInputs.isEmpty {
-            pendingInputs
-          }
-          transcriptBoundary
-          backgroundButton
+      VStack(spacing: 0) {
+        if !store.isAtRoot {
+          pageBackRow
+            .padding(.horizontal, OpenCodeSpacing.screenHorizontal)
+            .padding(.top, OpenCodeSpacing.s8)
         }
-        .padding(OpenCodeSpacing.s20)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        header
+          .padding(.horizontal, OpenCodeSpacing.screenHorizontal)
+          .padding(.vertical, OpenCodeSpacing.s10)
+        if let notice = store.notice {
+          NoticeRow(text: noticeText(notice)) { store.send(.noticeDismissed) }
+            .padding(.horizontal, OpenCodeSpacing.screenHorizontal)
+        }
+        if store.requests.hasPending {
+          requestBar
+            .padding(.horizontal, OpenCodeSpacing.screenHorizontal)
+            .padding(.bottom, OpenCodeSpacing.s6)
+        }
+        if !store.pendingInputs.isEmpty {
+          pendingInputs
+            .padding(.horizontal, OpenCodeSpacing.screenHorizontal)
+            .padding(.bottom, OpenCodeSpacing.s6)
+        }
+        transcriptBody
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
       .navigationTitle(store.title)
       .navigationBarTitleDisplayMode(.inline)
@@ -95,11 +80,108 @@ struct SessionView: View {
     .sheet(isPresented: $showsBackground) {
       BackgroundWorkSheet(store: store) { showsBackground = false }
     }
+    .sheet(item: inspectedFileBinding) { file in
+      TranscriptFileSheet(file: file, store: store)
+    }
+    .confirmationDialog(
+      AppCopy.text("transcript.link_title"),
+      isPresented: pendingLinkBinding,
+      titleVisibility: .visible
+    ) {
+      Button(AppCopy.text("transcript.link_open")) { store.send(.transcriptLinkConfirmed) }
+        .accessibilityIdentifier("transcript-link-open")
+      Button(AppCopy.text("transcript.link_copy")) { store.send(.transcriptLinkCopyTapped) }
+      Button(AppCopy.text("common.cancel"), role: .cancel) {
+        store.send(.transcriptLinkCancelled)
+      }
+    } message: {
+      if let link = store.pendingLink {
+        Text(link.absoluteString)
+      }
+    }
     .sheet(isPresented: shellOutputPresented) {
       if let output = store.background.output {
         ShellOutputSheet(store: store, output: output)
       }
     }
+  }
+
+  @ViewBuilder private var transcriptBody: some View {
+    if store.isLoading, store.root == nil, store.activeTranscript?.didApplyWindow != true {
+      VStack(spacing: OpenCodeSpacing.s8) {
+        ProgressView()
+        Text(AppCopy.text("session.loading"))
+          .font(OpenCodeFonts.font(.footnote))
+          .foregroundStyle(OpenCodeColors.color(.textWeak))
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .accessibilityIdentifier("session-loading")
+    } else if let problem = store.loadProblem, store.root == nil {
+      VStack(alignment: .leading, spacing: OpenCodeSpacing.s8) {
+        Text(AppCopy.text("session.load_failed"))
+          .font(OpenCodeFonts.font(.headline))
+          .foregroundStyle(OpenCodeColors.color(.danger))
+        Button(AppCopy.text("common.try_again")) {
+          store.send(.retryTapped)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityIdentifier("session-load-retry")
+      }
+      .padding(OpenCodeSpacing.s20)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    } else if let transcript = store.activeTranscript {
+      if transcript.isLoadingInitial {
+        VStack(spacing: OpenCodeSpacing.s8) {
+          ProgressView()
+          Text(AppCopy.text("transcript.loading"))
+            .font(OpenCodeFonts.font(.footnote))
+            .foregroundStyle(OpenCodeColors.color(.textWeak))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("transcript-loading")
+      } else if let problem = transcript.problem, transcript.items.isEmpty {
+        VStack(alignment: .leading, spacing: OpenCodeSpacing.s8) {
+          Text(TranscriptCopy.problem(problem, earlier: false))
+            .font(OpenCodeFonts.font(.footnote))
+            .foregroundStyle(OpenCodeColors.color(.danger))
+          Button(AppCopy.text("common.try_again")) {
+            store.send(.retryTapped)
+          }
+          .buttonStyle(.bordered)
+          .accessibilityIdentifier("transcript-load-retry")
+        }
+        .padding(OpenCodeSpacing.s20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      } else {
+        TranscriptView(
+          store: store,
+          transcript: transcript,
+          isRunning: store.isRunning
+        )
+        .id(transcript.sessionID)
+      }
+    } else {
+      ProgressView()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+  }
+
+  private var pendingLinkBinding: Binding<Bool> {
+    Binding(
+      get: { store.pendingLink != nil },
+      set: { presented in
+        if !presented { store.send(.transcriptLinkCancelled) }
+      }
+    )
+  }
+
+  private var inspectedFileBinding: Binding<TranscriptFile?> {
+    Binding(
+      get: { store.inspectedFile },
+      set: { file in
+        if file == nil { store.send(.transcriptFileDismissed) }
+      }
+    )
   }
 
   private var pageBackRow: some View {
@@ -224,20 +306,6 @@ struct SessionView: View {
       }
     }
     .accessibilityIdentifier("session-pending-inputs")
-  }
-
-  private var transcriptBoundary: some View {
-    VStack(alignment: .leading, spacing: OpenCodeSpacing.s6) {
-      Text(AppCopy.text("session.transcript_later"))
-        .font(OpenCodeFonts.font(.headline))
-        .foregroundStyle(OpenCodeColors.color(.textStrong))
-      Text(AppCopy.text("session.transcript_later_detail"))
-        .font(OpenCodeFonts.font(.footnote))
-        .foregroundStyle(OpenCodeColors.color(.textWeak))
-    }
-    .padding(.vertical, OpenCodeSpacing.s24)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .accessibilityIdentifier("session-transcript-boundary")
   }
 
   private var backgroundButton: some View {
@@ -910,5 +978,59 @@ private struct NoticeRow: View {
     .padding(OpenCodeSpacing.s10)
     .background(OpenCodeColors.color(.surfaceStrong), in: .rect(cornerRadius: OpenCodeRadius.control))
     .accessibilityIdentifier("session-notice")
+  }
+}
+
+private struct TranscriptFileSheet: View {
+  let file: TranscriptFile
+  let store: StoreOf<SessionFeature>
+
+  var body: some View {
+    NavigationStack {
+      VStack(alignment: .leading, spacing: OpenCodeSpacing.s16) {
+        Label(file.name ?? AppCopy.text("transcript.file"), systemImage: "doc")
+          .font(OpenCodeFonts.font(.headline))
+        if let path = file.path {
+          Text(path)
+            .font(OpenCodeFonts.font(.codeSmall))
+            .foregroundStyle(OpenCodeColors.color(.textBody))
+            .textSelection(.enabled)
+        }
+        if let mime = file.mime {
+          Text(mime)
+            .font(OpenCodeFonts.font(.caption))
+            .foregroundStyle(OpenCodeColors.color(.textWeak))
+        }
+        if file.isUnavailable {
+          Text(AppCopy.text("transcript.file_unavailable"))
+            .font(OpenCodeFonts.font(.footnote))
+            .foregroundStyle(OpenCodeColors.color(.warning))
+        }
+        Text(AppCopy.text("transcript.file_later"))
+          .font(OpenCodeFonts.font(.footnote))
+          .foregroundStyle(OpenCodeColors.color(.textWeak))
+        if file.path != nil {
+          Button(AppCopy.text("transcript.copy_path")) {
+            store.send(.transcriptFileCopyTapped)
+          }
+          .buttonStyle(.bordered)
+          .accessibilityIdentifier("transcript-copy-path")
+        }
+        Spacer()
+      }
+      .padding(OpenCodeSpacing.s20)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .navigationTitle(AppCopy.text("transcript.file"))
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button(AppCopy.text("common.done")) {
+            store.send(.transcriptFileDismissed)
+          }
+        }
+      }
+    }
+    .presentationDetents([.medium])
+    .accessibilityIdentifier("transcript-file-sheet")
   }
 }

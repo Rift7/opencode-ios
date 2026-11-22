@@ -176,10 +176,10 @@ import OpenCodeServer
           SessionPage(sessions: sessions(for: requested, mode: mode), next: nil)
         },
         getSession: { requested, id in
-          guard let session = sessions(for: requested).first(where: { $0.id == id }) else {
-            throw OpenCodeClientError(.status(404))
+          if let member = familyMember(id, in: sessions(for: requested)) {
+            return member
           }
-          return session
+          throw OpenCodeClientError(.status(404))
         },
         activeSessionIDs: { _ in [] },
         attentionSessionIDs: { _, _, _ in [] },
@@ -282,11 +282,44 @@ import OpenCodeServer
             : []
         },
         cancelJob: { _, _ in },
+        transcript: { _, sessionID, limit in
+          transcriptPage(for: sessionID, mode: mode, limit: limit)
+        },
+        transcriptHistory: { _, sessionID, cursor in
+          transcriptHistory(for: sessionID, mode: mode, cursor: cursor)
+        },
         events: { _, onPhase in
           AsyncThrowingStream { continuation in
             let task = Task {
               await onPhase(.connected)
               continuation.yield(.connected)
+              if mode == "connected-transcript-stream" {
+                continuation.yield(.executionStarted(sessionID: "alpha"))
+                continuation.yield(
+                  .contentBatch(
+                    sessionID: "alpha",
+                    events: [.textStarted(messageID: "stream-live", ordinal: 0)]
+                  )
+                )
+                for index in 0..<600 {
+                  guard !Task.isCancelled else { return }
+                  continuation.yield(
+                    .contentBatch(
+                      sessionID: "alpha",
+                      events: [
+                        .textDelta(
+                          messageID: "stream-live",
+                          ordinal: 0,
+                          delta: "token\(index) ",
+                          accumulatedText: nil
+                        )
+                      ]
+                    )
+                  )
+                  try? await Task.sleep(for: .milliseconds(20))
+                }
+                continuation.yield(.executionEnded(sessionID: "alpha"))
+              }
               try? await Task.sleep(for: .seconds(3_600))
             }
             continuation.onTermination = { _ in task.cancel() }
@@ -294,6 +327,216 @@ import OpenCodeServer
         }
       )
       return Fixture(client: client, storage: storage)
+    }
+
+
+
+    // MARK: Transcript fixtures
+
+    nonisolated static func transcriptPage(
+      for sessionID: String,
+      mode: String,
+      limit: Int
+    ) -> TranscriptPage {
+      if sessionID == "alpha-child" {
+        return TranscriptPage(
+          items: [
+            .userText(
+              id: "child-user",
+              text: "Explore how the composer queues a message.",
+              source: .parentAgent,
+              quotes: []
+            ),
+            .assistantMarkdown(
+              id: "child-reply",
+              text: "The composer stores queued inputs in the inbox and shows them above the field.",
+              inProgress: false
+            ),
+          ]
+        )
+      }
+      if sessionID == "beta" {
+        return TranscriptPage(
+          items: [
+            .userText(id: "beta-user", text: "Summarize the migration.", source: nil, quotes: []),
+            .assistantMarkdown(
+              id: "beta-reply",
+              text: "The native app now includes the transcript, with Markdown and tool disclosures.",
+              inProgress: false
+            ),
+          ]
+        )
+      }
+      guard sessionID == "alpha" else {
+        return TranscriptPage(
+          items: [
+            .info(id: "info-empty", text: "No messages in this fixture session."),
+          ]
+        )
+      }
+      switch mode {
+      case "connected-transcript-long":
+        return TranscriptPage(items: longTranscriptItems(count: 1_000))
+      case "connected-transcript-older":
+        let all = longTranscriptItems(count: 200)
+        let newest = Array(all.suffix(30))
+        return TranscriptPage(items: newest, next: "older-1")
+      case "connected-transcript-stream":
+        return TranscriptPage(
+          items: [.userText(id: "stream-user", text: "Stream six hundred tokens.", source: nil, quotes: [])]
+        )
+      default:
+        return TranscriptPage(items: richTranscriptItems())
+      }
+    }
+
+    nonisolated static func transcriptHistory(
+      for sessionID: String,
+      mode: String,
+      cursor: String?
+    ) -> TranscriptPage {
+      guard sessionID == "alpha", mode == "transcript-older", cursor == "older-1" else {
+        return TranscriptPage(items: [])
+      }
+      let all = longTranscriptItems(count: 200)
+      let older = Array(all.dropLast(30))
+      return TranscriptPage(items: older, next: nil)
+    }
+
+    nonisolated static func richTranscriptItems() -> [TranscriptItem] {
+      [
+        .userText(
+          id: "alpha-user-1",
+          text: "Can you review the transcript implementation?",
+          source: nil,
+          quotes: []
+        ),
+        .assistantMarkdown(
+          id: "alpha-reply-1",
+          text: """
+            ## Transcript review
+
+            The renderer keeps **stable part identities** and draws:
+
+            - headings, lists and quotes
+            - fenced code
+            - tables
+
+            | Surface | State |
+            | --- | --- |
+            | Rows | Ready |
+            | Markdown | Ready |
+
+            ```swift
+            Text(MarkdownParser.inline(text))
+            ```
+
+            [OpenCode](https://example.com/docs)
+
+            ![Diagram](https://example.com/diagram.png)
+            """,
+          inProgress: false
+        ),
+        .tool(
+          id: "alpha-tool-read",
+          call: TranscriptToolCall(
+            callID: "tool-read",
+            messageID: "alpha-reply-1",
+            name: "read",
+            status: .completed,
+            input: .object(["path": .string("ios/OpenCode/Transcript/TranscriptView.swift")]),
+            output: ["Read 240 lines"]
+          )
+        ),
+        .tool(
+          id: "alpha-tool-shell",
+          call: TranscriptToolCall(
+            callID: "tool-shell",
+            messageID: "alpha-reply-1",
+            name: "shell",
+            status: .completed,
+            input: .object(["command": .string("swift test --package-path ios/OpenCodeKit")]),
+            output: ["All tests passed"],
+            metadata: ["exit": .number(0)]
+          )
+        ),
+        .notice(
+          id: "alpha-notice-shell",
+          text: "swift test finished",
+          isError: false,
+          kind: TranscriptNoticeKind(source: .shell, outcome: .finished),
+          agent: nil
+        ),
+        .userText(
+          id: "alpha-user-2",
+          text: "Please keep the reading position.",
+          source: nil,
+          quotes: [
+            TranscriptQuote(
+              text: "no forced scrolling while reading older content",
+              comment: "This is the part I care about."
+            )
+          ]
+        ),
+        .assistantMarkdown(
+          id: "alpha-reply-2",
+          text: """
+            The list follows only while the reader is at the end. Scrolling up reveals **Jump to Latest** and keeps the anchor through streaming updates.
+
+            An inline formula `E = mc²` stays readable as text; display math renders its source:
+
+            $$
+            \\int_0^1 x^2 dx = \\frac{1}{3}
+            $$
+            """,
+          inProgress: false
+        ),
+        .compaction(
+          id: "alpha-compaction",
+          info: TranscriptCompaction(
+            status: .completed,
+            summary: "Earlier exploration was compacted. The transcript code, tests and parity notes remain the reference.",
+            inputTokens: 12_400,
+            outputTokens: 420
+          )
+        ),
+        .modelSwitch(
+          id: "alpha-model",
+          model: TranscriptModelRef(id: "claude-opus-5.5", providerID: "anthropic"),
+          previous: nil,
+          name: "Claude Opus 5.5"
+        ),
+      ]
+    }
+
+    nonisolated static func longTranscriptItems(count: Int) -> [TranscriptItem] {
+      (0..<count).map { index in
+        if index.isMultiple(of: 2) {
+          return .userText(
+            id: "long-user-\(index)",
+            text: "Message \(index): keep the transcript stable while scrolling.",
+            source: nil,
+            quotes: []
+          )
+        }
+        return .assistantMarkdown(
+          id: "long-reply-\(index)",
+          text: "Reply \(index): stable row identity keeps the reader in place. " + String(repeating: "Detail. ", count: 6),
+          inProgress: false
+        )
+      }
+    }
+
+    nonisolated static func streamingTranscriptItems() -> [TranscriptItem] {
+      let tokens = (0..<600).map { "token\($0)" }.joined(separator: " ")
+      return [
+        .userText(id: "stream-user", text: "Stream six hundred tokens.", source: nil, quotes: []),
+        .assistantMarkdown(
+          id: "stream-reply",
+          text: tokens + " FINAL-TAIL",
+          inProgress: false
+        ),
+      ]
     }
 
     static var path: NetworkPathClient {

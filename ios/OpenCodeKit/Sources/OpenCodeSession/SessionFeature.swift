@@ -2,6 +2,7 @@ import ComposableArchitecture
 import Foundation
 import OpenCodeCore
 import OpenCodeServer
+import OpenCodeTranscript
 
 /// One session screen: authoritative reads, the run's Stop, the family's subagents, pending
 /// permission/form requests and the shell/background panel. Transcript rows and composer editing
@@ -25,6 +26,9 @@ public struct SessionFeature: Sendable {
     public var pendingInputs: [PendingInput]
     public var notice: SessionNotice?
     public var isPinned: Bool
+    public var transcripts: [String: TranscriptState]
+    public var pendingLink: URL?
+    public var inspectedFile: TranscriptFile?
 
     public var refresh: SessionRefresh?
     var nextRefreshID: Int
@@ -55,6 +59,9 @@ public struct SessionFeature: Sendable {
       self.pendingInputs = []
       self.notice = nil
       self.isPinned = isPinned
+      self.transcripts = [:]
+      self.pendingLink = nil
+      self.inspectedFile = nil
       self.refresh = nil
       self.nextRefreshID = 0
       self.nextPageID = 1
@@ -82,6 +89,9 @@ public struct SessionFeature: Sendable {
         && lhs.pendingInputs == rhs.pendingInputs
         && lhs.notice == rhs.notice
         && lhs.isPinned == rhs.isPinned
+        && lhs.transcripts == rhs.transcripts
+        && lhs.pendingLink == rhs.pendingLink
+        && lhs.inspectedFile == rhs.inspectedFile
     }
 
     // MARK: Derived
@@ -104,6 +114,14 @@ public struct SessionFeature: Sendable {
     public var subagents: [OpenCodeSession] { family?.subagents ?? [] }
 
     public var isRunning: Bool { run.isRunning }
+
+    public var activeTranscript: TranscriptState? {
+      activeSessionID.flatMap { transcripts[$0] }
+    }
+
+    public func transcript(for sessionID: String) -> TranscriptState? {
+      transcripts[sessionID]
+    }
 
     public var canInterrupt: Bool { isRunning && !run.isInterrupting && isLive }
 
@@ -186,6 +204,25 @@ public struct SessionFeature: Sendable {
     case jobCancelFinished(jobID: String, error: OpenCodeClientError?)
     case backgroundProblemDismissed
 
+    case transcriptEarlierTapped
+    case transcriptEarlierFinished(
+      sessionID: String,
+      generation: Int,
+      cursor: String?,
+      result: Result<TranscriptPage, OpenCodeClientError>
+    )
+    case transcriptDisclosureToggled(String)
+    case transcriptFollowChanged(sessionID: String, isFollowing: Bool, anchorID: String?)
+    case transcriptJumpTapped
+    case transcriptCopyTapped(String)
+    case transcriptLinkTapped(String)
+    case transcriptLinkConfirmed
+    case transcriptLinkCopyTapped
+    case transcriptLinkCancelled
+    case transcriptFileTapped(TranscriptFile)
+    case transcriptFileDismissed
+    case transcriptFileCopyTapped
+
     case noticeDismissed
     case delegate(Delegate)
   }
@@ -207,6 +244,7 @@ public struct SessionFeature: Sendable {
     case shellEarlier(String)
     case shellStop(String)
     case job(String)
+    case transcriptEarlier
     case notice
   }
 
@@ -214,6 +252,8 @@ public struct SessionFeature: Sendable {
   @Dependency(\.clock) private var clock
   @Dependency(\.networkPath) private var networkPath
   @Dependency(\.haptics) private var haptics
+  @Dependency(\.pasteboard) private var pasteboard
+  @Dependency(\.linkOpener) private var linkOpener
 
   public init() {}
 
@@ -267,7 +307,14 @@ public struct SessionFeature: Sendable {
           .cancel(id: CancelID.pendingInputs),
           .cancel(id: CancelID.interruptSettle(state.run.generation)),
           .cancel(id: CancelID.runEndCheck(state.run.generation)),
+          .cancel(id: CancelID.transcriptEarlier),
         ]
+        if let sessionID = state.activeSessionID, var transcript = state.transcripts[sessionID],
+          case .loading(let cursor, let reached) = transcript.earlier
+        {
+          transcript.earlier = reached ? .paging(cursor: cursor) : .seekingOverlap(cursor: cursor)
+          state.transcripts[sessionID] = transcript
+        }
         if let shellID {
           effects += [
             .cancel(id: CancelID.shellPoll(shellID)),
@@ -682,6 +729,97 @@ public struct SessionFeature: Sendable {
         state.background.problem = nil
         return .none
 
+      case .transcriptEarlierTapped:
+        return loadEarlierTranscript(state: &state)
+
+      case .transcriptEarlierFinished(let sessionID, let generation, let cursor, let result):
+        return earlierTranscriptFinished(
+          sessionID: sessionID,
+          generation: generation,
+          cursor: cursor,
+          result: result,
+          state: &state
+        )
+
+      case .transcriptDisclosureToggled(let entryID):
+        guard let sessionID = state.activeSessionID,
+          var transcript = state.transcripts[sessionID]
+        else { return .none }
+        if transcript.expandedIDs.contains(entryID) {
+          transcript.expandedIDs.remove(entryID)
+        } else {
+          transcript.expandedIDs.insert(entryID)
+        }
+        state.transcripts[sessionID] = transcript
+        return .none
+
+      case .transcriptFollowChanged(let sessionID, let isFollowing, let anchorID):
+        guard var transcript = state.transcripts[sessionID] else { return .none }
+        guard transcript.isFollowing != isFollowing || transcript.scrollAnchorID != anchorID else {
+          return .none
+        }
+        transcript.isFollowing = isFollowing
+        transcript.showsJumpToLatest = !isFollowing
+        if let anchorID { transcript.scrollAnchorID = anchorID }
+        state.transcripts[sessionID] = transcript
+        return .none
+
+      case .transcriptJumpTapped:
+        guard let sessionID = state.activeSessionID, var transcript = state.transcripts[sessionID]
+        else { return .none }
+        transcript.isFollowing = true
+        transcript.showsJumpToLatest = false
+        state.transcripts[sessionID] = transcript
+        return .none
+
+      case .transcriptCopyTapped(let text):
+        guard !text.isEmpty else { return .none }
+        pasteboard.setString(text)
+        haptics.play(.confirm)
+        AppLog(category: .app).event(
+          .transcriptCopied,
+          [LogField("characters", .count(text.count))]
+        )
+        return .none
+
+      case .transcriptLinkTapped(let text):
+        guard let url = URL(string: text), let scheme = url.scheme?.lowercased(),
+          ["http", "https", "mailto"].contains(scheme)
+        else { return .none }
+        state.pendingLink = url
+        return .none
+
+      case .transcriptLinkConfirmed:
+        guard let url = state.pendingLink else { return .none }
+        state.pendingLink = nil
+        let open = linkOpener.open
+        return .run { _ in _ = await open(url) }
+
+      case .transcriptLinkCopyTapped:
+        guard let url = state.pendingLink else { return .none }
+        pasteboard.setString(url.absoluteString)
+        state.pendingLink = nil
+        haptics.play(.confirm)
+        return .none
+
+      case .transcriptLinkCancelled:
+        state.pendingLink = nil
+        return .none
+
+      case .transcriptFileTapped(let file):
+        state.inspectedFile = file
+        return .none
+
+      case .transcriptFileDismissed:
+        state.inspectedFile = nil
+        return .none
+
+      case .transcriptFileCopyTapped:
+        guard let path = state.inspectedFile?.path, !path.isEmpty else { return .none }
+        pasteboard.setString(path)
+        haptics.play(.confirm)
+        return .none
+
       case .noticeDismissed:
         state.notice = nil
         return .none
@@ -704,6 +842,7 @@ public struct SessionSnapshot: Equatable, Sendable {
   public var shells: [ServerShell]?
   public var jobs: [ServerJob]?
   public var pendingInputs: [PendingInput]?
+  public var transcript: Result<TranscriptPage, OpenCodeClientError>?
 
   public init(
     session: OpenCodeSession,
@@ -712,7 +851,8 @@ public struct SessionSnapshot: Equatable, Sendable {
     isActive: Bool? = nil,
     shells: [ServerShell]? = nil,
     jobs: [ServerJob]? = nil,
-    pendingInputs: [PendingInput]? = nil
+    pendingInputs: [PendingInput]? = nil,
+    transcript: Result<TranscriptPage, OpenCodeClientError>? = nil
   ) {
     self.session = session
     self.family = family
@@ -721,6 +861,7 @@ public struct SessionSnapshot: Equatable, Sendable {
     self.shells = shells
     self.jobs = jobs
     self.pendingInputs = pendingInputs
+    self.transcript = transcript
   }
 }
 
@@ -761,6 +902,9 @@ extension SessionFeature {
 
     let requestID = state.nextRefreshID + 1
     state.nextRefreshID = requestID
+    if state.transcripts[sessionID] == nil {
+      state.transcripts[sessionID] = TranscriptState(sessionID: sessionID)
+    }
     state.refresh = SessionRefresh(id: requestID, reason: reason)
     if state.root == nil { state.isLoading = true }
     let familyRoot = state.family?.root
@@ -828,6 +972,9 @@ extension SessionFeature {
       async let inputs: Result<[PendingInput], OpenCodeClientError>? = capture {
         try await client.pendingInputs(server, sessionID)
       }
+      async let transcript: Result<TranscriptPage, OpenCodeClientError>? = capture {
+        try await client.transcript(server, sessionID, TranscriptState.initialLimit)
+      }
 
       let snapshot = SessionSnapshot(
         session: session,
@@ -836,7 +983,8 @@ extension SessionFeature {
         isActive: try? await active.get(),
         shells: try? await shells?.get(),
         jobs: try? await jobs?.get(),
-        pendingInputs: try? await inputs?.get()
+        pendingInputs: try? await inputs?.get(),
+        transcript: await transcript
       )
       await send(
         .refreshFinished(sessionID: sessionID, requestID: requestID, result: .success(snapshot))
@@ -872,6 +1020,11 @@ extension SessionFeature {
         [LogField("status", .status(error.statusCode ?? 0))]
       )
       apply(raced: inFlight.racedEvents, state: &state)
+      applyTranscriptFailure(
+        .from(error, isOffline: !state.isLive),
+        for: sessionID,
+        state: &state
+      )
       if state.root == nil {
         state.loadProblem = .from(error, isOffline: !state.isLive)
       } else {
@@ -953,6 +1106,14 @@ extension SessionFeature {
     if let shells = snapshot.shells { state.background.shells = shells }
     if let jobs = snapshot.jobs { state.background.jobs = jobs }
     if let inputs = snapshot.pendingInputs { state.pendingInputs = inputs }
+    if let transcript = snapshot.transcript {
+      switch transcript {
+      case .success(let page):
+        applyTranscript(page, for: sessionID, state: &state)
+      case .failure(let error):
+        applyTranscriptFailure(.from(error, isOffline: !state.isLive), for: sessionID, state: &state)
+      }
+    }
 
     // A page whose session is gone returns to its parent rather than showing a deleted session.
     if let family = state.family {
@@ -1089,6 +1250,7 @@ extension SessionFeature {
       }
       state.family?.sessions.removeAll { $0.id == id }
       state.pages.removeAll { $0.sessionID == id }
+      state.transcripts[id] = nil
       state.isLoading = true
       return recordRaced ? .none : .send(.refreshRequested(.resume))
 
@@ -1103,14 +1265,15 @@ extension SessionFeature {
         fetchPendingInputs(server: state.server, sessionID: state.activeSessionID ?? "")
       )
 
-    case .contentBatch(_, let events):
-      guard let durable = events.last(where: \.isDurableBoundary) else { return .none }
+    case .contentBatch(let sessionID, let events):
+      applyLiveTranscript(events, for: sessionID, state: &state)
       guard !recordRaced else { return .none }
+      guard let durable = events.last(where: \.isDurableBoundary) else { return .none }
       return .send(.refreshRequested(.settlement(messageID: durable.messageID)))
 
     case .messageInvalidated(let id):
       guard owns(id, state: state) else { return .none }
-      return .none
+      return recordRaced ? .none : .send(.refreshRequested(.invalidation))
 
     case .revertChanged(let id, let messageID, _):
       updateSession(id, state: &state) { $0.revertMessageID = messageID }
@@ -1239,7 +1402,16 @@ extension SessionFeature {
   /// against a different active session.
   private func abandonRefresh(_ state: inout State) -> Effect<Action> {
     state.refresh = nil
-    return .cancel(id: CancelID.refresh)
+    if let sessionID = state.activeSessionID, var transcript = state.transcripts[sessionID],
+      case .loading(let cursor, let reached) = transcript.earlier
+    {
+      transcript.earlier = reached ? .paging(cursor: cursor) : .seekingOverlap(cursor: cursor)
+      state.transcripts[sessionID] = transcript
+    }
+    return .merge(
+      .cancel(id: CancelID.refresh),
+      .cancel(id: CancelID.transcriptEarlier)
+    )
   }
 
   private func restoreSelection(pageID: Int, state: inout State) {
@@ -1956,5 +2128,199 @@ private func capture<T>(_ operation: @Sendable () async throws -> T) async
     return .failure(error)
   } catch {
     return .failure(OpenCodeClientError(.unreachable))
+  }
+}
+
+extension SessionFeature {
+  // MARK: Transcript
+
+  private func applyTranscript(
+    _ page: TranscriptPage,
+    for sessionID: String,
+    state: inout State
+  ) {
+    var transcript = state.transcripts[sessionID]
+      ?? TranscriptState(sessionID: sessionID)
+    let complete = page.next == nil
+    let existingIDs = Set(transcript.items.map(\.id))
+    let windowIDs = Set(page.items.map(\.id))
+    let firstFetchedIsKnown = page.items.first.map { existingIDs.contains($0.id) } ?? true
+    let lostOverlap =
+      !complete && !transcript.items.isEmpty && !page.items.isEmpty && !firstFetchedIsKnown
+    if complete || lostOverlap {
+      transcript.generation += 1
+      transcript.earlier = complete ? .exhausted : .unknownEdge
+      transcript.insertionAnchorID = nil
+      if case .loading = transcript.earlier { transcript.earlier = .unknownEdge }
+    }
+    transcript.items = TranscriptProjection.mergeNewest(
+      fetched: page.items,
+      existing: transcript.items,
+      complete: complete
+    )
+    transcript.problem = nil
+    transcript.didApplyWindow = true
+    transcript.initialLoaded = true
+    if complete {
+      transcript.earlier = .exhausted
+      transcript.earlierProblem = nil
+    }
+    if !complete, page.next != nil, transcript.earlier == .unknownEdge,
+      transcript.items.count <= page.items.count
+    {
+      // The first window did not reach the start: the next tap can page from its cursor.
+      transcript.earlier = .paging(cursor: page.next)
+      transcript.insertionAnchorID = page.items.first?.id
+    }
+    if transcript.isFollowing { transcript.showsJumpToLatest = false }
+    state.transcripts[sessionID] = transcript
+    AppLog(category: .app).event(
+      .transcriptLoaded,
+      [
+        LogField("rows", .count(page.items.count)),
+        LogField("complete", .flag(complete)),
+      ]
+    )
+  }
+
+  private func applyTranscriptFailure(
+    _ problem: SessionProblem,
+    for sessionID: String,
+    state: inout State
+  ) {
+    var transcript = state.transcripts[sessionID]
+      ?? TranscriptState(sessionID: sessionID)
+    if transcript.items.isEmpty {
+      transcript.problem = problem
+      transcript.didApplyWindow = true
+    }
+    state.transcripts[sessionID] = transcript
+  }
+
+  private func applyLiveTranscript(
+    _ events: [LiveContentEvent],
+    for sessionID: String,
+    state: inout State
+  ) {
+    guard state.root?.id == sessionID
+      || state.family?.sessions.contains(where: { $0.id == sessionID }) == true
+      || state.pages.contains(where: { $0.sessionID == sessionID })
+    else { return }
+    var transcript = state.transcripts[sessionID]
+      ?? TranscriptState(sessionID: sessionID)
+    TranscriptProjection.apply(events: events, to: &transcript.items)
+    if transcript.isFollowing { transcript.showsJumpToLatest = false }
+    state.transcripts[sessionID] = transcript
+  }
+
+  private func loadEarlierTranscript(state: inout State) -> Effect<Action> {
+    guard let sessionID = state.activeSessionID,
+      var transcript = state.transcripts[sessionID],
+      !transcript.isLoadingEarlier,
+      transcript.hasEarlierItems
+    else { return .none }
+    let cursor: String?
+    let reachedLoadedItems: Bool
+    switch transcript.earlier {
+    case .unknownEdge:
+      cursor = nil
+      reachedLoadedItems = false
+    case .seekingOverlap(let value):
+      cursor = value
+      reachedLoadedItems = false
+    case .paging(let value):
+      cursor = value
+      reachedLoadedItems = true
+    case .loading, .exhausted:
+      return .none
+    }
+    transcript.earlier = .loading(cursor: cursor, reachedLoadedItems: reachedLoadedItems)
+    transcript.earlierProblem = nil
+    let generation = transcript.generation
+    state.transcripts[sessionID] = transcript
+    let server = state.server
+    let client = client
+    return .run { send in
+      let result: Result<TranscriptPage, OpenCodeClientError>
+      do {
+        result = .success(try await client.transcriptHistory(server, sessionID, cursor))
+      } catch let error as OpenCodeClientError {
+        result = .failure(error)
+      } catch {
+        result = .failure(OpenCodeClientError(.unreachable))
+      }
+      await send(
+        .transcriptEarlierFinished(
+          sessionID: sessionID,
+          generation: generation,
+          cursor: cursor,
+          result: result
+        )
+      )
+    }
+    .cancellable(id: CancelID.transcriptEarlier, cancelInFlight: true)
+  }
+
+  private func earlierTranscriptFinished(
+    sessionID: String,
+    generation: Int,
+    cursor: String?,
+    result: Result<TranscriptPage, OpenCodeClientError>,
+    state: inout State
+  ) -> Effect<Action> {
+    guard var transcript = state.transcripts[sessionID],
+      transcript.generation == generation,
+      case .loading(let loadingCursor, let reachedLoadedItems) = transcript.earlier,
+      loadingCursor == cursor
+    else { return .none }
+
+    switch result {
+    case .failure(let error):
+      transcript.earlier =
+        reachedLoadedItems ? .paging(cursor: cursor) : .seekingOverlap(cursor: cursor)
+      transcript.earlierProblem = .from(error, isOffline: !state.isLive)
+      state.transcripts[sessionID] = transcript
+      AppLog(category: .app).event(
+        .transcriptEarlierLoaded,
+        [LogField("status", .status(error.statusCode ?? 0))]
+      )
+      return .none
+
+    case .success(let page):
+      if let next = page.next, next == cursor {
+        transcript.earlier =
+          reachedLoadedItems ? .paging(cursor: cursor) : .seekingOverlap(cursor: cursor)
+        transcript.earlierProblem = .malformed(feature: "transcript history")
+        state.transcripts[sessionID] = transcript
+        return .none
+      }
+      let merged = TranscriptProjection.mergeOlder(
+        page: page.items,
+        existing: transcript.items,
+        insertionAnchorID: transcript.insertionAnchorID,
+        reachedLoadedItems: reachedLoadedItems
+      )
+      if let merged {
+        transcript.items = merged
+        transcript.insertionAnchorID = page.items.first?.id ?? transcript.insertionAnchorID
+        transcript.earlier = page.next.map { .paging(cursor: $0) } ?? .exhausted
+        transcript.earlierProblem = nil
+        transcript.problem = nil
+      } else if page.next == nil, !page.items.isEmpty {
+        transcript.earlier = .seekingOverlap(cursor: nil)
+        transcript.earlierProblem = .malformed(feature: "transcript history")
+      } else {
+        transcript.earlier = page.next.map { .seekingOverlap(cursor: $0) } ?? .exhausted
+      }
+      state.transcripts[sessionID] = transcript
+      AppLog(category: .app).event(
+        .transcriptEarlierLoaded,
+        [
+          LogField("rows", .count(page.items.count)),
+          LogField("exhausted", .flag(transcript.earlier == .exhausted)),
+        ]
+      )
+      return .none
+    }
   }
 }

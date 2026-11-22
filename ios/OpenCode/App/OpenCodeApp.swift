@@ -1,6 +1,7 @@
 import OpenCodeApp
 import ComposableArchitecture
 import OpenCodeCore
+import OpenCodeTranscript
 import SwiftUI
 #if canImport(UIKit)
   import UIKit
@@ -86,6 +87,13 @@ struct OpenCodeApp: App {
       }
       .onOpenURL { url in
         store.send(.openURL(url.absoluteString))
+      }
+      .onReceive(
+        NotificationCenter.default.publisher(
+          for: UIApplication.didReceiveMemoryWarningNotification
+        )
+      ) { _ in
+        Task { await MarkdownBlockCache.shared.clear() }
       }
       .onChange(of: scenePhase) { _, phase in
         store.send(.scenePhaseChanged(isActive: phase == .active))
