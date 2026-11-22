@@ -515,11 +515,13 @@ public struct ConnectionFeature {
             state.projects.append(project)
           }
           return .send(.delegate(.projects(state.server, state.projects, state.info)))
-        case .executionStarted, .executionEnded, .sessionCreated, .sessionRenamed, .sessionMoved,
-          .sessionViewChanged, .sessionDeleted, .sessionArchiveChanged, .attentionChanged:
-          return .send(.delegate(.sessionEvent(state.server, event)))
-        default:
+        case .connected, .modelsChanged, .agentsChanged:
           return .none
+        default:
+          // The shell owns the only stream. Session decides which events it owns; forwarding
+          // everything else here keeps queues, durable boundaries, reverts, shells and jobs
+          // from being dropped at the connection boundary.
+          return .send(.delegate(.sessionEvent(state.server, event)))
         }
 
       case .delegate:

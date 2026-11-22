@@ -231,6 +231,10 @@ public struct ShellOutputState: Equatable, Sendable {
   public var isStopping: Bool
   public var isRunning: Bool
   public var isUnavailable: Bool
+  /// The output sheet is on screen; polling starts only when this and the initial tail are both ready.
+  public var isVisible: Bool
+  /// A drain could not finish; deleting now requires an explicit choice.
+  public var requiresDiscardConfirmation: Bool
   public var problem: SessionProblem?
 
   public init(
@@ -245,6 +249,8 @@ public struct ShellOutputState: Equatable, Sendable {
     isStopping: Bool = false,
     isRunning: Bool = true,
     isUnavailable: Bool = false,
+    isVisible: Bool = false,
+    requiresDiscardConfirmation: Bool = false,
     problem: SessionProblem? = nil
   ) {
     self.shellID = shellID
@@ -258,6 +264,8 @@ public struct ShellOutputState: Equatable, Sendable {
     self.isStopping = isStopping
     self.isRunning = isRunning
     self.isUnavailable = isUnavailable
+    self.isVisible = isVisible
+    self.requiresDiscardConfirmation = requiresDiscardConfirmation
     self.problem = problem
   }
 

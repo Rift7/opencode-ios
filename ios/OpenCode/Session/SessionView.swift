@@ -13,7 +13,6 @@ struct SessionView: View {
   @State private var showsRequests = false
   @State private var showsBackground = false
   @State private var denyReason = ""
-  @State private var isConfirmingShellStop = false
 
   var body: some View {
     NavigationStack {
@@ -21,6 +20,26 @@ struct SessionView: View {
         VStack(alignment: .leading, spacing: OpenCodeSpacing.s16) {
           if !store.isAtRoot {
             pageBackRow
+          }
+          if store.isLoading, store.root == nil {
+            HStack(spacing: OpenCodeSpacing.s8) {
+              ProgressView()
+              Text(AppCopy.text("session.loading"))
+                .font(OpenCodeFonts.font(.footnote))
+                .foregroundStyle(OpenCodeColors.color(.textWeak))
+            }
+            .accessibilityIdentifier("session-loading")
+          } else if let problem = store.loadProblem, store.root == nil {
+            VStack(alignment: .leading, spacing: OpenCodeSpacing.s8) {
+              Text(AppCopy.text("session.load_failed"))
+                .font(OpenCodeFonts.font(.headline))
+                .foregroundStyle(OpenCodeColors.color(.danger))
+              Button(AppCopy.text("common.try_again")) {
+                store.send(.retryTapped)
+              }
+              .buttonStyle(.bordered)
+              .accessibilityIdentifier("session-load-retry")
+            }
           }
           header
           if let notice = store.notice {
@@ -78,23 +97,8 @@ struct SessionView: View {
     }
     .sheet(isPresented: shellOutputPresented) {
       if let output = store.background.output {
-        ShellOutputSheet(
-          store: store,
-          output: output,
-          confirmStop: { isConfirmingShellStop = true }
-        )
+        ShellOutputSheet(store: store, output: output)
       }
-    }
-    .alert(
-      AppCopy.text("session.shell.stop_title"),
-      isPresented: $isConfirmingShellStop
-    ) {
-      Button(AppCopy.text("session.shell.stop"), role: .destructive) {
-        store.send(.shellStopConfirmed)
-      }
-      Button(AppCopy.text("common.cancel"), role: .cancel) {}
-    } message: {
-      Text(AppCopy.text("session.shell.stop_message"))
     }
   }
 
@@ -763,7 +767,7 @@ private struct BackgroundWorkSheet: View {
 private struct ShellOutputSheet: View {
   let store: StoreOf<SessionFeature>
   let output: ShellOutputState
-  let confirmStop: () -> Void
+  @State private var isConfirmingStop = false
 
   private var current: ShellOutputState { store.background.output ?? output }
 
@@ -804,14 +808,46 @@ private struct ShellOutputSheet: View {
             .accessibilityIdentifier("shell-output-load-earlier")
           }
           if !current.isUnavailable, current.isRunning {
-            Button(AppCopy.text("session.shell.stop"), role: .destructive, action: confirmStop)
-              .disabled(current.isStopping)
-              .accessibilityIdentifier("shell-output-stop")
+            Button(AppCopy.text("session.shell.stop"), role: .destructive) {
+              isConfirmingStop = true
+            }
+            .disabled(current.isStopping)
+            .accessibilityIdentifier("shell-output-stop")
           }
         }
       }
       .task { store.send(.shellOutputAppeared) }
       .onDisappear { store.send(.shellOutputDisappeared) }
+      .alert(
+        AppCopy.text("session.shell.stop_title"),
+        isPresented: $isConfirmingStop
+      ) {
+        Button(AppCopy.text("session.shell.stop"), role: .destructive) {
+          store.send(.shellStopTapped)
+          store.send(.shellStopConfirmed)
+        }
+        Button(AppCopy.text("common.cancel"), role: .cancel) {}
+      } message: {
+        Text(AppCopy.text("session.shell.stop_message"))
+      }
+      .alert(
+        AppCopy.text("session.shell.drain_title"),
+        isPresented: Binding(
+          get: { current.requiresDiscardConfirmation },
+          set: { presented in
+            if !presented { store.send(.shellDiscardCancelled) }
+          }
+        )
+      ) {
+        Button(AppCopy.text("session.shell.discard"), role: .destructive) {
+          store.send(.shellDiscardUnreadConfirmed)
+        }
+        Button(AppCopy.text("session.shell.keep"), role: .cancel) {
+          store.send(.shellDiscardCancelled)
+        }
+      } message: {
+        Text(AppCopy.text("session.shell.drain_message"))
+      }
     }
     .accessibilityIdentifier("shell-output-sheet")
     .tint(OpenCodeColors.color(.accent))

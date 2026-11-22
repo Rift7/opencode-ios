@@ -731,3 +731,29 @@ A P7 UI test found a latent crash from the first form sheet: `OpenCodeColors.col
 its dynamic `UIColor` provider runs when SwiftUI resolves a colour, sometimes off the main queue, and a
 Swift 6 executor assertion trapped. The provider now resolves through a nonisolated entry point over the
 `Sendable` palette. This is a correctness fix, not a visual change; typography remains SF/SF Mono (D-1).
+
+### D-57 The stream, family, initial load and shell boundaries are explicit
+The Phase 7 review found six boundaries that direct feature tests could not see. They are now
+semantics, not test-only patches:
+
+- **Stream forwarding is complete.** `ConnectionFeature.streamEvent` forwards every event except
+  `projectUpdated` (handled into the project list), `connected` and the model/agent catalog notices.
+  Session still decides ownership; Home and Session receive the same delegate event. The connection's
+  attempt/stream token check is unchanged, and App has one stream owner.
+- **Family identity is the root, not the active page.** A refresh reads the active session's metadata,
+  but `sessionFamily` is always called with the family's original root. A narrower subtree cannot replace
+  a known family. Child pages read, and an inactive child clears the run for that page while the root's
+  requests and unsent answers stay in the parent.
+- **A selection can load without a cache.** The initial snapshot is accepted when root and family are
+  still empty and the response matches the selected session. Stale-request fencing is unchanged (ID and
+  session), and a reconnect may start the initial read again.
+- **Shell polling is a conjunction.** The sheet tracks visibility separately from the initial tail;
+  either arriving last starts exactly one poll. Dismissal cancels it; reconnection restarts it only when
+  the sheet is still visible and loaded.
+- **Shell ranges are contiguous and bounded.** Trimming returns the discarded byte count, including
+  newline and UTF-8 alignment, and the reducer advances `startCursor` by it. Load Earlier joins at the
+  retained start and is capped at 4 MiB; it never trims the newly loaded front.
+- **Stop drains before it deletes.** Stop cancels polling, reads the remaining pages to a probe-confirmed
+  completion boundary, and only then sends `DELETE`. A failed or incomplete drain keeps the output and
+  asks for an explicit Discard Unread Output decision; cancellation never deletes. This prevents silently
+  destroying output the person never saw.

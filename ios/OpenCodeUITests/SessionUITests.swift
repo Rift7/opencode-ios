@@ -45,6 +45,23 @@ final class SessionUITests: XCTestCase {
     XCTAssertTrue(app.descendants(matching: .any)["root-phase-connected"].waitForExistence(timeout: 10))
   }
 
+  func testShellOutputAndStop() {
+    let app = launch()
+    openAlpha(app)
+
+    app.buttons["session-background"].tap()
+    let shell = app.buttons["background-shell-shell-alpha"]
+    XCTAssertTrue(shell.waitForExistence(timeout: 10))
+    shell.tap()
+    XCTAssertTrue(app.descendants(matching: .any)["shell-output"].waitForExistence(timeout: 10))
+
+    app.buttons["shell-output-stop"].tap()
+    let confirm = app.alerts.buttons["Stop Shell"]
+    XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+    confirm.tap()
+    XCTAssertTrue(app.staticTexts["Output Unavailable"].waitForExistence(timeout: 10))
+  }
+
   func testPermissionApprovalAndRejection() {
     let app = launch()
     openAlpha(app)

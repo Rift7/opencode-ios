@@ -177,6 +177,10 @@ public struct SessionFeature: Sendable {
     case shellStopTapped
     case shellStopConfirmed
     case shellOutputExited(String)
+    case shellDrainPage(shellID: String, page: ShellOutputPage)
+    case shellDrainFailed(shellID: String, error: OpenCodeClientError)
+    case shellDiscardUnreadConfirmed
+    case shellDiscardCancelled
     case shellStopFinished(shellID: String, error: OpenCodeClientError?)
     case jobCancelTapped(jobID: String)
     case jobCancelFinished(jobID: String, error: OpenCodeClientError?)
@@ -241,19 +245,38 @@ public struct SessionFeature: Sendable {
         let wasLive = state.isLive
         state.isLive = isConnected
         if isConnected {
-          guard !wasLive, state.root != nil else { return .none }
-          return requestRefresh(.reconnect, state: &state)
+          guard !wasLive else { return .none }
+          var effects: [Effect<Action>] = [requestRefresh(.reconnect, state: &state)]
+          if let output = state.background.output, output.isVisible, output.isLoaded,
+            !output.isUnavailable, !output.isStopping, !output.requiresDiscardConfirmation
+          {
+            effects.append(pollShell(shellID: output.shellID, state: state))
+          }
+          return .merge(effects)
         }
         state.refresh = nil
         state.nextRefreshID += 1
-        return .merge(
+        if var output = state.background.output {
+          output.isStopping = false
+          state.background.output = output
+        }
+        let shellID = state.background.output?.shellID
+        var effects: [Effect<Action>] = [
           .cancel(id: CancelID.refresh),
           .cancel(id: CancelID.requests),
           .cancel(id: CancelID.pendingInputs),
-          .cancel(id: CancelID.shellPoll(state.background.output?.shellID ?? "")),
           .cancel(id: CancelID.interruptSettle(state.run.generation)),
-          .cancel(id: CancelID.runEndCheck(state.run.generation))
-        )
+          .cancel(id: CancelID.runEndCheck(state.run.generation)),
+        ]
+        if let shellID {
+          effects += [
+            .cancel(id: CancelID.shellPoll(shellID)),
+            .cancel(id: CancelID.shellOutput(shellID)),
+            .cancel(id: CancelID.shellEarlier(shellID)),
+            .cancel(id: CancelID.shellStop(shellID)),
+          ]
+        }
+        return .merge(effects)
 
       case .connectionResynchronized:
         guard state.isLive else { return .none }
@@ -440,15 +463,21 @@ public struct SessionFeature: Sendable {
         return loadShellTail(shellID: shellID, state: state)
 
       case .shellOutputAppeared:
-        guard let output = state.background.output, !output.isUnavailable else { return .none }
+        guard var output = state.background.output, !output.isUnavailable else { return .none }
+        output.isVisible = true
+        state.background.output = output
+        guard output.isLoaded else { return .none }
         return pollShell(shellID: output.shellID, state: state)
 
       case .shellOutputDisappeared:
-        guard let output = state.background.output else { return .none }
+        guard var output = state.background.output else { return .none }
+        output.isVisible = false
+        state.background.output = output
         return .cancel(id: CancelID.shellPoll(output.shellID))
 
       case .shellOutputTick:
-        guard let output = state.background.output, !output.isUnavailable, !output.isStopping
+        guard let output = state.background.output, output.isVisible,
+          !output.isUnavailable, !output.isStopping, !output.requiresDiscardConfirmation
         else { return .none }
         return pollShell(shellID: output.shellID, state: state)
 
@@ -471,15 +500,21 @@ public struct SessionFeature: Sendable {
           }
         }
         state.background.output = output
+        if output.isVisible, output.isLoaded, !output.isUnavailable {
+          return pollShell(shellID: shellID, state: state)
+        }
         return .none
 
       case .shellOutputLoaded(let shellID, let result):
-        guard var output = state.background.output, output.shellID == shellID else { return .none }
+        guard var output = state.background.output, output.shellID == shellID,
+          !output.isStopping
+        else { return .none }
         switch result {
         case .success(let page):
-          let end = output.endCursor
-          guard end != nil, page.cursor > end! else { return .none }
-          output.output = trimShellOutput(output.output + page.output, limit: output.retainLimit)
+          guard let end = output.endCursor, page.cursor > end else { return .none }
+          let trimmed = trimShellOutput(output.output + page.output, limit: output.retainLimit)
+          output.output = trimmed.text
+          output.startCursor += trimmed.discardedBytes
           output.endCursor = page.cursor
           output.size = page.size
           output.problem = nil
@@ -514,8 +549,21 @@ public struct SessionFeature: Sendable {
             state.background.output = output
             return .none
           }
-          output.output = trimShellOutput(page.output + output.output, limit: max(output.retainLimit, output.output.utf8.count + page.output.utf8.count))
-          output.startCursor = start
+          let capacity = ShellOutputState.maximumRetainedBytes - output.output.utf8.count
+          guard capacity > 0 else {
+            state.background.output = output
+            return .none
+          }
+          var bytes = Array(page.output.utf8)
+          if bytes.count > capacity {
+            // Keep the suffix nearest the retained range, then align to a UTF-8 lead byte.
+            var cut = bytes.count - capacity
+            while cut < bytes.count, bytes[cut] & 0xC0 == 0x80 { cut += 1 }
+            bytes = Array(bytes[cut...])
+          }
+          let added = String(decoding: bytes, as: UTF8.self)
+          output.output = added + output.output
+          output.startCursor = page.cursor - bytes.count
           output.retainLimit = min(
             ShellOutputState.maximumRetainedBytes,
             max(output.retainLimit, output.output.utf8.count)
@@ -535,20 +583,66 @@ public struct SessionFeature: Sendable {
         guard var output = state.background.output, !output.isUnavailable, !output.isStopping
         else { return .none }
         output.isStopping = true
+        output.requiresDiscardConfirmation = false
         state.background.output = output
         return .none
 
       case .shellStopConfirmed:
-        return stopShell(state: &state)
+        guard let shellID = state.background.output?.shellID else { return .none }
+        return .merge(
+          .cancel(id: CancelID.shellPoll(shellID)),
+          stopShell(state: &state)
+        )
+
+      case .shellDrainPage(let shellID, let page):
+        guard var output = state.background.output, output.shellID == shellID,
+          let end = output.endCursor, page.cursor > end
+        else { return .none }
+        let trimmed = trimShellOutput(output.output + page.output, limit: output.retainLimit)
+        output.output = trimmed.text
+        output.startCursor += trimmed.discardedBytes
+        output.endCursor = page.cursor
+        output.size = page.size
+        state.background.output = output
+        return .none
+
+      case .shellDrainFailed(let shellID, let error):
+        guard var output = state.background.output, output.shellID == shellID else {
+          return .none
+        }
+        output.isStopping = false
+        output.requiresDiscardConfirmation = true
+        output.problem = .from(error, isOffline: !state.isLive)
+        state.background.output = output
+        haptics.play(.error)
+        return .none
+
+      case .shellDiscardUnreadConfirmed:
+        guard var output = state.background.output,
+          output.requiresDiscardConfirmation, !output.isUnavailable
+        else { return .none }
+        output.requiresDiscardConfirmation = false
+        output.isStopping = true
+        state.background.output = output
+        return discardUnreadAndStopShell(state: &state)
+
+      case .shellDiscardCancelled:
+        guard var output = state.background.output else { return .none }
+        output.requiresDiscardConfirmation = false
+        output.isStopping = false
+        output.problem = nil
+        state.background.output = output
+        return output.isVisible ? pollShell(shellID: output.shellID, state: state) : .none
 
       case .shellStopFinished(let shellID, let error):
         guard var output = state.background.output, output.shellID == shellID else { return .none }
         output.isStopping = false
+        output.requiresDiscardConfirmation = false
         if let error, error.statusCode != 404 {
           haptics.play(.error)
           output.problem = .from(error, isOffline: !state.isLive)
           state.background.output = output
-          return pollShell(shellID: shellID, state: state)
+          return output.isVisible ? pollShell(shellID: shellID, state: state) : .none
         }
         output.isUnavailable = true
         state.background.output = output
@@ -669,11 +763,15 @@ extension SessionFeature {
     state.nextRefreshID = requestID
     state.refresh = SessionRefresh(id: requestID, reason: reason)
     if state.root == nil { state.isLoading = true }
+    let familyRoot = state.family?.root
+      ?? (state.root?.id == state.selection.sessionID ? state.root : nil)
     return refreshEffect(
       server: state.server,
       sessionID: sessionID,
       requestID: requestID,
       reason: reason,
+      familyRoot: familyRoot,
+      familyRootID: state.family?.root.id ?? state.selection.sessionID,
       knownFamily: state.family?.sessions.map(\.id) ?? []
     )
   }
@@ -683,6 +781,8 @@ extension SessionFeature {
     sessionID: String,
     requestID: Int,
     reason: RefreshReason,
+    familyRoot: OpenCodeSession?,
+    familyRootID: String,
     knownFamily: [String]
   ) -> Effect<Action> {
     let client = client
@@ -705,7 +805,15 @@ extension SessionFeature {
 
       var family: Result<SessionFamily, OpenCodeClientError>?
       if full {
-        family = await capture { try await client.sessionFamily(server, session) }
+        // The family is always discovered from its root, even while a subagent page is active.
+        // The live walk returns the subtree of whatever root it is given.
+        let familyReadRoot: OpenCodeSession? = familyRoot
+          ?? (session.id == familyRootID ? session : nil)
+        if let familyReadRoot {
+          family = await capture {
+            try await client.sessionFamily(server, familyReadRoot)
+          }
+        }
       }
       let familyIDs = (try? family?.get())?.sessions.map(\.id) ?? knownFamily
 
@@ -744,7 +852,13 @@ extension SessionFeature {
     state: inout State
   ) -> Effect<Action> {
     guard let inFlight = state.refresh, inFlight.id == requestID else { return .none }
-    guard state.activeSessionID == sessionID || state.root?.id == sessionID else {
+    let isInitialSelection = state.root == nil
+      && state.family == nil
+      && state.selection.sessionID == sessionID
+    guard state.activeSessionID == sessionID
+      || state.root?.id == sessionID
+      || isInitialSelection
+    else {
       state.refresh = nil
       return .none
     }
@@ -793,10 +907,16 @@ extension SessionFeature {
   }
 
   private func apply(snapshot: SessionSnapshot, for sessionID: String, state: inout State) {
-    if state.root?.id == sessionID || state.root == nil {
+    if state.root == nil || state.root?.id == sessionID || sessionID == state.selection.sessionID {
       state.root = snapshot.session
     }
-    state.family = mergedFamily(snapshot.family, rootSession: snapshot.session, state: state)
+    if let incoming = snapshot.family, case .success(let family) = incoming {
+      if let previous = state.family, previous.root.id != family.root.id {
+        // A narrower subtree must not replace the family the screen is navigating.
+      } else {
+        state.family = mergedFamily(family, previous: state.family)
+      }
+    }
     if let family = state.family, let session = family.session(sessionID) {
       if state.root?.id == sessionID { state.root = session }
       if let index = state.pages.firstIndex(where: { $0.sessionID == sessionID }) {
@@ -817,14 +937,17 @@ extension SessionFeature {
     }
 
     if let isActive = snapshot.isActive {
-      if let root = state.root, root.id == sessionID {
+      if state.activeSessionID == sessionID {
         state.run.isRunning = isActive
-      } else if let family = state.family, family.isActive(sessionID) {
-        state.run.isRunning = isActive
+        if !isActive {
+          state.run.isInterrupting = false
+          state.run.stopAttempt = nil
+        }
       }
-      if !isActive {
-        state.run.isInterrupting = false
-        state.run.stopAttempt = nil
+      if isActive {
+        state.family?.activeSessionIDs.insert(sessionID)
+      } else {
+        state.family?.activeSessionIDs.remove(sessionID)
       }
     }
     if let shells = snapshot.shells { state.background.shells = shells }
@@ -841,13 +964,10 @@ extension SessionFeature {
   }
 
   private func mergedFamily(
-    _ incoming: Result<SessionFamily, OpenCodeClientError>?,
-    rootSession: OpenCodeSession,
-    state: State
-  ) -> SessionFamily? {
-    guard let incoming else { return state.family }
-    guard case .success(let family) = incoming else { return state.family }
-    guard let previous = state.family, previous.root.id == family.root.id else { return family }
+    _ family: SessionFamily,
+    previous: SessionFamily?
+  ) -> SessionFamily {
+    guard let previous, previous.root.id == family.root.id else { return family }
     var ids = Set(family.sessions.map(\.id))
     var sessions = family.sessions
     for old in previous.sessions where ids.insert(old.id).inserted {
@@ -1611,7 +1731,7 @@ extension SessionFeature {
 
   private func pollShell(shellID: String, state: State) -> Effect<Action> {
     guard let output = state.background.output, output.shellID == shellID,
-      let cursor = output.endCursor, !output.isUnavailable
+      let cursor = output.endCursor, !output.isUnavailable, !output.requiresDiscardConfirmation
     else { return .none }
     guard let directory = state.activeSession?.directory ?? state.root?.directory else {
       return .none
@@ -1690,21 +1810,84 @@ extension SessionFeature {
     guard var output = state.background.output, !output.isUnavailable, output.isStopping,
       let directory = state.activeSession?.directory ?? state.root?.directory
     else { return .none }
+    guard let start = output.endCursor else {
+      output.isStopping = false
+      output.requiresDiscardConfirmation = true
+      output.problem = .unsupported
+      state.background.output = output
+      return .none
+    }
     let client = client
     let server = state.server
     let shellID = output.shellID
-    let cursor = output.endCursor
+    let size = output.size
     output.isStopping = true
     state.background.output = output
     return .run { send in
-      // Stopping discards the server's capture, so read what is left before the delete.
-      if let cursor {
-        if let page = try? await client.shellOutput(
-          server, directory, shellID, cursor, ShellOutputState.pageBytes
-        ) {
-          await send(.shellOutputLoaded(shellID: shellID, result: .success(page)))
+      var cursor = start
+      var knownSize = size
+      var pages = 0
+      let maximumPages = 4_096
+      do {
+        // Stopping discards the server's capture: drain every remaining page first, with bounded
+        // local retention. A failed or incomplete drain never reaches the delete. The capture can
+        // grow while it drains, so the completion boundary is the size the probe reports once the
+        // pages caught up.
+        draining: while true {
+          while cursor < knownSize {
+            guard pages < maximumPages else {
+              await send(
+                .shellDrainFailed(
+                  shellID: shellID,
+                  error: OpenCodeClientError(.undecodable(feature: "shell capture too large"))
+                )
+              )
+              return
+            }
+            let page = try await client.shellOutput(
+              server, directory, shellID, cursor, ShellOutputState.pageBytes
+            )
+            guard page.cursor > cursor else {
+              await send(
+                .shellDrainFailed(
+                  shellID: shellID,
+                  error: OpenCodeClientError(.undecodable(feature: "shell output cursor"))
+                )
+              )
+              return
+            }
+            await send(.shellDrainPage(shellID: shellID, page: page))
+            cursor = page.cursor
+            pages += 1
+          }
+          let probe = try await client.shellOutput(
+            server, directory, shellID, Int.max, 1
+          )
+          if probe.size <= cursor { break draining }
+          knownSize = probe.size
         }
+        try await client.stopShell(server, directory, shellID)
+        await send(.shellStopFinished(shellID: shellID, error: nil))
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        await send(.shellDrainFailed(shellID: shellID, error: error))
+      } catch {
+        await send(.shellDrainFailed(shellID: shellID, error: OpenCodeClientError(.unreachable)))
       }
+    }
+    .cancellable(id: CancelID.shellStop(shellID), cancelInFlight: true)
+  }
+
+  /// The person chose to discard output the drain could not finish.
+  private func discardUnreadAndStopShell(state: inout State) -> Effect<Action> {
+    guard let output = state.background.output,
+      let directory = state.activeSession?.directory ?? state.root?.directory
+    else { return .none }
+    let client = client
+    let server = state.server
+    let shellID = output.shellID
+    return .run { send in
       do {
         try await client.stopShell(server, directory, shellID)
         await send(.shellStopFinished(shellID: shellID, error: nil))
@@ -1719,9 +1902,12 @@ extension SessionFeature {
     .cancellable(id: CancelID.shellStop(shellID), cancelInFlight: true)
   }
 
-  private func trimShellOutput(_ text: String, limit: Int) -> String {
+  private func trimShellOutput(
+    _ text: String,
+    limit: Int
+  ) -> (text: String, discardedBytes: Int) {
     let bytes = Array(text.utf8)
-    guard bytes.count > limit else { return text }
+    guard bytes.count > limit else { return (text, 0) }
     var cut = bytes.count - limit
     let searchEnd = min(cut + 4_096, bytes.count)
     if let newline = bytes[cut..<searchEnd].firstIndex(of: 0x0A) {
@@ -1729,7 +1915,7 @@ extension SessionFeature {
     } else {
       while cut < bytes.count, bytes[cut] & 0xC0 == 0x80 { cut += 1 }
     }
-    return String(decoding: bytes[cut...], as: UTF8.self)
+    return (String(decoding: bytes[cut...], as: UTF8.self), cut)
   }
 
   // MARK: Notices

@@ -106,14 +106,14 @@ intervals during the measured swipes; the p95 stays at one interval.
 
 | Area | New or changed path | Gate |
 | --- | --- | --- |
-| Session reducer, refresh identity, run lifecycle, family pages, request review, shell panel | `OpenCodeKit/Sources/OpenCodeSession/SessionFeature.swift`, `SessionModels.swift` | `SessionFeatureTests` — 12 Swift Testing cases (coalescing, races, settlement, interrupt ambiguity/resume, stranded steer, validation, duplicate submit, conflict, permission rules, navigation, stale read, shell output) |
-| Session destination and App → Home → Session ownership | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift`, `ios/OpenCode/App/RootView.swift`, `ios/OpenCode/Session/SessionView.swift` | `AppFeatureTests.sessionOwnership`, `sessionServerIsolation`; `SessionUITests.testSessionAndSubagentNavigation` |
+| Session reducer, refresh identity, run lifecycle, family pages, request review, shell panel | `OpenCodeKit/Sources/OpenCodeSession/SessionFeature.swift`, `SessionModels.swift` | `SessionFeatureTests` — 23 Swift Testing cases (coalescing, races, settlement, interrupt ambiguity/resume, stranded steer, validation, duplicate submit, conflict, permission rules, root/child/sibling navigation, uncached load/retry/reconnect, stale read, shell poll timing, byte ranges, drain/failure/cancel) |
+| Session destination and App → Home → Session ownership | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift`, `ios/OpenCode/App/RootView.swift`, `ios/OpenCode/Session/SessionView.swift` | `AppFeatureTests.sessionOwnership`, `sessionServerIsolation`, `sessionEventForwarding`; `SessionUITests.testSessionAndSubagentNavigation` |
 | Request models: fields, values, conditions, defaults, validation, permissions, form state and settlement | `OpenCodeServer/Models/RequestModels.swift` | `RequestModelsTests` — 6 cases (value order, defaults/visibility, typed validation, hidden answers, strict type decoding, global question) |
 | Family and shell models, selection moved down to the server layer | `OpenCodeServer/Models/SessionModels.swift` | `SessionFamilyTests` — breadth-first, cycle/dedupe, 100-session cap, running descendant |
 | Client operations: interrupt, active, family BFS, pending requests, permission/form replies with settlement, inbox, shells/output/stop, jobs/cancel | `OpenCodeServer/Client/OpenCodeClient.swift`, `SessionOperations.swift` | `SessionFamilyTests` through `OpenCodeClient.live`; request-model tests; no live host |
 | Mark All as Read | `HomeFeature.markAllReadTapped`, drawer menu and Catch Up menu action | `HomeFeatureTests.markAllReadOnlyUnread`, `markAllFailureRestores`; `HomeUITests.testMarkAllReadFromTheCatchUpMenu` |
 | Permission/form review UI | `ios/OpenCode/Session/SessionView.swift` | `SessionUITests` form validation/submit, approve, reject path, failed reply retry |
-| Copy and accessibility identifiers | `ios/OpenCode/Resources/Localizable.xcstrings` | 78 new English keys; `session-review-requests`, `request-permission-*`, `request-field-*`, `background-*`, `shell-output*`, `session-subagents`, `session-page-back` |
+| Copy and accessibility identifiers | `ios/OpenCode/Resources/Localizable.xcstrings` | 84 new English keys; `session-review-requests`, `request-permission-*`, `request-field-*`, `background-*`, `shell-output*`, `session-subagents`, `session-page-back` |
 | Colour provider crash found by the form UI test | `OpenCodeCore/Design/OpenCodeColorTokens.swift` | `OpenCodeColors.color` is `nonisolated`; the dynamic `UIColor` provider no longer asserts a main-queue executor when SwiftUI resolves it off-main |
 
 ### Refresh, runs and settlement
@@ -149,18 +149,35 @@ intervals during the measured swipes; the p95 stays at one interval.
 - Form replies settle through a read-back: success, a matching read-back, a conflicting state, or a
   `still pending` form resent once. A `409` is never blindly repeated. Conflicts are typed and shown.
 - Shell output reads 64 KiB pages, tails from the last 256 KiB, retains 1 MiB and can grow to 4 MiB with
-  Load Earlier. Stop drains the remaining bytes before `DELETE`; a 404 marks the output unavailable.
+  Load Earlier. A trimmed range advances its start by the exact bytes discarded, including newline and
+  UTF-8 alignment, so `startCursor + output.utf8.count == endCursor` always holds. Load Earlier never
+  exceeds 4 MiB and joins at the retained start.
+- Polling starts only when the sheet is visible and the initial tail is loaded; the two can arrive in
+  either order. Stop cancels the poll, drains every remaining page to the current capture size, and only
+  then deletes. A failed or incomplete drain keeps the output and requires an explicit Discard Unread
+  Output choice; cancellation never deletes.
 - Mark All acknowledges only rows whose indicator is `unread`; waiting (attention) and running rows are
   left untouched. Receipts run four at a time with a per-session backup, and a failure restores that row's
   read date, viewed watermark, manual-unread mark and unread floor.
+
+### Reviewed Phase 7 corrections
+
+| Finding | Change | Regression |
+| --- | --- | --- |
+| The connection boundary dropped session events | `ConnectionFeature.streamEvent` forwards every event except `projectUpdated`, `connected`, `modelsChanged` and `agentsChanged`; token checks stay in place. | `AppFeatureTests.sessionEventForwarding` sends shell, job, inbox, durable content, revert and shell-ended events through App/Connection and observes Session state. |
+| A child refresh replaced the family root | The read always discovers the family from its original root; a narrower subtree can no longer replace a known family. | `familyIdentityAcrossPages`: root → child → sibling → back with a client that returns a subtree for each supplied root; inactive child clears the run and unsent answers survive. |
+| A selection with no cache rejected its first snapshot | The refresh identity guard accepts the selected session when root and family are still empty; reconnect is allowed during the initial load. | `uncachedInitialLoad`: success, failure, retry, and interruption followed by reconnect. |
+| Shell polling could miss its only start | `isVisible` is tracked; prepared or appeared starts exactly one poll when both are ready; reconnection restarts it. | `shellPollTiming`: appearance before load, load before appearance, dismissal during load, reconnect. |
+| Trimmed output ranges were not contiguous | Trimming returns the discarded byte count, which advances `startCursor`; Load Earlier joins the retained start and never exceeds 4 MiB. | `shellRangeContiguity`, `shellTrimThenEarlier`, `shellEarlierBounded` (multibyte and page crossing the cap). |
+| Stop deleted after one page read | Stop cancels polling, drains to the probing completion boundary, retains bounded output, and only then deletes. A failed/incomplete drain needs an explicit discard. | `shellDrainAndFailure`, `shellDrainCancellation`: multiple pages, failure, discard decision and cancellation. |
 
 ## Verified in this phase
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | **353 tests pass**: 174 server, 67 core, 60 app, 38 drawer, 14 session; live and loopback opt-outs behave as before |
-| `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **33 UI tests pass**; package suites pass |
-| `xcodebuild ... -only-testing:OpenCodeUITests/SessionUITests` | 5 journeys: session/subagent navigation, permission approval, permission rejection, form validation/submission, failed reply retry |
+| `swift test --package-path ios/OpenCodeKit` | **363 tests pass**: 174 server, 67 core, 61 app, 38 drawer, 23 session; live and loopback opt-outs behave as before |
+| `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **34 UI tests pass**; package suites pass |
+| `xcodebuild ... -only-testing:OpenCodeUITests/SessionUITests` | 6 journeys: session/subagent navigation, permission approval, permission rejection, form validation/submission, failed reply retry, shell output and stop |
 | `xcodebuild ... -only-testing:OpenCodeUITests/HomeUITests` | 8 tests including Mark All from the drawer menu |
 | Screenshots | `docs/ios-migration/screens/p7-{session,request,background}[-dark].png` |
 

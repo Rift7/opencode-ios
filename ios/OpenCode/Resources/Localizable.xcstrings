@@ -2508,6 +2508,72 @@
           }
         }
       }
+    },
+    "session.loading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading session…"
+          }
+        }
+      }
+    },
+    "session.load_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t load this session"
+          }
+        }
+      }
+    },
+    "session.shell.drain_title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t read all output"
+          }
+        }
+      }
+    },
+    "session.shell.drain_message": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The shell may still be running. Discard the unread output and stop it?"
+          }
+        }
+      }
+    },
+    "session.shell.discard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discard Unread Output"
+          }
+        }
+      }
+    },
+    "session.shell.keep": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep Output"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

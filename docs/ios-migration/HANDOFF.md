@@ -149,13 +149,15 @@ Useful entry points:
 | Client read receipt, delete, attention | `OpenCodeKit/Sources/OpenCodeServer/Client/OpenCodeClient.swift` |
 | Fixture sessions and scroll fixture | `ios/OpenCode/App/UITestFixture.swift` |
 | UI journeys | `ios/OpenCodeUITests/{HomeUITests,SessionUITests}.swift` |
+| Reviewed boundary regressions | `OpenCodeKit/Tests/OpenCodeAppTests/AppFeatureTests.swift` (`sessionEventForwarding`), `OpenCodeSessionTests/SessionFeatureTests.swift` (family identity, uncached load, shell poll/range/drain) |
 | Screenshots and scroll trace | `ios/OpenCodeUITests/{HomeScreenshotUITests,SessionScreenshotUITests,HomeScrollTraceUITests}.swift` |
 | Debug frame probe | `ios/OpenCode/Drawer/ScrollFrameProbe.swift` |
 
 ### P7 evidence
 
 - `swift test --package-path ios/OpenCodeKit`: see `STATUS.md` for the gate count (server, core, app,
-  drawer and session suites). Session has 12 reducer tests; requests 6 model tests; family 4 tests.
+  drawer and session suites). Session has 23 reducer tests; requests 6 model tests; family 4 tests;
+  App has the stream-forwarding integration test; Session UI has 6 journeys including shell stop.
 - `ios/scripts/verify.sh`: app build, `OpenCodeTests`, 31 UI tests and package tests pass.
 - `SessionUITests`: session/subagent navigation, permission approval, form validation/submission and a
   failed reply retry.
