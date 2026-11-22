@@ -7,7 +7,7 @@
 | Integration branch | `ios` |
 | Behaviour baseline | `7358160e808fb1870eeb20f5da8df832667019d1` (`origin/dev`) |
 | `ios` head when P5 started | `5f143ea7927796f341d93373f002dfa2c1c38b7e` (PR #3, transport/retry/models/SSE/pairing) |
-| P5 branch | `ios-shell`, created from `origin/ios` after `git fetch origin` |
+| P5 branch | `ios-shell`, created from `origin/ios` after `git fetch origin`; review corrections at `04da03cf` |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
 `git fetch origin` moved `origin/ios` from `d0fdf2f5` to `5f143ea7`. PR #3 is merged:
