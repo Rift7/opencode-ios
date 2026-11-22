@@ -20,10 +20,11 @@ struct OpenCodeApp: App {
     #if DEBUG
       let initialStore: StoreOf<AppFeature>
       if configuration.usesFixtureClient {
-        let fixture = UITestFixture.make()
+        let fixture = UITestFixture.make(mode: configuration.uiTestFixture ?? "connected")
         initialStore = withDependencies {
           $0.openCodeClient = fixture.client
           $0.sharedStore = fixture.storage
+          $0.homeSnapshotStore = .inMemory()
           $0.networkPath = UITestFixture.path
           $0.uuidClient = UuidClient.incrementing()
           $0.dateClient = DateClient { Date(timeIntervalSince1970: 1_700_000_000) }

@@ -81,6 +81,13 @@ public struct OpenCodeClient: Sendable {
     @Sendable (OpenCodeServer, SessionPageRequest, Int) async throws -> SessionPage
   public var getSession: @Sendable (OpenCodeServer, String) async throws -> OpenCodeSession
   public var activeSessionIDs: @Sendable (OpenCodeServer) async throws -> Set<String>
+  /// Root sessions waiting on the reader, from the location-scoped permission and form routes.
+  public var attentionSessionIDs:
+    @Sendable (OpenCodeServer, [OpenCodeSession], [String]) async throws -> Set<String>
+  /// `POST /api/session/{id}/view`: a read receipt for the idle watermark the person saw.
+  public var viewSession: @Sendable (OpenCodeServer, String, Int64) async throws -> Void
+  /// `DELETE /api/session/{id}`.
+  public var deleteSession: @Sendable (OpenCodeServer, String) async throws -> Void
   /// The long-lived event subscription. The flow throws on disconnect; the owner reconnects.
   /// `onPhase` is awaited before the reconnect loop acts, so a consumer can show the state and
   /// re-read REST before the next socket opens.
@@ -95,6 +102,14 @@ public struct OpenCodeClient: Sendable {
     sessionPage: @escaping @Sendable (OpenCodeServer, SessionPageRequest, Int) async throws -> SessionPage,
     getSession: @escaping @Sendable (OpenCodeServer, String) async throws -> OpenCodeSession,
     activeSessionIDs: @escaping @Sendable (OpenCodeServer) async throws -> Set<String>,
+    attentionSessionIDs: @escaping @Sendable (OpenCodeServer, [OpenCodeSession], [String]) async throws ->
+      Set<String> = { _, _, _ in [] },
+    viewSession: @escaping @Sendable (OpenCodeServer, String, Int64) async throws -> Void = { _, _, _ in
+      throw OpenCodeClientError(.unsupported)
+    },
+    deleteSession: @escaping @Sendable (OpenCodeServer, String) async throws -> Void = { _, _ in
+      throw OpenCodeClientError(.unsupported)
+    },
     events: @escaping @Sendable (OpenCodeServer, @escaping @Sendable (EventStreamPhase) async -> Void) ->
       AsyncThrowingStream<ServerEvent, any Error>
   ) {
@@ -104,6 +119,9 @@ public struct OpenCodeClient: Sendable {
     self.sessionPage = sessionPage
     self.getSession = getSession
     self.activeSessionIDs = activeSessionIDs
+    self.attentionSessionIDs = attentionSessionIDs
+    self.viewSession = viewSession
+    self.deleteSession = deleteSession
     self.events = events
   }
 }
@@ -124,6 +142,9 @@ extension OpenCodeClient: DependencyKey {
     sessionPage: { _, _, _ in throw OpenCodeClientError(.unreachable) },
     getSession: { _, _ in throw OpenCodeClientError(.unreachable) },
     activeSessionIDs: { _ in throw OpenCodeClientError(.unreachable) },
+    attentionSessionIDs: { _, _, _ in throw OpenCodeClientError(.unreachable) },
+    viewSession: { _, _, _ in throw OpenCodeClientError(.unreachable) },
+    deleteSession: { _, _ in throw OpenCodeClientError(.unreachable) },
     events: { _, _ in
       AsyncThrowingStream { $0.finish(throwing: OpenCodeClientError(.unreachable)) }
     }
@@ -212,6 +233,32 @@ private struct Runtime: Sendable {
       },
       activeSessionIDs: { server in
         try await Operations.activeSessionIDs(server, environment: environment, policy: policy)
+      },
+      attentionSessionIDs: { server, roots, directories in
+        try await Operations.attentionSessionIDs(
+          server,
+          roots: roots,
+          directories: directories,
+          environment: environment,
+          policy: policy
+        )
+      },
+      viewSession: { server, sessionID, idle in
+        try await Operations.viewSession(
+          server,
+          sessionID: sessionID,
+          idle: idle,
+          environment: environment,
+          policy: policy
+        )
+      },
+      deleteSession: { server, sessionID in
+        try await Operations.deleteSession(
+          server,
+          sessionID: sessionID,
+          environment: environment,
+          policy: policy
+        )
       },
       events: { server, onPhase in
         EventStreamRunner(
@@ -385,6 +432,8 @@ enum Operations {
   ) async throws -> SessionPage {
     var query: [(name: String, value: String)] = [("limit", String(limit))]
     switch request {
+    case .first:
+      query += [("parentID", "null"), ("archived", "false"), ("order", "desc")]
     case .search(let text):
       query += [
         ("parentID", "null"), ("archived", "false"), ("order", "desc"), ("search", text),
@@ -436,6 +485,164 @@ enum Operations {
       feature: "active sessions"
     )
     return Set(payload.data.keys)
+  }
+
+  /// One read receipt. The server keeps the newest watermark, so repeating it is safe.
+  static func viewSession(
+    _ server: OpenCodeServer,
+    sessionID: String,
+    idle: Int64,
+    environment: ClientEnvironment,
+    policy: RetryPolicy
+  ) async throws {
+    struct Body: Encodable { var idle: Int64 }
+    let body: Data
+    do {
+      body = try JSONEncoder().encode(Body(idle: idle))
+    } catch {
+      throw OpenCodeClientError(.undecodable(feature: "view receipt"))
+    }
+    _ = try await raw(
+      server,
+      path: "/api/session/\(sessionID)/view",
+      method: "POST",
+      body: body,
+      idempotency: .idempotent,
+      environment: environment,
+      policy: policy,
+      feature: "view receipt"
+    )
+  }
+
+  static func deleteSession(
+    _ server: OpenCodeServer,
+    sessionID: String,
+    environment: ClientEnvironment,
+    policy: RetryPolicy
+  ) async throws {
+    _ = try await raw(
+      server,
+      path: "/api/session/\(sessionID)",
+      method: "DELETE",
+      environment: environment,
+      policy: policy,
+      feature: "delete session"
+    )
+  }
+
+  /// Root sessions with a pending permission or form in any of `directories`.
+  ///
+  /// The catalogue of request fields belongs to the request-review phase; this read only needs
+  /// `sessionID`, so it decodes the envelope loosely and never trusts a request shape it does not
+  /// own. At most `maximumAttentionDirectories` locations are asked, once each.
+  static func attentionSessionIDs(
+    _ server: OpenCodeServer,
+    roots: [OpenCodeSession],
+    directories: [String],
+    environment: ClientEnvironment,
+    policy: RetryPolicy
+  ) async throws -> Set<String> {
+    let requested = Array(
+      directories
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        .reduce(into: [String]()) { unique, directory in
+          if !unique.contains(directory) { unique.append(directory) }
+        }
+        .prefix(maximumAttentionDirectories)
+    )
+    guard !requested.isEmpty else { return [] }
+
+    let pending: [String] = try await withThrowingTaskGroup(of: [String].self) { group in
+      for directory in requested {
+        group.addTask {
+          try await pendingSessionIDs(in: directory, server: server, environment: environment, policy: policy)
+        }
+      }
+      var ids: [String] = []
+      for try await found in group {
+        ids += found
+      }
+      return ids
+    }
+
+    var knownRoots = Dictionary(uniqueKeysWithValues: roots.map { ($0.id, $0.id) })
+    var result = Set<String>()
+    for sessionID in Set(pending) where sessionID != "global" {
+      result.insert(try await rootSessionID(sessionID, server: server, known: &knownRoots, environment: environment, policy: policy))
+    }
+    return result
+  }
+
+  private static let maximumAttentionDirectories = 8
+  private static let locationBootTimeout: TimeInterval = 60
+
+  private static func pendingSessionIDs(
+    in directory: String,
+    server: OpenCodeServer,
+    environment: ClientEnvironment,
+    policy: RetryPolicy
+  ) async throws -> [String] {
+    let query = [(name: "location[directory]", value: directory)]
+    async let permissions: DataPayload<[JSONValue]> = get(
+      server,
+      path: "/api/permission/request",
+      query: query,
+      timeout: locationBootTimeout,
+      environment: environment,
+      policy: policy,
+      feature: "pending permissions"
+    )
+    async let forms: DataPayload<[JSONValue]> = get(
+      server,
+      path: "/api/form",
+      query: query,
+      timeout: locationBootTimeout,
+      environment: environment,
+      policy: policy,
+      feature: "pending forms"
+    )
+    let (permissionPayload, formPayload) = try await (permissions, forms)
+    return (permissionPayload.data + formPayload.data).compactMap { $0["sessionID"]?.stringValue }
+  }
+
+  private static func rootSessionID(
+    _ sessionID: String,
+    server: OpenCodeServer,
+    known: inout [String: String],
+    environment: ClientEnvironment,
+    policy: RetryPolicy,
+    depth: Int = 0
+  ) async throws -> String {
+    var current = sessionID
+    var lineage: [String] = []
+    var visited = Set<String>()
+    while visited.insert(current).inserted {
+      if let root = known[current] {
+        for id in lineage { known[id] = root }
+        return root
+      }
+      lineage.append(current)
+      guard depth + lineage.count <= 8 else { break }
+      do {
+        let session = try await getSession(
+          server,
+          id: current,
+          environment: environment,
+          policy: policy
+        )
+        if let parentID = session.parentID {
+          current = parentID
+        } else {
+          for id in lineage { known[id] = session.id }
+          return session.id
+        }
+      } catch let error as OpenCodeClientError {
+        if case .status(404) = error.failure { break }
+        throw error
+      }
+    }
+    return sessionID
   }
 
   // MARK: - Requests

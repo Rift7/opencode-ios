@@ -1,6 +1,7 @@
 import ComposableArchitecture
 import OpenCodeApp
 import OpenCodeCore
+import OpenCodeDrawer
 import OpenCodeServer
 import SwiftUI
 
@@ -79,6 +80,16 @@ struct RootView: View {
     } message: {
       Text(AppCopy.text("saved_data.confirm.message"))
     }
+    .fullScreenCover(isPresented: sessionDestinationPresented) {
+      SessionPlaceholderView(
+        selection: store.sessionDestination,
+        session: store.sessionDestination.flatMap { selection in
+          store.home?.session(selection.sessionID)
+        },
+        projectName: projectName(for: store.sessionDestination),
+        dismiss: { store.send(.sessionDestinationDismissed) }
+      )
+    }
   }
 
   @ViewBuilder
@@ -95,6 +106,15 @@ struct RootView: View {
         store.send(.pairingProblemDismissed)
         store.send(.manualEntryTapped)
       }
+    } else if let connectionStore = store.scope(state: \.connection, action: \.connection),
+      connectionStore.phase == .connected,
+      let homeStore = store.scope(state: \.home, action: \.home)
+    {
+      HomeView(
+        store: homeStore,
+        savedServers: store.savedServers,
+        disconnect: { store.send(.disconnectTapped) }
+      )
     } else if let connectionStore = store.scope(state: \.connection, action: \.connection) {
       ConnectionView(
         store: connectionStore,
@@ -149,6 +169,23 @@ struct RootView: View {
     )
   }
 
+  private func projectName(for selection: SessionSelection?) -> String? {
+    guard let selection,
+      let session = store.home?.session(selection.sessionID),
+      let project = store.home?.projects.first(where: { $0.id == session.projectID })
+    else { return nil }
+    return project.name
+  }
+
+  private var sessionDestinationPresented: Binding<Bool> {
+    Binding(
+      get: { store.sessionDestination != nil },
+      set: { isPresented in
+        if !isPresented { store.send(.sessionDestinationDismissed) }
+      }
+    )
+  }
+
   private func pairingMessage(_ pending: PairingConfirmation) -> String {
     let hosts = pending.hosts
     let action: String
@@ -163,6 +200,61 @@ struct RootView: View {
       action,
       pending.replacedServerNames.joined(separator: ", ")
     )
+  }
+}
+
+// MARK: - Session destination
+
+/// P6 carries a selection to a real destination boundary; the transcript, composer and session
+/// work belong to P7 and are not claimed here.
+private struct SessionPlaceholderView: View {
+  let selection: SessionSelection?
+  let session: OpenCodeSession?
+  let projectName: String?
+  let dismiss: () -> Void
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        VStack(alignment: .leading, spacing: OpenCodeSpacing.s16) {
+          if let session {
+            Text(session.title)
+              .font(OpenCodeFonts.font(.title2))
+              .foregroundStyle(OpenCodeColors.color(.textStrong))
+          }
+          if let projectName {
+            Text(projectName)
+              .font(OpenCodeFonts.font(.footnote))
+              .foregroundStyle(OpenCodeColors.color(.textWeak))
+          }
+          if selection?.intent == .catchUpCard {
+            Text(AppCopy.text("session.from_catch_up"))
+              .font(OpenCodeFonts.font(.footnote))
+              .foregroundStyle(OpenCodeColors.color(.textWeak))
+          }
+          Text(AppCopy.text("session.later"))
+            .font(OpenCodeFonts.font(.body))
+            .foregroundStyle(OpenCodeColors.color(.textBody))
+          Text(AppCopy.text("session.later_detail"))
+            .font(OpenCodeFonts.font(.footnote))
+            .foregroundStyle(OpenCodeColors.color(.textWeak))
+          Button(AppCopy.text("common.done"), action: dismiss)
+            .font(OpenCodeFonts.font(.headline))
+            .padding(.top, OpenCodeSpacing.s8)
+            .accessibilityIdentifier("session-placeholder-done")
+        }
+        .padding(OpenCodeSpacing.s24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .navigationTitle(AppCopy.text("session.title"))
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button(AppCopy.text("common.done"), action: dismiss)
+        }
+      }
+    }
+    .accessibilityIdentifier("root-phase-session")
   }
 }
 

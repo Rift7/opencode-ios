@@ -36,6 +36,8 @@ targets:
         product: OpenCodeServer
       - package: OpenCodeKit
         product: OpenCodeApp
+      - package: OpenCodeKit
+        product: OpenCodeDrawer
       - package: ComposableArchitecture
         product: ComposableArchitecture
     settings:

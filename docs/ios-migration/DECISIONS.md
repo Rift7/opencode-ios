@@ -533,3 +533,120 @@ nested fields; a lifecycle UI test covers the connected → background → activ
   them through `AppRestoreResult`, and deletes them. It does not touch production credentials.
 - These hooks exist for device checks; neither is reachable in a release build or without its explicit
   launch argument.
+
+### D-43 Home owns the drawer; the shell still owns the one event stream
+`HomeFeature` (package `OpenCodeDrawer`) is the connected destination and the only consumer of
+session-scoped events. `ConnectionFeature` remains the single stream owner and forwards the events Home
+needs through `Delegate.sessionEvent(server, event)`; Home never opens a second stream. `Delegate.resynchronized`
+tells Home that a reconnect/overflow re-read REST before the next socket.
+
+- Home state is `HomeFeature.State`; `AppFeature` composes it with `.ifLet`, so replacing or clearing it
+  cancels its refresh, attention, paging, search, receipt and deletion effects. Every callback carries a
+  generation and a request/cursor identity, and a stale one is ignored.
+- Refresh is 250 ms debounced and `cancelInFlight`, matching the audited `refreshSnapshot`; an event burst
+  coalesces to one read. A refresh replaces the first page and keeps locally paged older sessions, so a
+  reconnect does not collapse the list under the reader.
+- Session selection is a value: `SessionSelection(serverID, sessionID, intent)`. It crosses the App → Home →
+  Session boundary instead of a bare ID, and the intent is explicit (`browse`, `catchUpCard`,
+  `whatsNewDraft`). P6 renders a labeled placeholder; P7 owns the destination.
+- Rejected: adding a Home-local stream, a view model, or a second navigation model.
+
+### D-44 Home persistence is versioned, bounded and server-scoped
+`HomeSnapshot` v1 holds projects, the first root page, active IDs and the next cursor for one server. It is
+written atomically to `home-snapshots.json` in Caches by an actor, with at most 8 servers and 50 sessions
+per server. A decode or version failure is reported and never applied.
+
+- Pins, read dates, manual-unread marks, mutes, hidden sessions and last-viewed sessions are local records
+  keyed by `serverPersistenceID|sessionID`; they are not server data and survive a server switch.
+- The P5 `cachedServerSummaries` project cache is migration input only. A successful Home snapshot write
+  removes that server's entry; no new summary is written. A failed/read-only store is reported, not
+  silently replaced.
+- The snapshot is a cache, so REST always wins. A corrupt cache does not block connecting; the next
+  successful refresh replaces it. Saved-server credential protection (D-39) is unchanged.
+
+### D-45 Catch Up is native cards, not a port of the Compose stack
+The audited behaviour is carried: attention first, then newest unread; running, muted, archived and subagent
+sessions are excluded; Mark Read is optimistically local plus a `/view` receipt; Keep Unread is local only;
+Undo restores the exact previous read state and cancels an in-flight receipt; a failed receipt restores the
+card's read state and reports on the stack. The last handled card closes Catch Up onto the drawer's
+**All Caught Up** row, and new activity clears that row.
+
+- Android's swipe/flight/settle motion (`CatchUpStackController.kt`) is not ported. The iOS card answers with
+  the system press highlight, two explicit actions, and one horizontal drag threshold; there is no card
+  animation, so Reduce Motion needs no special case.
+- The empty state is a drawer row because that is where the audited app returns after the last card; the
+  Catch Up page also keeps a plain All Caught Up view for a stack that opens empty.
+- Mark All is **not** in P6. It needs a receipt fan-out with per-session backups and belongs with P7's
+  request review/read receipts; P6 exposes row-level Mark Read/Unread only.
+
+### D-46 What's New ships the mechanism, not the historical catalogue
+P6 implements the drawer row, unseen dot, page routing and `whats-new-seen` persistence. The catalogue in
+`WhatsNewCatalog` is a small set of entries describing this build's own P6 surfaces (drawer, Catch Up,
+project labels); it is not a reconstruction of the audited 150-entry release catalogue and makes no copy
+claim.
+
+- The historical catalogue, Try It prompts, Settings destinations and the release-note pipeline belong to
+  P11 with the rest of Settings. `WhatsNewEntry` carries localization keys, so P11 can add entries without
+  changing Home.
+- Seen state is written only when the page closes or is viewed, never by the row appearing.
+
+### D-47 Accessibility verification and the scroll trace are test instruments
+Dynamic Type is exercised at `UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge`; row labels are
+combined into one VoiceOver sentence (title, project, status, pin) and asserted in XCUITest; the drawer
+search field is dismissed by its sheet's Done action, also asserted.
+
+- The scroll trace uses a DEBUG-only `CADisplayLink` probe (`ScrollFrameProbe`) that records only while a
+  scroll is in flight and publishes p50/p95/max as an accessibility label. The UI test reads that label and
+  XCTest's `scrollDecelerationMetric`; the numbers are reported as simulator measurements, never as a
+  smoothness guarantee.
+- No custom animation is added in P6. Sheets, navigation, menus and the system press highlight provide the
+  motion; Reduce Motion therefore inherits the platform behaviour and was not separately exercised.
+
+### D-48 Reviewed paths keep explicit causality, not just visible outcomes
+The P6 review corrections are recorded as semantics rather than patches:
+
+- **Paging retry is the same action as loading.** The footer's Try Again calls `loadMoreTapped`; a
+  failed first search, search append and ordinary page each keep the query/cursor that failed. A retry
+  starts with `failed = false` and, for search, a new token so a late answer from the failed attempt
+  cannot land.
+- **A read receipt acknowledges exactly its idle watermark.** Local optimistic read state is allowed,
+  but a successful `POST /view` for A must not mark activity B read. `unreadFloors` records the watermark
+  a deliberate unread or an Undo protects; a view event at or below it is stale, a newer one is real.
+- **Deletion has three states: in flight, confirmed and failed.** `recentDeletedIDs` hides the row,
+  `pendingDeletions` survives disconnect, and `deletionTombstones` records the refresh counter at
+  confirmation. A refresh that started before confirmation cannot clear the tombstone. An unsettled
+  delete is reconciled only by a targeted session read (D-49), never by its absence from the first
+  page. Delete results are server-scoped and operation-ID guarded, so a disconnect or late answer
+  cannot strand or reverse a row.
+- **Live means live.** Home may read only in front, online and after the shell has completed a
+  connection. `ConnectionFeature` reports `available` after a handshake refresh and `unavailable` when
+  the socket drops; `connectionResynchronized` replaces an earlier read with one authoritative read.
+  The initial `.task` never starts a second read over a resync.
+- **Attention resolution is local to the event.** A cold root or subagent is resolved with at most eight
+  ancestry reads and one location-scoped request read. Projects are never scanned; a missing root row
+  gets one coalesced Home refresh, and hint directories stay bounded at eight.
+
+Regressions are in `OpenCodeDrawerTests/HomeFeatureTests.swift` and `OpenCodeAppTests/AppFeatureTests.swift`.
+
+### D-49 Deletion verification is targeted, not inferred from a page
+A Home refresh returns only the newest 50 root sessions. Absence from that page cannot prove an older
+session was deleted, so deletion reconciliation never uses it.
+
+- A delete has three outcomes: **definitive success** (the DELETE succeeded, returned a non-location
+  404, or a targeted `GET /api/session/{id}` returned a non-location 404), **definitive failure**
+  (a 4xx refusal or a request that was never sent), and **uncertain** (timeout, interrupted transport,
+  429/5xx, unreachable, undecodable or a location-missing 404).
+- A definitive failure restores the row and keeps the tombstone cleared. A definitive success purges
+  local records and keeps a tombstone for the Home lifetime so a stale refresh cannot resurrect the row.
+- An uncertain outcome keeps the backup, the row hidden, and every local pin/read record. On reconnect,
+  each unsettled delete gets one targeted session read (bounded to eight concurrent checks). Absence
+  confirms success; presence fails the delete only when the DELETE is no longer running. Presence while
+  the DELETE is still in flight is intermediate and settles nothing.
+- An inconclusive read (401, connectivity, server error, location-missing 404) preserves the backup and
+  reports that verification could not be completed. It never destroys local history.
+- Every delete carries an operation id. A late result is applied only if it still matches the pending
+  operation, so a newer reconciliation cannot be reversed.
+
+Regressions: `laterPageDeleteUnknownOutcome`, `laterPageDeleteConfirmedByTargetedRead`,
+`inconclusiveDeletionVerification`, `runningDeletionSurvivesExistenceCheck`,
+`lateDeleteResultIgnoredAfterVerification`, `oldRefreshCannotResurrectDelete`.

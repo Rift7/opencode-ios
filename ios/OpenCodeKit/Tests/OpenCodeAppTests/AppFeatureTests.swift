@@ -2,6 +2,7 @@ import ComposableArchitecture
 import Foundation
 import OpenCodeApp
 import OpenCodeCore
+import OpenCodeDrawer
 import OpenCodeServer
 import OpenCodeTestSupport
 import Synchronization
@@ -809,6 +810,203 @@ struct AppFeatureTests {
       waitUntilAvailable: {}
     )
   }
+
+
+  private final class CallCount: Sendable {
+    private let value = Mutex<Int>(0)
+    func increment() { value.withLock { $0 += 1 } }
+    var count: Int { value.withLock { $0 } }
+  }
+
+  private func countingClient(calls: CallCount) -> OpenCodeClient {
+    OpenCodeClient(
+      health: { _ in throw OpenCodeClientError(.unsupported) },
+      redeemPairing: { _ in throw OpenCodeClientError(.unsupported) },
+      projects: { _ in throw OpenCodeClientError(.unsupported) },
+      sessionPage: { _, _, _ in
+        calls.increment()
+        return SessionPage(sessions: [], next: nil)
+      },
+      getSession: { _, _ in throw OpenCodeClientError(.unsupported) },
+      activeSessionIDs: { _ in [] },
+      events: { _, _ in
+        AsyncThrowingStream { $0.finish(throwing: OpenCodeClientError(.unreachable)) }
+      }
+    )
+  }
+
+  private func homeState() -> HomeFeature.State {
+    HomeFeature.State(
+      server: TestServer.server,
+      projects: TestServer.projects,
+      isLive: false,
+      hasLoaded: true
+    )
+  }
+
+  @Test("foreground return while authenticating does not make Home live")
+  func homeStaysInactiveWhileAuthenticating() async {
+    let calls = CallCount()
+    var state = AppFeature.State()
+    state.isPinnedForUITest = true
+    state.savedData = .read
+    state.isInForeground = false
+    state.connection = ConnectionFeature.State(
+      id: 1,
+      server: TestServer.server,
+      phase: .connecting,
+      isPinned: true
+    )
+    state.home = homeState()
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.sharedStore = self.storage()
+      $0.openCodeClient = self.countingClient(calls: calls)
+    }
+    store.exhaustivity = .off
+
+    await store.send(.scenePhaseChanged(isActive: true))
+    await store.receive(.connection(.scenePhaseChanged(isActive: true)))
+    await store.receive(.home(.connectionChanged(isConnected: false)))
+    #expect(store.state.home?.isLive == false)
+    #expect(calls.count == 0)
+  }
+
+  @Test("foreground return while offline does not make Home live")
+  func homeStaysInactiveWhileOffline() async {
+    let calls = CallCount()
+    var state = AppFeature.State()
+    state.isPinnedForUITest = true
+    state.savedData = .read
+    state.isInForeground = false
+    state.networkPath = .offline
+    state.connection = ConnectionFeature.State(
+      id: 1,
+      server: TestServer.server,
+      phase: .connected,
+      isPinned: true
+    )
+    state.home = homeState()
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.sharedStore = self.storage()
+      $0.openCodeClient = self.countingClient(calls: calls)
+    }
+    store.exhaustivity = .off
+
+    await store.send(.scenePhaseChanged(isActive: true))
+    await store.receive(.connection(.scenePhaseChanged(isActive: true)))
+    await store.receive(.home(.connectionChanged(isConnected: false)))
+    #expect(store.state.home?.isLive == false)
+    #expect(calls.count == 0)
+  }
+
+  @Test("path loss stops Home and a stream reconnect resumes one refresh")
+  func homeFollowsPathAndReconnect() async {
+    let calls = CallCount()
+    var state = AppFeature.State()
+    state.isPinnedForUITest = true
+    state.savedData = .read
+    state.connection = ConnectionFeature.State(
+      id: 1,
+      server: TestServer.server,
+      phase: .connected,
+      isPinned: true
+    )
+    state.home = HomeFeature.State(
+      server: TestServer.server,
+      projects: TestServer.projects,
+      isLive: true,
+      hasLoaded: true
+    )
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.sharedStore = self.storage()
+      $0.openCodeClient = self.countingClient(calls: calls)
+    }
+    store.exhaustivity = .off
+
+    await store.send(.networkPathChanged(.offline))
+    await store.receive(.connection(.networkPathChanged(.offline)))
+    await store.receive(.home(.connectionChanged(isConnected: false)))
+    #expect(store.state.home?.isLive == false)
+    #expect(calls.count == 0)
+
+    await store.send(.connection(.delegate(.available(TestServer.server))))
+    await store.receive(.home(.connectionResynchronized))
+    await store.receive(
+      .home(
+        .refreshed(
+          generation: store.state.home!.generation,
+          request: store.state.home!.refreshRequest,
+          result: .success(HomeRefresh(sessions: [], next: nil, activeSessionIDs: []))
+        )
+      )
+    )
+    #expect(store.state.home?.isLive == true)
+    #expect(calls.count == 1)
+  }
+
+  @Test("a stream interruption makes Home inactive until REST is available again")
+  func homeStopsOnInterruption() async {
+    let calls = CallCount()
+    var state = AppFeature.State()
+    state.isPinnedForUITest = true
+    state.savedData = .read
+    state.connection = ConnectionFeature.State(
+      id: 1,
+      server: TestServer.server,
+      phase: .connected,
+      isPinned: true
+    )
+    state.home = HomeFeature.State(
+      server: TestServer.server,
+      projects: TestServer.projects,
+      isLive: true,
+      hasLoaded: true
+    )
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.sharedStore = self.storage()
+      $0.openCodeClient = self.countingClient(calls: calls)
+    }
+    store.exhaustivity = .off
+
+    await store.send(.connection(.delegate(.unavailable(TestServer.server))))
+    await store.receive(.home(.connectionChanged(isConnected: false)))
+    #expect(store.state.home?.isLive == false)
+    #expect(calls.count == 0)
+  }
+
+  @Test("a Home server switch replaces the connection")
+  func homeServerSwitch() async {
+    var state = AppFeature.State()
+    state.isPinnedForUITest = true
+    state.savedData = .read
+    state.connection = ConnectionFeature.State(
+      id: 1,
+      server: TestServer.server,
+      phase: .connected,
+      projects: [],
+      isPinned: true
+    )
+    state.home = HomeFeature.State(server: TestServer.server, isPinned: true)
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.sharedStore = self.storage()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.home(.delegate(.switchServer(TestServer.other))))
+    #expect(store.state.connection?.server == TestServer.other)
+    #expect(store.state.home == nil)
+  }
+
 }
 
 final class ToggleStorage: KeyValueStorage, Sendable {
