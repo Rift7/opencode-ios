@@ -182,6 +182,31 @@ struct AppFeatureTests {
     }
   }
 
+  @Test("re-connecting keeps a saved server's local name")
+  func verifiedConnectionKeepsLocalName() async {
+    let shared = storage()
+    var saved = TestServer.server
+    saved.name = "Desk"
+    var state = AppFeature.State(savedServer: saved, savedServers: [saved])
+    state.isPinnedForUITest = true
+    state.connection = ConnectionFeature.State(
+      id: 1,
+      server: TestServer.server,
+      phase: .connected,
+      projects: [],
+      isPinned: true
+    )
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.sharedStore = shared
+    }
+
+    await store.send(.connection(.delegate(.verified(TestServer.server, TestServer.info))))
+    await store.receive(.persisted(saved: .success, list: .success))
+    #expect(store.state.savedServer?.name == "Desk")
+  }
+
   @Test("a manual address without a scheme becomes HTTP and blank username stays opencode")
   func manualFormDefaults() async {
     var state = AppFeature.State()

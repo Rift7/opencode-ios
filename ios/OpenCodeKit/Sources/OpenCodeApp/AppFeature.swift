@@ -901,12 +901,13 @@ public struct AppFeature {
 
       case .connection(.delegate(.verified(let server, let info))):
         let servers = SavedServers.remembering(server, among: state.savedServers)
-        state.savedServer = server
+        let remembered = servers.first ?? server
+        state.savedServer = remembered
         state.savedServers = servers
         _ = info
         let store = store
         return .run { send in
-          let saved = store.write(server, for: ServerSharedKeys.savedServer)
+          let saved = store.write(remembered, for: ServerSharedKeys.savedServer)
           let list = store.write(servers, for: ServerSharedKeys.savedServers)
           await send(.persisted(saved: saved, list: list))
         }
