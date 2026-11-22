@@ -21,6 +21,16 @@ public enum LogEvent: String, Sendable, CaseIterable {
   case probeFinished = "probe.finished"
   case transportBlocked = "transport.blocked"
   case screenShown = "screen.shown"
+  case networkResponse = "network.response"
+  case networkFailed = "network.failed"
+  case networkRetried = "network.retried"
+  case streamConnected = "stream.connected"
+  case streamDisconnected = "stream.disconnected"
+  case streamOverflow = "stream.overflow"
+  case streamResynchronized = "stream.resynchronized"
+  case pairingDecoded = "pairing.decoded"
+  case pairingRejected = "pairing.rejected"
+  case pairingRedeemed = "pairing.redeemed"
 }
 
 /// The only values that may be published with public visibility: numbers and booleans. There is no

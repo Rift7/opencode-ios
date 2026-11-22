@@ -20,11 +20,13 @@ The Android tree is not modified by this work.
 ## Branches
 
 - `ios` — integration branch, base `7358160e808fb1870eeb20f5da8df832667019d1` (see `BASELINE.md`).
-- `ios-foundation` — the scaffold: project generation, package targets, launch states, test isolation.
-  Squash-merged into `ios` as `143d8f86` (PR #1, closed).
-- `ios-core` — Phase 3: layout tokens, motion vocabulary, haptics client, store-semantics gates.
-  Draft PR into `ios`: https://github.com/Rift7/opencode-ios/pull/2 (**open for review, not merged**).
-- Later task branches from `ios` (`ios-networking`, `ios-shell`, …) are pushed to the fork and opened as **draft**
+  Head at Phase 4 start: `d0fdf2f5` (PR #2 merge).
+- `ios-foundation` — the scaffold. Squash-merged into `ios` as `143d8f86` (PR #1, closed).
+- `ios-core` — Phase 3 (tokens, motion, haptics, store gates). Merged into `ios` as `d0fdf2f5` (PR #2).
+- `ios-networking` — Phase 4: transport, retry, models, SSE, pairing, client seam, plus the streaming
+  review corrections. Draft PR into `ios`: https://github.com/Rift7/opencode-ios/pull/3 (**open for
+  review, not merged**).
+- Later task branches from `ios` (`ios-shell`, `ios-home`, …) are pushed to the fork and opened as **draft**
   PRs into `ios`. Nothing is merged, released or distributed from here.
 
 ## Prerequisites
@@ -63,7 +65,10 @@ swift test --package-path ios/OpenCodeKit
 
 | Suite | Location | Runner |
 | --- | --- | --- |
-| Core logic (tokens, storage outcomes, logging, endpoint, network guard, isolation, transport boundary, haptics, motion) | `ios/OpenCodeKit/Tests/OpenCodeCoreTests` | `swift test` on the host |
+| Core logic (tokens, storage outcomes, logging, endpoint, network guard, isolation, transport boundary, haptics, motion, bounded channel) | `ios/OpenCodeKit/Tests/OpenCodeCoreTests` | `swift test` on the host |
+| Server (address, redirects, transport, retry, pairing, SSE, events, batching, stream, client) | `ios/OpenCodeKit/Tests/OpenCodeServerTests` | `swift test` on the host |
+| Loopback HTTP fixture (real URLSession delegates, socket lifetimes) | `ios/OpenCodeKit/Tests/OpenCodeServerTests/LocalFixtureServerTests.swift` | `swift test`; loopback only, opt-out env var |
+| Live read-only server | `ios/OpenCodeKit/Tests/OpenCodeServerTests/LiveServerTests.swift` | `swift test` with env vars; skipped by default; records contract mismatches rather than hiding them |
 | App reducer, launch configuration, store semantics | `ios/OpenCodeKit/Tests/OpenCodeAppTests` | `swift test` on the host |
 | Platform checks (UserDefaults, endpoint encoding, launch mapping) | `ios/OpenCodeTests` | `xcodebuild test` on the simulator |
 | Launch smoke states | `ios/OpenCodeUITests` | `xcodebuild test` on the simulator |
@@ -71,6 +76,18 @@ swift test --package-path ios/OpenCodeKit
 
 The Xcode unit target is hostless and does not link TCA; see `TOOLCHAIN.md` for why, and for the keychain
 entitlement note that puts the round-trip in the UI tests.
+
+## Device and live checks (opt-in)
+
+| Check | How |
+| --- | --- |
+| Loopback fixture suite | runs by default; skip with `OPENCODE_SKIP_LOOPBACK_FIXTURES=1` |
+| Local-network prompt | install the debug app, launch with `-localNetworkProbeURL http://<mac-lan-ip>:<port>/api/info`, answer the prompt |
+| Haptics | launch with `-hapticProbe`; System Haptics must be on and the phone in hand |
+| Live server | set `OPENCODE_LIVE_SERVER` and `OPENCODE_LIVE_PASSWORD` for one test process only; unset afterwards |
+
+The device probes print `OPENCODE_PROBE …` lines with a classification only: no address, credential,
+message or file content.
 
 ## Test conventions
 
@@ -83,17 +100,63 @@ entitlement note that puts the round-trip in the UI tests.
 
 ## Where the work stands
 
-`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P2 is complete and merged into `ios`;
-**P3 (core) is complete on `ios-core`** and awaits review. P4 (networking) starts only after P3 is merged or
-the owner reorders the phases. Branch Phase 4 from the updated `ios`, not from `ios-core`.
+`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P4 are complete; P2 and P3 are
+merged into `ios`, **P4 is on `ios-networking`** and awaits review. P5 (`ios-shell`) branches from the updated
+`ios` after P4 merges.
 
-What P3 added: spacing/radius tokens (`Design/OpenCodeLayoutTokens.swift`), the motion vocabulary and Reduce
-Motion policy (`Motion/OpenCodeMotion.swift`), the haptics client (`Haptics/HapticsClient.swift`), and the
-store-semantics gates (`OpenCodeAppTests/StoreSemanticsTests.swift`), including the path-indexed check with
-two children sharing one local cancellation id.
+What P4 added, in one paragraph: `OpenCodeClient` reads (`health`, `redeemPairing`, `projects`, session page,
+one session, active IDs) plus the event stream; the `HTTPTransport` seam now carries `HTTPRequest`,
+`HTTPResponse` and a chunked `HTTPStream` behind a live `URLSessionTransport` with origin-bound credentials
+and a cleartext policy; `NetworkRetry` centralises the audited retry presets, classification and
+`Retry-After`; `PairingLink` parses every audited form without contacting anything; `EventBatcher` coalesces
+deltas and bounds delivery; `SSEParser` frames fragmented UTF-8; `EventStreamRunner` reconnects and stops on a
+401. `docs/ios-migration/PROTOCOL_COVERAGE.md` is the route/event ledger.
 
-Known unverified item: physical-device haptics. No device run was performed; the simulator has no Taptic
-Engine. Do not record that as passing.
+Useful entry points:
+
+| Need | File |
+| --- | --- |
+| Add a route | `OpenCodeServer/Client/OpenCodeClient.swift` (`Operations`), then its model under `Models/` |
+| Understand a retry decision | `OpenCodeServer/Retry/RetryPolicy.swift` |
+| Change event handling | `OpenCodeServer/Events/ServerEventDecoder.swift` |
+| Test request construction | `OpenCodeServerTests/OpenCodeClientTests.swift` with `Fixtures.transport` |
+| Inspect a live URLSession path | `OpenCodeCore/Transport/URLSessionTransport.swift` + `NetworkGuard` fixtures |
+| Exercise real delegates and sockets | `OpenCodeTestSupport/LocalHTTPServer.swift`, `OpenCodeServerTests/LocalFixtureServerTests.swift` |
+| Device probes (permission, haptics) | `ios/OpenCode/App/DeviceProbes.swift` |
+| Live read-only server check | `OpenCodeServerTests/LiveServerTests.swift` |
+
+Session and stream ownership (D-26/D-27): one request session per transport, one per stream connection;
+every connection exit closes its tasks and session. The connect deadline covers response headers.
+Overflow protection clears only after healthy consumption, not on `server.connected` (D-29); the
+transport's chunk buffer overflows into the same recoverable path (D-30); an HTML 2xx is an
+`.incompatibleAPI` failure, distinct from auth and connectivity (D-31).
+
+Device work (one iPhone Air, debug build, configured development identity):
+
+- local-network prompt denied → `URLError -1009`, no request at the Mac fixture;
+- reinstalled, prompt allowed → `status=200` from the Mac's LAN fixture;
+- foreground haptics: first run nothing felt (System Haptics off), second run all eleven felt and
+  distinct after enabling it. Reported as one-device observations, not automated results.
+
+Live read-only smoke: `OPENCODE_LIVE_SERVER` + `OPENCODE_LIVE_PASSWORD` + `swift test --filter
+LiveServerTests` passed against `opencode serve 0.0.0-dev-202611170722` for `/api/session`,
+`/api/session/active`, `/api/event`, and for the compatibility classification.
+
+That build does not implement the audited `/api/info` and `/api/project`; unknown `/api/*` paths return
+its web shell (200 `text/html`), and `/project` has a different shape. The cause is the server build's
+route set, not auth (401 JSON works), prefix (`/api/session` works) or a proxy. The client does not
+remap routes. A compatible server must serve `/api/info` (`{version,pid}`), `/api/project` (bare array
+with `canonical`), `/api/session`, `/api/session/active` and `/api/event`; these requirements are in
+`PROTOCOL_COVERAGE.md`.
+
+Phase 5 must distinguish `.incompatibleAPI` (wrong address or non-V2 server) from `.status(401)`
+(rejected credentials) and `.transport(…)` (unreachable).
+
+Known unverified items:
+
+- `/api/info` and `/api/project` against a real V2 server (version mismatch above).
+- Haptic feel beyond the one device; the local-network denial classification on other iOS versions.
+- No live mutation was performed: the live suite is read-only by construction.
 
 ## Phase-end checklist
 

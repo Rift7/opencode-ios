@@ -230,3 +230,178 @@ not by translating the Kotlin store.
     vacuous.
 - Rejected: reimplementing reducer composition or a custom `TestStore`, or replacing reducers with view models.
 
+
+### D-21 Time is a dependency — `ClockClient`
+Retry schedules, the event watchdog and the flush timer read `ClockClient` (monotonic `now` plus an
+injectable `sleep`) instead of calling `Task.sleep` or `Date()`.
+
+- Replaces: nothing; it fills the gap left when P3 shipped `DateClient` (wall clock only).
+- Test values: `ClockClient.testValue` returns immediately without moving time; `.recording()` records every
+  requested wait and advances virtual time; `.gate()` suspends until the test releases each wait. A retry
+  schedule therefore runs in microseconds and is asserted by its recorded waits.
+- Live value: `DispatchTime.uptimeNanoseconds` and `Task.sleep`, so a suspended wait is cancellable and does
+  not drift with wall-clock changes.
+- Source: the audited `Clock` dependency (`core/.../dependencies`), which every retry loop and watchdog
+  resolved; the exact API is native because Kotlin coroutines and Swift tasks differ.
+
+### D-22 The transport seam carries requests, responses and streams
+`HTTPTransport` is now `send(HTTPRequest) -> HTTPResponse` plus `open(HTTPRequest) -> HTTPStream`, replacing
+the completed-`Data`-only seam. `HTTPStream` delivers body chunks as they arrive; an SSE connection is never
+buffered into a completed response and is never replaced by polling.
+
+- **Credential scope is structural.** `HTTPRequest` carries headers and an `Authorization` value bound to its
+  own URL; `HTTPRedirectRule` re-applies them on a same-origin hop and refuses a hop that changes scheme,
+  host or effective port. A 3xx from a policy that rejects redirects is delivered as the response, because
+  that is the audited behaviour for pairing redemption.
+- **Bounded delivery.** `BoundedChannel` (Mutex-guarded, pull-based) is the only buffer between a URLSession
+  delegate and a consumer. A full buffer is an overflow, never a dropped element: the connection ends so the
+  owner reconnects and rehydrates from REST. The same rule covers SSE events (128) and body chunks (64 × ≤16
+  KiB).
+- **Cleartext policy** is enforced twice: ATS in `Info.plist` (local networking plus named overlay domains)
+  and `TransportSecurity` before a byte is sent. Nothing disables certificate validation, and there is no
+  pinned certificate to copy.
+- **Local-network permission** (`NSLocalNetworkUsageDescription`) is required from iOS 14 for a LAN server;
+  it is declared, and the prompt itself is a device-only behaviour that no simulator test can pass.
+- `@unchecked Sendable` appears at four places in the transport, each a `Mutex`-guarded class whose mutation
+  must stay synchronous: `BoundedChannel`, the URLSession redirect guard, the stream receiver and the
+  stream-activity holder. Each carries a one-line reason at the declaration; no `nonisolated(unsafe)` is
+  used. The test-only loopback server follows the same discipline (D-28).
+- Rejected: a `URLProtocol`-based fixture for redirect integration tests. A custom protocol synthesizes the
+  redirect inside the protocol stack, so the session delegate is never consulted; the redirect decision is
+  therefore tested as a pure rule, and the session wiring stays thin. `PROTOCOL_COVERAGE.md` says so.
+
+### D-23 Event batching adopts ordering and bounds; transcript pressure shedding waits for P8
+`EventBatcher` adopts the audited flush (`75 ms` or 256 pending mutations), delta coalescing, per-session
+order, the non-content flush barrier and the bounded downstream (`128`, overflow ends the connection).
+
+- Not adopted yet: the off-screen delta shedding and the Markdown pre-projection hooks. Both exist to protect
+  a transcript reducer and a Markdown cache; neither exists before P8. Implementing them now would mean
+  guessing what “focused” and “pressure” mean without a consumer.
+- The SSE parser accepts the general frame syntax (CRLF/CR, multi-line data, `event:`/`id:`, comments) rather
+  than the server's current one-line shape, so a framing change upstream cannot corrupt the stream. It keeps
+  the audited 16 MiB frame bound.
+- `EventStreamRunner` owns the reconnect loop (audited `stream` policy: 1 s base, fast for 15 s, then up to
+  5 min) and stops after one 401. The watchdog (4.5 s connect, 45 s idle) is enabled in the app; a caller
+  that owns its own lifetime can disable it.
+
+### D-24 Pairing is parsed without side effects and redeemed explicitly
+`PairingLink` is a value: it has no transport, no client and no callback, so a paste, a share preview or a
+link unfurl cannot spend a one-time code. Redemption is `OpenCodeClient.redeemPairing`, which tries every
+reachable candidate once (`.unsafe`, 15 s, redirects refused, no `Authorization`) and stops at the first
+success.
+
+- Only one candidate reaches the server successfully because the code is single-use; concurrency is bounded
+  by the candidate list.
+- Failure copy is typed (`pairingExpired`, `pairingUnsupported`) rather than a status the UI has to
+  reinterpret; `ServerCopy` supplies the sentence, and tests assert it.
+- Credentials are stored per server entry and applied by origin. Pairing's returned token is never sent to
+  any other candidate or redirect target.
+- Saved-server replacement keeps local settings (`keepingLocalSettings`) and address order is preferred from
+  the code's own list, as the audited model does.
+
+### D-25 P4 has no connection or session UI
+`OpenCodeClient` is reachable as a dependency, but the app's launch states still use the inert probe from
+P2/P3. Wiring the client to the app is P5's change, so this phase cannot accidentally present a half-built
+connection flow.
+
+### D-26 Session ownership — one request session, one per stream
+`URLSessionTransport` owns two kinds of session, deliberately:
+
+- **Requests** share one lazily created `URLSession` for the transport's lifetime. It has no delegate,
+  is ephemeral (no cookies, no cache) and is never invalidated by a request; it lives until the
+  transport does. Creating a session per request was a defect in the first P4 revision: it made the
+  documented "one ephemeral session" untrue, paid TLS/connection-pool setup on every call and left
+  sockets to be reclaimed by `URLSession`'s own idle timeout.
+- **Streams** get one `URLSession` per connection, because the data delegate and its startup state
+  belong to that connection. The receiver takes ownership in `adopt(session:)` and invalidates it on
+  completion, cancellation, overflow or explicit close, so a dropped stream cannot keep a task or a
+  socket alive.
+
+Tests count session constructions through the injected configuration closure: two requests build one
+session, two streams build two. The lifecycle itself is exercised against the loopback fixture server
+or the test `URLProtocol`, not asserted from private state.
+
+Rejected: one session for streams too. A shared session with one delegate would have to route
+`didReceive` callbacks by task identity and keep per-connection startup state in a side table; the
+per-connection session is smaller and its invalidation is unambiguous.
+
+### D-27 Stream lifecycle — one state machine, explicit close, bounded reset
+Every way an SSE connection can end now runs through one lifecycle:
+
+- **Startup** (`StreamReceiver`) is a Mutex-guarded state machine. Cancellation before the receiver
+  exists, between adopting the session and registering the continuation, while awaiting headers, or
+  after the continuation is registered resumes the caller exactly once with `CancellationError` and
+  invalidates the session. A pre-cancelled `open` throws; it never waits on a continuation nobody will
+  resume.
+- **The connect deadline covers the whole open**, including response headers: `openWithDeadline` races
+  `transport.open` against the clock, closes a stream that arrives after the deadline, and fails with
+  `.transport(.timedOut)`. `nil` disables it for a caller that owns its own timeout. The watchdog now
+  only covers post-open silence (45 s, reset by heartbeats).
+- **Every exit closes the previous connection.** A 401 or other non-2xx closes the response before
+  throwing; a consumer that stops cancels the channel, which closes the response and the session; the
+  watchdog closes both; `EventConnection.close` is idempotent and cancels the read task, the watchdog
+  and the request; `EventStreamRunner` closes its connection with `defer` before any reconnect.
+- **Overflow is an explicit signal with bounded recovery.** `EventStreamOverflow` names its cause;
+  `EventStreamRunner.onResynchronize` is called once per overflow, before the reconnect, as the
+  documented point where a feature rehydrates from REST (the authority). Overflow uses its own
+  retry preset (1 s base, 15 s cap, no network wait) and is bounded: after five consecutive overflows
+  the runner ends the stream with the overflow instead of spinning. The count clears only after
+  healthy consumption (D-29), not on `server.connected`.
+- **Rejected**: treating overflow as a silent drop or as a permanent failure. A dropped delta makes
+  the projection wrong without telling anyone; a permanent failure would strand a consumer that can
+  recover by re-reading REST.
+
+### D-28 Loopback fixture server — real delegates, still isolated
+`LocalHTTPServer` (test support) is a loopback-only HTTP/1.1 server used to exercise the real
+`URLSession` redirect delegate and socket lifetimes: same-origin redirect, refused cross-origin
+redirect, pairing redirect refusal, withheld headers, rejected responses and consumer shutdown.
+
+- A custom `URLProtocol` cannot do this: it synthesizes a redirect inside the protocol stack, so the
+  session delegate never runs. That is why D-22's rule test stays, and these tests cover the wiring.
+- Nothing leaves the machine: the listener binds `127.0.0.1` on an ephemeral port, routes are
+  in-memory, and the suite can be skipped with `OPENCODE_SKIP_LOOPBACK_FIXTURES=1`.
+- The live-server check is separate again: it reads `OPENCODE_LIVE_SERVER` and
+  `OPENCODE_LIVE_PASSWORD` from the environment, is skipped when they are unset, and only performs
+  reads.
+
+### D-29 Overflow protection clears only after healthy consumption
+`server.connected` resets the ordinary reconnect backoff (the audited handshake) but **not** the
+consecutive-overflow count or the overflow backoff. Those clear only when a connection has stayed open
+`healthyResetWindow` (default 30 s) and has delivered at least `healthyResetEvents` (default 1) events
+beyond the handshake.
+
+- Why: a server (or a broken proxy) can emit `connected` and then immediately flood the consumer.
+  Resetting on the handshake would let that cycle repeat forever, defeating the bound.
+- The check runs per delivered event, so a connection that connects, sends one burst and overflows
+  before the window never resets. A long-lived stream that keeps delivering resets promptly.
+- Tests: repeated connect-then-overflow cycles reach the limit; a connection that delivers content
+  past the window keeps the limit clear across three overflow cycles; the transport-buffer overflow
+  takes the same path.
+
+### D-30 Transport chunk-buffer overflow is a typed, recoverable outcome
+Exhausting `URLSessionTransport`'s bounded chunk buffer fails the stream with
+`TransportError.streamOverflow`, not a private sentinel. `EventStream.clientError` maps it to
+`OpenCodeClientError(.streamOverflow)`, which the runner treats exactly like an event-hand-off
+overflow: close the connection, resynchronize from REST, then reconnect on the overflow schedule.
+
+- Why: the buffer exists to bound memory; a full buffer means the consumer fell behind, which a
+  reconnect plus REST rehydration repairs. Converting it to `.unreachable` (the old behaviour) made
+  a recoverable gap permanent and skipped the resync signal.
+- The chunk capacity is injectable so a test can force the overflow; the default stays 64 chunks
+  (≈1 MiB).
+
+### D-31 A web page is an incompatible API, not a decode or auth failure
+A 2xx response whose `Content-Type` is `text/html` or `application/xhtml+xml` is
+`OpenCodeClientError(.incompatibleAPI(feature:))`, with its own copy. It is distinct from:
+
+- `.status(401)` — the credentials were rejected;
+- `.transport(…)` / `.unreachable` — the server could not be reached;
+- `.undecodable(feature:)` — JSON that does not match the V2 contract.
+
+Phase 5's connection screen can therefore tell “wrong address / not an OpenCode V2 server” from
+“wrong password” and “offline”. The classification is decided only after the status guard, so a 401
+with an HTML body remains an authentication failure.
+
+The live investigation (STATUS) found exactly this case: an installable `opencode serve` build
+answers unknown `/api/*` paths with its web shell, so `/api/info` and `/api/project` look like 200s
+until the content type is checked.

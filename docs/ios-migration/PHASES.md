@@ -11,8 +11,8 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | --- | --- | --- | --- |
 | P1 | Read-only reconstruction audit | done | `docs/ios-migration/audit/` |
 | P2 | `ios` branch, baseline, reproducible project, gate | done — merged into `ios` as `143d8f86` (PR #1) | `BASELINE.md`, `ios/project.yml`, `ios/scripts/` |
-| **P3** | **Core: store, dependencies, sharing, tokens, logging, haptics** | **done on `ios-core`** | checklist below |
-| P4 | Server: transport, retry, models, SSE, pairing | not started | only address validation (`ServerEndpoint`) |
+| P3 | Core: store, dependencies, sharing, tokens, logging, haptics | done — merged into `ios` as `d0fdf2f5` (PR #2) | checklist below |
+| **P4** | **Server: transport, retry, models, SSE, pairing** | **done on `ios-networking`** | `PROTOCOL_COVERAGE.md`, `STATUS.md` |
 | P5 | App shell: launch, connection, pairing, reconnect | scaffold | launch states and an inert probe; no pairing, no reconnect |
 | P6 | Home, drawer, projects, Catch Up, What's New | not started | folders only |
 | P7 | Session, subagents, background work, request review | not started | folders only |
@@ -25,7 +25,8 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | P14 | Hardening | not started | — |
 
 **P2 is not P3.** The scaffold proves the project builds and the launch states exist; it does not prove store
-semantics, sharing, motion or haptics. P4 (networking) is therefore **not** the immediate next phase.
+semantics, sharing, motion or haptics. P3 is not P4: the core store and dependency layer exists, but no
+server route was reached until P4 added the transport, retry, models, SSE parsing, pairing and client seam.
 
 ## P3 checklist
 
@@ -73,14 +74,17 @@ leaving the parent to clear the presented state.
 - **Previews.** Preview support is enabled, two launch-state previews exist, and the dependency context under
   Xcode previews resolves inert values, so a preview cannot reach the network and cannot play a haptic.
 
-## Roadmap after P3
+## Roadmap after P4
 
-P3 (core) is complete on `ios-core` and is the phase P4 follows. P4 (networking) starts only once P3 is
-merged into `ios`, and branches from the updated `ios` — never from `ios-core` or any other task branch.
+P4 (networking) is complete on `ios-networking` and is the phase P5 follows. P5 branches from the updated
+`ios` once P4 is merged, never from a task branch.
 
-Prerequisites for P4:
+Prerequisites for P5:
 
-1. **`ios-core` merged into `ios` by the owner.** The merge is the hand-off; this branch stops here.
-2. Nothing blocks on the code side. Production identifiers (bundle id, App Group, Keychain service) must be
-   settled before real credentials are stored, but they do not block fixtures or transport work.
-3. The haptics live path needs a physical device to observe; the vocabulary and the seam are verified without one.
+1. **`ios-networking` reviewed and merged into `ios`.** The merge is the hand-off.
+2. P5 wires `OpenCodeClient` into the launch states, pairing redemption and the reconnect loop, and adds the
+   network-path observation that `RetryEnvironment` currently stubs.
+3. Production identifiers (bundle id, App Group, Keychain service) must be settled before real credentials
+   are stored. Nothing in P4 stores a credential outside an in-memory test.
+4. The haptics live path and the local-network permission prompt need a physical device; both are reported
+   unverified.

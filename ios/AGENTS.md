@@ -16,12 +16,13 @@ where a migration instruction says so; this file is authoritative for `ios/`.
 | `ios/OpenCode.xcodeproj` | generated; never committed |
 | `ios/OpenCodeKit/` | local Swift package: all logic and its tests |
 | `ios/OpenCodeKit/Sources/OpenCodeCore` | design tokens, motion vocabulary, haptics, logging, dependency clients, storage |
-| `ios/OpenCodeKit/Sources/OpenCodeServer` | server address, transport, wire models, SSE (phase 4) |
+| `ios/OpenCodeKit/Sources/OpenCodeServer` | server address, pairing, wire models, retry, SSE and the client |
 | `ios/OpenCodeKit/Sources/OpenCodeApp` | app reducer and launch configuration |
-| `ios/OpenCodeKit/Sources/OpenCodeTestSupport` | isolated test environment and network guard |
+| `ios/OpenCodeKit/Sources/OpenCodeTestSupport` | isolated test environment, scripted network guard (fixtures, chunks, redirects), loopback HTTP fixture server |
 | `ios/OpenCode/App/` | app target: entry point, root view, scenes |
 | `ios/OpenCode/{Drawer,Session,Transcript,Composer,Media,Voice,Settings,System}/` | UI areas, filled by their phases |
-| `ios/OpenCodeTests/` | app-hosted unit tests (no TCA dependency) |
+| `ios/OpenCodeTests/` | hostless unit tests (no TCA dependency) |
+| `ios/OpenCode/Info.plist` | app plist: local-network use, ATS local/overlay exceptions |
 | `ios/OpenCodeUITests/` | XCUITest launch smoke tests |
 | `ios/scripts/` | toolchain check, simulator selection, build/test |
 | `docs/ios-migration/` | status, parity, decisions, handoff, toolchain, sanitized audit |
@@ -78,8 +79,13 @@ one-line reason at the declaration and a `DECISIONS.md` entry.
 - Every test is isolated: a temporary directory, an in-memory store, a pinned clock and a deterministic
   identifier sequence (`OpenCodeTestSupport.IsolatedTestEnvironment`).
 - Network is blocked by default in tests (`OpenCodeTestSupport.NetworkGuard`). A test that needs an
-  HTTP response registers a fixture on a `.invalid` host. Live checks are opt-in behind environment
-  variables that are unset by default.
+  HTTP response registers a fixture on a `.invalid` host. The loopback fixture server
+  (`OpenCodeTestSupport.LocalHTTPServer`) is the exception: it binds `127.0.0.1` only, exercises the real
+  `URLSession` delegates, and can be skipped with `OPENCODE_SKIP_LOOPBACK_FIXTURES=1`.
+- Live checks are opt-in behind environment variables that are unset by default
+  (`OPENCODE_LIVE_SERVER`, `OPENCODE_LIVE_PASSWORD`); they are read-only.
+- Device-only checks use DEBUG launch arguments (`-localNetworkProbeURL`, `-hapticProbe`) and print a
+  classification line with no address or credential. Do not turn them into UI.
 - Screenshots are captured on a simulator with no personal data in frame and no machine identifiers in
   file names.
 

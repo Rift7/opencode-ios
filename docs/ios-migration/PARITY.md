@@ -16,8 +16,8 @@ Baselines:
 
 - Behaviour: `dev = 7358160e808fb1870eeb20f5da8df832667019d1`.
 - iOS evidence: parity corpus synced at iOS `01eef583`; screenshots at `d809b1e` and `16b40f7` (October).
-- New code: `ios` branch from the same `dev` SHA (`ios` head `143d8f86` when Phase 3 branched; Phase 3
-  work is on `ios-core`).
+- New code: `ios` branch from the same `dev` SHA (`ios` head `d0fdf2f5` when Phase 4 branched; Phase 4
+  work is on `ios-networking`).
 
 ## App shell
 
@@ -51,12 +51,17 @@ Baselines:
 
 | Behaviour | Android source | Recovered iOS source | New path | Status |
 | --- | --- | --- | --- | --- |
-| Transport, pools, security | `server/OpenCodeTransport.kt`, `TransportSecurity.kt` | `OpenCodeClient+Transport.swift` | `ios/OpenCodeKit/Sources/OpenCodeServer` | not started |
-| Retry and backoff | `server/retry/NetworkRetry.kt` | `NetworkRetry.swift` | same | not started |
-| Wire models | `server/model/*.kt` | `OpenCodeClient+Payloads.swift` | same | not started |
-| SSE decode and batching | `server/live/LiveEvents.kt`, `EventBatcher.kt` | `OpenCodeClient+Events.swift` | same | not started |
-| Pairing redeem | `server/OpenCodePairingLink.kt` | `OpenCodePairingLink.swift` | same | not started |
-| Family BFS | `server/live/LiveFamily.kt` | `OpenCodeClient+Family.swift` | same | not started |
+| Host classification and cleartext policy | `server/TransportSecurity.kt` | not recoverable — native decision (D-22) | `OpenCodeCore/Network/HostAddress.swift` | done — private/overlay/local classification and refusal tested; ATS keys in `ios/OpenCode/Info.plist` |
+| Transport and response streaming | `server/OpenCodeTransport.kt`, `live/LiveTransport.kt` | `OpenCodeClient+Transport.swift` | `OpenCodeCore/Transport/{HTTPTransport,URLSessionTransport}.swift` | done for send and stream — ephemeral, no cookies/cache, bounded chunks; one request session and one per stream (D-26); redirect rule and real redirect delegates tested (D-22, D-28) |
+| Credential scope | `OpenCodeServer.kt`, `live/LiveTransport.kt` | not recoverable | `HTTPRedirectRule`, `OpenCodeServer.wireHeaders` | done — Basic header applied by origin, cross-origin hop refused and rule-tested |
+| Retry, backoff, `Retry-After`, idempotency | `server/retry/NetworkRetry.kt` | `NetworkRetry.swift` | `OpenCodeServer/Retry/{RetryPolicy,NetworkRetry}.swift` | done — presets, classification, equal jitter, window, cancellation, unsafe-write rule tested |
+| Wire models | `server/model/*.kt`, `live/Payloads.kt` | `OpenCodeClient+Payloads.swift` | `OpenCodeServer/Models/*.swift` | partial — session, project, shell, job, prompt body, model ref and envelopes modelled; remaining routes listed in `PROTOCOL_COVERAGE.md` |
+| Client boundary | `server/OpenCodeClient.kt` | `OpenCodeClient.swift` | `OpenCodeServer/Client/OpenCodeClient.swift` | partial — health, pairing redeem, projects, session page, get session, active IDs, events; other call sites belong to their feature phases |
+| SSE decode and batching | `server/live/LiveEvents.kt`, `EventBatcher.kt` | `OpenCodeClient+Events.swift` | `OpenCodeServer/Events/*.swift` | done for framing, decoding, coalescing, ordering and bounds; transcript pressure shedding deferred (D-23) |
+| Reconnect and watchdog | `server/live/LiveEvents.kt`, `retry/NetworkRetry.kt` | not recoverable | `EventStreamRunner`, `EventStream` | done — reconnect schedule, 401 stop, 45 s idle watchdog, connect deadline covering headers, bounded overflow recovery with a REST resync callback tested (D-27) |
+| Pairing decode and redeem | `server/OpenCodePairingLink.kt`, `live/LiveConnection.kt` | `OpenCodePairingLink.swift` | `OpenCodeServer/Pairing/PairingLink.swift`, `OpenCodeClient.redeemPairing` | done — every form, validation reasons, loopback filtering, non-fetching draw link, one unauthenticated GET per candidate tested |
+| Error copy and log safety | `server/OpenCodeClientError.kt` | `OpenCodeClientError.swift` | `OpenCodeServer/Client/{OpenCodeClientError,ServerCopy}.swift` | done — typed facts, copy at the edge, status/transport-only log summary; a web page is `.incompatibleAPI`, distinct from 401 and transport (D-31) |
+| Family BFS | `server/live/LiveFamily.kt` | `OpenCodeClient+Family.swift` | — | not started (P6/P7) |
 
 ## Feature areas
 
@@ -88,6 +93,9 @@ Recorded here so they are not mistaken for missing work.
 | Autocomplete | list, next-frame filtering | SwiftUI-native list |
 | Quotes | quote cards | pending product decision |
 | Notifications | FCM, relay absent | Experimental, off until a relay exists |
+| Redirect tests | OkHttp interceptor + MockWebServer | pure `HTTPRedirectRule` plus a loopback HTTP server that exercises the real URLSession delegate (D-22, D-28) |
+| Cleartext | manifest cleartext plus an interceptor | ATS exceptions plus `TransportSecurity`, both narrower than "cleartext everywhere" (D-22) |
+| Time in retries | `Clock` dependency over coroutines | `ClockClient` with recording/gated doubles (D-21) |
 
 ## Test coverage
 
@@ -102,5 +110,17 @@ Recorded here so they are not mistaken for missing work.
 | Dependency isolation and transport boundary | `.../DependencyIsolationTests.swift`, `.../TransportBoundaryTests.swift`, `.../NetworkAndIsolationTests.swift` | done |
 | Store semantics | `OpenCodeAppTests/StoreSemanticsTests.swift` | done |
 | App reducer | `OpenCodeAppTests/AppFeatureTests.swift`, `LaunchConfigurationTests.swift` | done |
-| Server | none yet | not started |
+| Server: address and cleartext policy | `OpenCodeServerTests/ServerAddressTests.swift` | done |
+| Server: redirect rule | `.../RedirectRuleTests.swift` | done |
+| Server: transport send/stream | `.../TransportTests.swift` | done |
+| Server: pairing | `.../PairingLinkTests.swift` | done |
+| Server: retry policy and loop | `.../RetryTests.swift` | done |
+| Server: SSE parsing | `.../SSEParserTests.swift` | done |
+| Server: event decoding | `.../ServerEventDecoderTests.swift` | done |
+| Server: event batching | `.../EventBatcherTests.swift` | done |
+| Server: event stream and reconnect | `.../EventStreamTests.swift` | done |
+| Server: loopback delegates and socket lifetime | `.../LocalFixtureServerTests.swift` | done (loopback only, opt-out env var) |
+| Server: live read-only smoke | `.../LiveServerTests.swift` | run once manually; skipped by default |
+| Server: client requests | `.../OpenCodeClientTests.swift` | done |
+| Bounded channel | `OpenCodeCoreTests/BoundedChannelTests.swift` | done |
 | UI (XCUITest) | `OpenCodeUITests/{LaunchSmokeTests,KeychainProbeTests}.swift` | done for the launch states |

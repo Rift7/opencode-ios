@@ -9,7 +9,7 @@ private struct TransportProbe {
 
 @Suite("Transport boundary")
 struct TransportBoundaryTests {
-  private static let request = URLRequest(url: URL(string: "https://example.com/api/info")!)
+  private static let request = HTTPRequest(url: URL(string: "https://example.com/api/info")!)
 
   @Test("an unoverridden dependency performs no network work")
   func unoverriddenDependencyIsInert() async {
@@ -17,7 +17,10 @@ struct TransportBoundaryTests {
     let probe = TransportProbe()
 
     await #expect(throws: TransportError.blocked) {
-      _ = try await probe.transport.perform(Self.request)
+      _ = try await probe.transport.send(Self.request)
+    }
+    await #expect(throws: TransportError.blocked) {
+      _ = try await probe.transport.open(Self.request)
     }
   }
 
@@ -26,7 +29,10 @@ struct TransportBoundaryTests {
     let transport = HTTPTransport.testValue
 
     await #expect(throws: TransportError.blocked) {
-      _ = try await transport.perform(Self.request)
+      _ = try await transport.send(Self.request)
+    }
+    await #expect(throws: TransportError.blocked) {
+      _ = try await transport.open(Self.request)
     }
   }
 

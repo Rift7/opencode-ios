@@ -12,6 +12,8 @@ struct OpenCodeApp: App {
     _store = State(initialValue: Store(initialState: configuration.initialState) { AppFeature() })
     #if DEBUG
       keychainSelfTest = KeychainSelfTest.runIfRequested()
+      // Device-only probes print one classification line; nothing runs without its launch argument.
+      _ = DeviceProbes.startIfRequested()
     #else
       keychainSelfTest = nil
     #endif
