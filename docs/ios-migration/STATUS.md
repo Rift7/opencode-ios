@@ -26,7 +26,7 @@ is the hand-off check.
 | 4 | Server: transport, retry, models, SSE, pairing | complete — `5f143ea7` (PR #3, tree `2326a49b`) |
 | 5 | App shell: launch, connection, pairing, reconnect | complete — `3b34932c` (PR #4) |
 | 6 | Home, drawer, projects, Catch Up, What's New | complete — `7966dcfe` (PR #5, tree `25b6d297`) |
-| 7 | Session, subagents, background work, request review | **complete on `ios-session`** (draft PR) |
+| 7 | Session, subagents, background work, request review | **complete on `ios-session`** (draft PR #6) |
 | 8 | Transcript | not started |
 | 9 | Composer | not started |
 | 10 | Media | not started |

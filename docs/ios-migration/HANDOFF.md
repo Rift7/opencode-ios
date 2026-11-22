@@ -30,7 +30,7 @@ The Android tree is not modified by this work.
 - `ios-home` — Phase 6: Home, drawer, projects, Catch Up and What's New. Merged into `ios` as
   `7966dcfe` (PR #5); the merged tree is identical to `eff8b45f`.
 - `ios-session` — Phase 7: session, subagents, background work and request review. Branched from
-  `origin/ios` `7966dcfe`; draft PR into `ios` (see the phase record).
+  `origin/ios` `7966dcfe`; draft PR into `ios`: https://github.com/Rift7/opencode-ios/pull/6
 - Later task branches from `ios` are pushed to the fork and opened as **draft** PRs into `ios`. Nothing is
   merged, released or distributed from here.
 
