@@ -39,7 +39,7 @@ in `origin/ios:ios/OpenCode/Resources/Localizable.xcstrings`, and the gate was c
 
 | Area | New or changed path | Gate |
 | --- | --- | --- |
-| Home reducer, local records, search/paging, pins, read state, deletion, Catch Up, What's New | `OpenCodeKit/Sources/OpenCodeDrawer/HomeFeature.swift` | `HomeFeatureTests` — 18 Swift Testing cases (pin/unpin, unread, server isolation, visibility, search, stale search, paging, stale refresh, delete failure, Catch Up, supersede, What's New, snapshot bounds, receipt failure) |
+| Home reducer, local records, search/paging, pins, read state, deletion, Catch Up, What's New | `OpenCodeKit/Sources/OpenCodeDrawer/HomeFeature.swift` | `HomeFeatureTests` — 31 Swift Testing cases (pins, unread, server isolation, visibility, search and paging retries, stale responses, read watermarks, deletion reconciliation, Catch Up, What's New, snapshots and cold attention) |
 | Home models, server-scoped keys, bounded/versioned snapshot store, What's New catalog | `.../OpenCodeDrawer/HomeModels.swift` | snapshot write/read, version rejection, server separation and legacy-cache removal tested |
 | Client read receipt, delete, attention read | `OpenCodeKit/Sources/OpenCodeServer/Client/OpenCodeClient.swift` | `OpenCodeClientTests` request shape; Home effect tests for success and failure |
 | First-page request | `OpenCodeKit/Sources/OpenCodeServer/Models/OpenCodeSession.swift` (`SessionPageRequest.first`) | `OpenCodeClientTests` |
