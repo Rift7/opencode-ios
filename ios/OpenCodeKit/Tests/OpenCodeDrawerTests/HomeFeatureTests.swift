@@ -760,6 +760,103 @@ struct HomeFeatureTests {
     #expect(store.state.sessions.map(\.id) == ["newest", "older"])
   }
 
+
+  @Test("Mark All acknowledges only unread rows and leaves waiting and running ones")
+  func markAllReadOnlyUnread() async {
+    let client = succeedingClient()
+    let waiting = session("waiting", idle: 2_000, viewed: 1_000)
+    let running = session("running", idle: 2_000, viewed: 1_000)
+    let unread = session("unread", idle: 2_000, viewed: 1_000)
+    let read = session("read", idle: 1_000, viewed: 1_000)
+    let store = makeStore(
+      HomeFeature.State(
+        server: server,
+        sessions: [waiting, running, unread, read],
+        activeSessionIDs: ["running"],
+        attentionSessionIDs: ["waiting"],
+        hasLoaded: true
+      ),
+      client: client
+    )
+
+    #expect(store.state.canMarkAllRead)
+    await store.send(.markAllReadTapped)
+    #expect(store.state.isUnread(waiting))
+    #expect(store.state.isUnread(running))
+    #expect(!store.state.isUnread(store.state.session("unread")!))
+    #expect(!store.state.isUnread(read))
+    #expect(store.state.markAllReceipts["waiting"] == nil)
+    #expect(store.state.markAllReceipts["unread"] != nil)
+
+    await store.receive(
+      .markAllReceiptFinished(
+        generation: store.state.generation,
+        sessionID: "unread",
+        idle: 2_000,
+        succeeded: true
+      )
+    )
+    #expect(store.state.markAllReceipts.isEmpty)
+  }
+
+  @Test("a failed Mark All receipt restores that row's read watermark")
+  func markAllFailureRestores() async {
+    let client = baseClient(viewSession: { _, _, _ in
+      throw OpenCodeClientError(.status(500))
+    })
+    let store = makeStore(
+      HomeFeature.State(
+        server: server,
+        sessions: [session("a", idle: 2_000, viewed: 1_000)],
+        hasLoaded: true
+      ),
+      client: client
+    )
+
+    await store.send(.markAllReadTapped)
+    #expect(!store.state.isUnread(store.state.session("a")!))
+    await store.receive(
+      .markAllReceiptFinished(
+        generation: store.state.generation,
+        sessionID: "a",
+        idle: 2_000,
+        succeeded: false
+      )
+    )
+    #expect(store.state.isUnread(store.state.session("a")!))
+    #expect(store.state.notice == .couldNotMarkRead(title: "a"))
+  }
+
+  @Test("a Catch Up card opens without marking read; a tapped row does")
+  func catchUpCardKeepsUnread() async {
+    let unread = session("a", idle: 2_000, viewed: 1_000)
+    let store = makeStore(
+      HomeFeature.State(server: server, sessions: [unread], hasLoaded: true),
+      client: succeedingClient()
+    )
+
+    await store.send(.catchUpTapped)
+    await store.send(.catchUpOpenTapped)
+    await store.receive(
+      .delegate(
+        .openSession(
+          SessionSelection(serverID: store.state.serverID, sessionID: "a", intent: .catchUpCard)
+        )
+      )
+    )
+    #expect(store.state.isUnread(store.state.session("a")!))
+
+    await store.send(.sessionTapped("a"))
+    await store.receive(
+      .delegate(
+        .openSession(
+          SessionSelection(serverID: store.state.serverID, sessionID: "a", intent: .browse)
+        )
+      )
+    )
+    #expect(!store.state.isUnread(store.state.session("a")!))
+  }
+
   @Test("a view receipt acknowledges its own watermark, not newer activity")
   func receiptAcknowledgesOnlyItsWatermark() async {
     let latch = Latch()

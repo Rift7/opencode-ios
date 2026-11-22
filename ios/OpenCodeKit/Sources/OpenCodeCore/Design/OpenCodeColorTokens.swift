@@ -128,9 +128,10 @@ public struct OpenCodePalette: Sendable {
   )
 }
 
-@MainActor
 public enum OpenCodeColors {
-  public static func color(_ token: OpenCodeColorToken) -> Color {
+  /// Resolves through a dynamic `UIColor`; the provider runs on whatever thread draws, so this
+  /// entry point must stay nonisolated.
+  nonisolated public static func color(_ token: OpenCodeColorToken) -> Color {
     #if canImport(UIKit)
       return Color(
         uiColor: UIColor { traits in

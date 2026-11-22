@@ -111,6 +111,8 @@ public struct HomeFeature {
     var isRefreshing: Bool
     var refreshQueued: Bool
     var readReceipts: [String: ReadReceipt]
+    /// Mark All's receipts, so a failed view watermark can restore that session's read state.
+    public var markAllReceipts: [String: CatchUpState.ReadBackup]
     /// Session ID -> idle watermark at or below which a delayed view event is stale for a
     /// deliberate unread mark or an undone read.
     var unreadFloors: [String: Int64]
@@ -203,6 +205,7 @@ public struct HomeFeature {
       self.isRefreshing = false
       self.refreshQueued = false
       self.readReceipts = [:]
+      self.markAllReceipts = [:]
       self.unreadFloors = [:]
       self.pendingDeletions = [:]
       self.deletionTombstones = [:]
@@ -370,6 +373,11 @@ public struct HomeFeature {
       pendingDeletions[sessionID]?.operationID
     }
 
+    /// Whether Mark All has an unread row to acknowledge. Waiting and running rows keep their state.
+    public var canMarkAllRead: Bool {
+      sessions.contains { indicator($0) == .unread }
+    }
+
     public var drawerBadge: DrawerIndicator? {
       guard isLive else { return nil }
       for session in sessions where !session.isArchived && !isMuted(session.id) {
@@ -421,6 +429,13 @@ public struct HomeFeature {
     case pinToggled(String)
     case markReadTapped(String)
     case markUnreadTapped(String)
+    case markAllReadTapped
+    case markAllReceiptFinished(
+      generation: Int,
+      sessionID: String,
+      idle: Int64,
+      succeeded: Bool
+    )
     case readReceiptFinished(
       generation: Int,
       sessionID: String,
@@ -483,6 +498,7 @@ public struct HomeFeature {
     case snapshotWrite
     case notice
     case readReceipt(String)
+    case markAllReceipts
     case deletion(String)
     case deletionVerification(String)
   }
@@ -494,6 +510,7 @@ public struct HomeFeature {
   @Dependency(\.whatsNewCatalog) private var whatsNewCatalog
   @Dependency(\.dateClient) private var date
   @Dependency(\.uuidClient) private var uuid
+  @Dependency(\.haptics) private var haptics
 
   public init() {}
 
@@ -707,6 +724,25 @@ public struct HomeFeature {
         guard let session = state.session(sessionID) else { return .none }
         let result = markRead(session, state: &state)
         return result.effect
+
+      case .markAllReadTapped:
+        return markAllRead(&state)
+
+      case .markAllReceiptFinished(let generation, let sessionID, let idle, let succeeded):
+        guard generation == state.generation,
+          let backup = state.markAllReceipts[sessionID],
+          backup.idleMilliseconds == idle
+        else { return .none }
+        state.markAllReceipts[sessionID] = nil
+        if succeeded {
+          acknowledgeView(sessionID: sessionID, idle: idle, state: &state)
+        } else {
+          restoreRead(backup, sessionID: sessionID, state: &state)
+          if let session = state.session(sessionID) {
+            state.notice = .couldNotMarkRead(title: session.title)
+          }
+        }
+        return .none
 
       case .markUnreadTapped(let sessionID):
         guard let session = state.session(sessionID) else { return .none }
@@ -1375,6 +1411,73 @@ public struct HomeFeature {
     }
     .cancellable(id: CancelID.readReceipt(session.id), cancelInFlight: true)
     return (backup, effect)
+  }
+
+  /// Acknowledges every row whose indicator is unread. Waiting rows keep their unread state and
+  /// their request; a failed receipt restores that row's watermark. Receipts go four at a time.
+  private func markAllRead(_ state: inout State) -> Effect<Action> {
+    let unread = state.sessions.filter { state.indicator($0) == .unread }
+    guard !unread.isEmpty else { return .none }
+    haptics.play(.selection)
+    var receipts: [(sessionID: String, idle: Int64)] = []
+    for session in unread {
+      let key = state.key(session.id)
+      let backup = CatchUpState.ReadBackup(
+        idleMilliseconds: session.idleMilliseconds,
+        viewedMilliseconds: session.viewedMilliseconds,
+        readDate: state.readDates[key],
+        wasManuallyUnread: state.manuallyUnreadKeys.contains(key),
+        unreadFloorMilliseconds: state.unreadFloors[session.id]
+      )
+      state.readDates[key] = max(state.readDates[key] ?? .distantPast, session.updatedAt)
+      state.manuallyUnreadKeys.remove(key)
+      state.unreadFloors[session.id] = nil
+      if let idle = session.idleMilliseconds, idle > 0 {
+        state.markAllReceipts[session.id] = backup
+        acknowledgeView(sessionID: session.id, idle: idle, state: &state)
+        receipts.append((session.id, idle))
+      }
+    }
+    _ = store.write(state.readDates, for: HomeSharedKeys.sessionReadDates)
+    _ = store.write(state.manuallyUnreadKeys, for: HomeSharedKeys.manuallyUnreadSessions)
+    guard !receipts.isEmpty else { return .none }
+    let server = state.server
+    let client = client
+    let generation = state.generation
+    let allReceipts = receipts
+    return .run { send in
+      var index = 0
+      while index < allReceipts.count {
+        let end = min(index + 4, allReceipts.count)
+        let batch = Array(allReceipts[index..<end])
+        await withTaskGroup(of: (String, Int64, Bool).self) { group in
+          for receipt in batch {
+            group.addTask {
+              do {
+                try await client.viewSession(server, receipt.sessionID, receipt.idle)
+                return (receipt.sessionID, receipt.idle, true)
+              } catch is CancellationError {
+                return (receipt.sessionID, receipt.idle, false)
+              } catch {
+                return (receipt.sessionID, receipt.idle, false)
+              }
+            }
+          }
+          for await (sessionID, idle, succeeded) in group {
+            await send(
+              .markAllReceiptFinished(
+                generation: generation,
+                sessionID: sessionID,
+                idle: idle,
+                succeeded: succeeded
+              )
+            )
+          }
+        }
+        index = end
+      }
+    }
+    .cancellable(id: CancelID.markAllReceipts)
   }
 
   private func markUnread(_ session: OpenCodeSession, state: inout State) {

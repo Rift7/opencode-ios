@@ -7,11 +7,11 @@ Everything here is repository-relative. Local paths are given as placeholders.
 | Path | Contents |
 | --- | --- |
 | `ios/` | native iPhone app (SwiftUI, Swift 6.4, iOS 27.2) |
-| `ios/OpenCode/` | app target: entry point, scene, resources |
-| `ios/OpenCodeKit/` | local Swift package with all logic and tests |
+| `ios/OpenCode/` | app target: entry point, scene, Home drawer, session screen, resources |
+| `ios/OpenCodeKit/` | local Swift package with all logic and tests (`OpenCodeCore`, `OpenCodeServer`, `OpenCodeDrawer`, `OpenCodeSession`, `OpenCodeApp`) |
 | `ios/OpenCodeShare/` | share extension (later phase) |
 | `ios/OpenCodeWidgets/` | widget + Live Activity extension (later phase) |
-| `ios/OpenCodeUITests/` | XCUITest (later phase) |
+| `ios/OpenCodeUITests/` | XCUITest: launch, Home, session, screenshots, probes |
 | `docs/ios-migration/` | status, parity, decisions, handoff, toolchain, audit copies |
 | `docs/parity/` | the existing Android-side parity corpus — read-only reference, untouched |
 
@@ -20,15 +20,17 @@ The Android tree is not modified by this work.
 ## Branches
 
 - `ios` — integration branch, base `7358160e808fb1870eeb20f5da8df832667019d1` (see `BASELINE.md`).
-  Head at Phase 6 start: `3b34932c` (PR #4 merge).
+  Head at Phase 7 start: `7966dcfe` (PR #5 merge).
 - `ios-foundation` — the scaffold. Squash-merged into `ios` as `143d8f86` (PR #1, closed).
 - `ios-core` — Phase 3 (tokens, motion, haptics, store gates). Merged into `ios` as `d0fdf2f5` (PR #2).
 - `ios-networking` — Phase 4. Squash-merged into `ios` as `5f143ea7` (PR #3); the merged tree is
   byte-identical to `2326a49b`.
 - `ios-shell` — Phase 5: launch, connection, pairing and reconnect; review corrections at `04da03cf`.
   Merged into `ios` as `3b34932c` (PR #4).
-- `ios-home` — Phase 6: Home, drawer, projects, Catch Up and What's New. Branched from `origin/ios`
-  `3b34932c`; draft PR into `ios`: https://github.com/Rift7/opencode-ios/pull/5
+- `ios-home` — Phase 6: Home, drawer, projects, Catch Up and What's New. Merged into `ios` as
+  `7966dcfe` (PR #5); the merged tree is identical to `eff8b45f`.
+- `ios-session` — Phase 7: session, subagents, background work and request review. Branched from
+  `origin/ios` `7966dcfe`; draft PR into `ios`: https://github.com/Rift7/opencode-ios/pull/6
 - Later task branches from `ios` are pushed to the fork and opened as **draft** PRs into `ios`. Nothing is
   merged, released or distributed from here.
 
@@ -108,9 +110,9 @@ message or file content.
 
 ## Where the work stands
 
-`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P5 are merged into `ios`;
-P6 is implemented on `ios-home` and is the phase P7 follows. Session, transcript and composer behavior is
-**not** claimed.
+`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P5 and P6 are merged into
+`ios`; P7 is implemented on `ios-session`. Transcript and composer behavior is **not** claimed; P7 leaves
+their state boundaries in place.
 
 What P6 added, in one paragraph: `HomeFeature` replaces the project-only connected destination with the
 authenticated Home — projects, the drawer's pinned/recent session lists, 50-session paging, local and
@@ -121,6 +123,14 @@ project-summary cache; the shell still owns the only event stream and forwards s
 Session rows hand a stable `SessionSelection(serverID, sessionID, intent)` to the app, which renders a
 labeled placeholder until P7.
 
+What P7 added, in one paragraph: the session destination now consumes `SessionSelection` and owns the
+run's Stop, the family's subagent pages, permission/form review, pending steering rows and the
+shell/background panel. One authoritative read carries the audited refresh reasons, a request ID, one
+follow-up and replayed raced events; Stop resolves ambiguous failures by reading the run and the inbox
+before retrying, and a resumed run is a success. The family walk is bounded and cycle-safe; requests use
+strict models, typed validation and read-back settlement; shells tail bounded output and drain before
+stop. Mark All fans receipts out to unread Home rows only. Transcript and composer remain P8/P9.
+
 Useful entry points:
 
 | Need | File |
@@ -129,12 +139,31 @@ Useful entry points:
 | Home models, snapshot store, keys, catalogue, selection | `OpenCodeKit/Sources/OpenCodeDrawer/HomeModels.swift` |
 | App ↔ Home ownership, connection delegates, server switch | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` |
 | Home/drawer/projects/Catch Up/What's New UI | `ios/OpenCode/Drawer/HomeView.swift` |
-| Session placeholder boundary | `ios/OpenCode/App/RootView.swift` (`SessionPlaceholderView`) |
+| Session reducer: refresh, Stop, family pages, requests, shells | `OpenCodeKit/Sources/OpenCodeSession/SessionFeature.swift` |
+| Session models: problems, refresh, requests, background, shell output | `OpenCodeKit/Sources/OpenCodeSession/SessionModels.swift` |
+| Session screen, subagents, request sheet, background/output sheets | `ios/OpenCode/Session/SessionView.swift` |
+| App ↔ Home ↔ Session ownership | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` |
+| Request/family/shell wire models | `OpenCodeKit/Sources/OpenCodeServer/Models/{RequestModels,SessionModels}.swift` |
+| New client operations | `OpenCodeKit/Sources/OpenCodeServer/Client/SessionOperations.swift` |
+| Mark All receipts | `OpenCodeKit/Sources/OpenCodeDrawer/HomeFeature.swift`; drawer menu in `ios/OpenCode/Drawer/HomeView.swift` |
 | Client read receipt, delete, attention | `OpenCodeKit/Sources/OpenCodeServer/Client/OpenCodeClient.swift` |
 | Fixture sessions and scroll fixture | `ios/OpenCode/App/UITestFixture.swift` |
-| UI journeys | `ios/OpenCodeUITests/HomeUITests.swift` |
-| Screenshots and scroll trace | `ios/OpenCodeUITests/{HomeScreenshotUITests,HomeScrollTraceUITests}.swift` |
+| UI journeys | `ios/OpenCodeUITests/{HomeUITests,SessionUITests}.swift` |
+| Reviewed boundary regressions | `OpenCodeKit/Tests/OpenCodeAppTests/AppFeatureTests.swift` (`sessionEventForwarding`), `OpenCodeSessionTests/SessionFeatureTests.swift` (family identity, uncached load, shell poll/range/drain) |
+| Screenshots and scroll trace | `ios/OpenCodeUITests/{HomeScreenshotUITests,SessionScreenshotUITests,HomeScrollTraceUITests}.swift` |
 | Debug frame probe | `ios/OpenCode/Drawer/ScrollFrameProbe.swift` |
+
+### P7 evidence
+
+- `swift test --package-path ios/OpenCodeKit`: see `STATUS.md` for the gate count (server, core, app,
+  drawer and session suites). Session has 25 reducer tests; requests 6 model tests; family 4 tests;
+  App has the stream-forwarding integration test; Session UI has 6 journeys including shell stop.
+- `ios/scripts/verify.sh`: app build, `OpenCodeTests`, 31 UI tests and package tests pass.
+- `SessionUITests`: session/subagent navigation, permission approval, form validation/submission and a
+  failed reply retry.
+- Screenshots: `docs/ios-migration/screens/p7-{session,request,background}[-dark].png`.
+- The form UI test exposed a latent off-main dynamic-colour crash; `OpenCodeColors.color` is nonisolated
+  (D-56) and the full UI suite passes with the sheet rendered.
 
 ### P6 evidence
 
@@ -156,7 +185,7 @@ Useful entry points:
 | Local-network prompt / real socket | P14 | Denied prompt → no fixture request and unreachable copy; allowed → fixture request; real background/foreground socket reconnect. |
 | Production identifiers (bundle/team/App Group/Keychain) | P12/P14 | Owner-supplied identity builds and signs; credentials persist across relaunch; no historical values copied. |
 | Push notifications | P12 | Relay + credentials exist and the feature defaults off; without them, blocked/unverified. |
-| Session, transcript, composer | P7–P9 | P6's `SessionSelection` is consumed by P7; P8 transcript; P9 composer. |
+| Transcript and composer | P8–P9 | P7's `SessionSelection` and refresh identity are consumed; P8 transcript rows; P9 composer/drafts/sends. |
 
 ## Phase-end checklist
 

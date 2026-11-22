@@ -88,6 +88,34 @@ public struct OpenCodeClient: Sendable {
   public var viewSession: @Sendable (OpenCodeServer, String, Int64) async throws -> Void
   /// `DELETE /api/session/{id}`.
   public var deleteSession: @Sendable (OpenCodeServer, String) async throws -> Void
+  /// `POST /api/session/{id}/interrupt?resume=true`: whether a run was stopped.
+  public var interruptSession: @Sendable (OpenCodeServer, String) async throws -> Bool
+  /// Whether the server says this session is running.
+  public var sessionIsActive: @Sendable (OpenCodeServer, String) async throws -> Bool
+  /// The root and every subagent below it, with the running set.
+  public var sessionFamily: @Sendable (OpenCodeServer, OpenCodeSession) async throws -> SessionFamily
+  /// Permission and form requests waiting in the session's family and directory.
+  public var pendingRequests:
+    @Sendable (OpenCodeServer, OpenCodeSession, [String]) async throws -> PendingRequests
+  public var replyPermission:
+    @Sendable (OpenCodeServer, String, String, PermissionDecision, String?) async throws -> Void
+  public var replyForm:
+    @Sendable (OpenCodeServer, String, String, [String: FormValue], String?) async throws ->
+      FormReplyOutcome
+  public var cancelForm:
+    @Sendable (OpenCodeServer, String, String, String?, String?) async throws -> FormReplyOutcome
+  public var formState:
+    @Sendable (OpenCodeServer, String, String, String?) async throws -> FormState
+  public var pendingInputs: @Sendable (OpenCodeServer, String) async throws -> [PendingInput]
+  public var setPendingInputDelivery:
+    @Sendable (OpenCodeServer, String, String, PendingInput.Delivery) async throws -> Void
+  public var runningShells: @Sendable (OpenCodeServer, String) async throws -> [ServerShell]
+  public var shell: @Sendable (OpenCodeServer, String, String) async throws -> ServerShell
+  public var shellOutput:
+    @Sendable (OpenCodeServer, String, String, Int, Int) async throws -> ShellOutputPage
+  public var stopShell: @Sendable (OpenCodeServer, String, String) async throws -> Void
+  public var runningJobs: @Sendable (OpenCodeServer, String) async throws -> [ServerJob]
+  public var cancelJob: @Sendable (OpenCodeServer, String) async throws -> Void
   /// The long-lived event subscription. The flow throws on disconnect; the owner reconnects.
   /// `onPhase` is awaited before the reconnect loop acts, so a consumer can show the state and
   /// re-read REST before the next socket opens.
@@ -110,6 +138,49 @@ public struct OpenCodeClient: Sendable {
     deleteSession: @escaping @Sendable (OpenCodeServer, String) async throws -> Void = { _, _ in
       throw OpenCodeClientError(.unsupported)
     },
+    interruptSession: @escaping @Sendable (OpenCodeServer, String) async throws -> Bool = { _, _ in
+      throw OpenCodeClientError(.unsupported)
+    },
+    sessionIsActive: @escaping @Sendable (OpenCodeServer, String) async throws -> Bool = { _, _ in
+      throw OpenCodeClientError(.unsupported)
+    },
+    sessionFamily: @escaping @Sendable (OpenCodeServer, OpenCodeSession) async throws -> SessionFamily = {
+      _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    pendingRequests: @escaping @Sendable (OpenCodeServer, OpenCodeSession, [String]) async throws ->
+      PendingRequests = { _, _, _ in throw OpenCodeClientError(.unsupported) },
+    replyPermission: @escaping @Sendable (OpenCodeServer, String, String, PermissionDecision, String?)
+      async throws -> Void = { _, _, _, _, _ in throw OpenCodeClientError(.unsupported) },
+    replyForm: @escaping @Sendable (OpenCodeServer, String, String, [String: FormValue], String?)
+      async throws -> FormReplyOutcome = { _, _, _, _, _ in throw OpenCodeClientError(.unsupported) },
+    cancelForm: @escaping @Sendable (OpenCodeServer, String, String, String?, String?) async throws ->
+      FormReplyOutcome = { _, _, _, _, _ in throw OpenCodeClientError(.unsupported) },
+    formState: @escaping @Sendable (OpenCodeServer, String, String, String?) async throws -> FormState = {
+      _, _, _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    pendingInputs: @escaping @Sendable (OpenCodeServer, String) async throws -> [PendingInput] = {
+      _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    setPendingInputDelivery: @escaping @Sendable (
+      OpenCodeServer, String, String, PendingInput.Delivery
+    ) async throws -> Void = { _, _, _, _ in throw OpenCodeClientError(.unsupported) },
+    runningShells: @escaping @Sendable (OpenCodeServer, String) async throws -> [ServerShell] = {
+      _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    shell: @escaping @Sendable (OpenCodeServer, String, String) async throws -> ServerShell = {
+      _, _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    shellOutput: @escaping @Sendable (OpenCodeServer, String, String, Int, Int) async throws ->
+      ShellOutputPage = { _, _, _, _, _ in throw OpenCodeClientError(.unsupported) },
+    stopShell: @escaping @Sendable (OpenCodeServer, String, String) async throws -> Void = {
+      _, _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    runningJobs: @escaping @Sendable (OpenCodeServer, String) async throws -> [ServerJob] = {
+      _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    cancelJob: @escaping @Sendable (OpenCodeServer, String) async throws -> Void = { _, _ in
+      throw OpenCodeClientError(.unsupported)
+    },
     events: @escaping @Sendable (OpenCodeServer, @escaping @Sendable (EventStreamPhase) async -> Void) ->
       AsyncThrowingStream<ServerEvent, any Error>
   ) {
@@ -122,6 +193,22 @@ public struct OpenCodeClient: Sendable {
     self.attentionSessionIDs = attentionSessionIDs
     self.viewSession = viewSession
     self.deleteSession = deleteSession
+    self.interruptSession = interruptSession
+    self.sessionIsActive = sessionIsActive
+    self.sessionFamily = sessionFamily
+    self.pendingRequests = pendingRequests
+    self.replyPermission = replyPermission
+    self.replyForm = replyForm
+    self.cancelForm = cancelForm
+    self.formState = formState
+    self.pendingInputs = pendingInputs
+    self.setPendingInputDelivery = setPendingInputDelivery
+    self.runningShells = runningShells
+    self.shell = shell
+    self.shellOutput = shellOutput
+    self.stopShell = stopShell
+    self.runningJobs = runningJobs
+    self.cancelJob = cancelJob
     self.events = events
   }
 }
@@ -256,6 +343,153 @@ private struct Runtime: Sendable {
         try await Operations.deleteSession(
           server,
           sessionID: sessionID,
+          environment: environment,
+          policy: policy
+        )
+      },
+      interruptSession: { server, sessionID in
+        try await Operations.interruptSession(
+          server,
+          sessionID: sessionID,
+          environment: environment,
+          policy: .once
+        )
+      },
+      sessionIsActive: { server, sessionID in
+        try await Operations.sessionIsActive(
+          server,
+          sessionID: sessionID,
+          environment: environment,
+          policy: policy
+        )
+      },
+      sessionFamily: { server, root in
+        try await Operations.sessionFamily(
+          server,
+          root: root,
+          environment: environment,
+          policy: policy
+        )
+      },
+      pendingRequests: { server, session, family in
+        try await Operations.pendingRequests(
+          server,
+          session: session,
+          family: family,
+          environment: environment,
+          policy: policy
+        )
+      },
+      replyPermission: { server, sessionID, requestID, decision, message in
+        try await Operations.replyPermission(
+          server,
+          sessionID: sessionID,
+          requestID: requestID,
+          decision: decision,
+          message: message,
+          environment: environment,
+          policy: policy
+        )
+      },
+      replyForm: { server, sessionID, formID, answer, directory in
+        try await Operations.replyForm(
+          server,
+          sessionID: sessionID,
+          formID: formID,
+          answer: answer,
+          directory: directory,
+          environment: environment,
+          policy: policy
+        )
+      },
+      cancelForm: { server, sessionID, formID, message, directory in
+        try await Operations.cancelForm(
+          server,
+          sessionID: sessionID,
+          formID: formID,
+          message: message,
+          directory: directory,
+          environment: environment,
+          policy: policy
+        )
+      },
+      formState: { server, sessionID, formID, directory in
+        try await Operations.formState(
+          server,
+          sessionID: sessionID,
+          formID: formID,
+          directory: directory,
+          environment: environment,
+          policy: policy
+        )
+      },
+      pendingInputs: { server, sessionID in
+        try await Operations.pendingInputs(
+          server,
+          sessionID: sessionID,
+          environment: environment,
+          policy: policy
+        )
+      },
+      setPendingInputDelivery: { server, sessionID, inputID, delivery in
+        try await Operations.setPendingInputDelivery(
+          server,
+          sessionID: sessionID,
+          inputID: inputID,
+          delivery: delivery,
+          environment: environment,
+          policy: policy
+        )
+      },
+      runningShells: { server, directory in
+        try await Operations.runningShells(
+          server,
+          directory: directory,
+          environment: environment,
+          policy: policy
+        )
+      },
+      shell: { server, directory, shellID in
+        try await Operations.shell(
+          server,
+          directory: directory,
+          shellID: shellID,
+          environment: environment,
+          policy: policy
+        )
+      },
+      shellOutput: { server, directory, shellID, cursor, limit in
+        try await Operations.shellOutput(
+          server,
+          directory: directory,
+          shellID: shellID,
+          cursor: cursor,
+          limit: limit,
+          environment: environment,
+          policy: policy
+        )
+      },
+      stopShell: { server, directory, shellID in
+        try await Operations.stopShell(
+          server,
+          directory: directory,
+          shellID: shellID,
+          environment: environment,
+          policy: policy
+        )
+      },
+      runningJobs: { server, sessionID in
+        try await Operations.runningJobs(
+          server,
+          sessionID: sessionID,
+          environment: environment,
+          policy: policy
+        )
+      },
+      cancelJob: { server, jobID in
+        try await Operations.cancelJob(
+          server,
+          jobID: jobID,
           environment: environment,
           policy: policy
         )
@@ -647,7 +881,7 @@ enum Operations {
 
   // MARK: - Requests
 
-  private static func get<Value: Decodable & Sendable>(
+  static func get<Value: Decodable & Sendable>(
     _ server: OpenCodeServer,
     path: String,
     query: [(name: String, value: String)] = [],

@@ -9,6 +9,7 @@ let package = Package(
     .library(name: "OpenCodeServer", targets: ["OpenCodeServer"]),
     .library(name: "OpenCodeApp", targets: ["OpenCodeApp"]),
     .library(name: "OpenCodeDrawer", targets: ["OpenCodeDrawer"]),
+    .library(name: "OpenCodeSession", targets: ["OpenCodeSession"]),
     .library(name: "OpenCodeTestSupport", targets: ["OpenCodeTestSupport"]),
   ],
   dependencies: [
@@ -37,11 +38,20 @@ let package = Package(
       ]
     ),
     .target(
+      name: "OpenCodeSession",
+      dependencies: [
+        "OpenCodeCore",
+        "OpenCodeServer",
+        .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+      ]
+    ),
+    .target(
       name: "OpenCodeApp",
       dependencies: [
         "OpenCodeCore",
         "OpenCodeServer",
         "OpenCodeDrawer",
+        "OpenCodeSession",
         .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
       ]
     ),
@@ -56,6 +66,10 @@ let package = Package(
     .testTarget(
       name: "OpenCodeDrawerTests",
       dependencies: ["OpenCodeDrawer", "OpenCodeCore", "OpenCodeServer", "OpenCodeTestSupport"]
+    ),
+    .testTarget(
+      name: "OpenCodeSessionTests",
+      dependencies: ["OpenCodeSession", "OpenCodeCore", "OpenCodeServer", "OpenCodeTestSupport"]
     ),
     .testTarget(
       name: "OpenCodeCoreTests",

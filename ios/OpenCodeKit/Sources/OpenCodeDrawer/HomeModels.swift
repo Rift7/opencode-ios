@@ -3,39 +3,6 @@ import Foundation
 import OpenCodeCore
 import OpenCodeServer
 
-/// What opening a session means. The destination is P7's; a selection always carries the server it
-/// belongs to so a stale selection cannot open a session on another server.
-public struct SessionSelection: Equatable, Sendable, Identifiable {
-  public enum Intent: Equatable, Sendable {
-    /// The person picked the row.
-    case browse
-    /// The person opened the open Catch Up card, which must not mark it read.
-    case catchUpCard
-    /// A What's New prompt, typed into a new session but never sent.
-    case whatsNewDraft(prompt: String)
-  }
-
-  public var serverID: String
-  public var sessionID: String
-  public var intent: Intent
-
-  public init(serverID: String, sessionID: String, intent: Intent) {
-    self.serverID = serverID
-    self.sessionID = sessionID
-    self.intent = intent
-  }
-
-  public var id: String {
-    let suffix: String
-    switch intent {
-    case .browse: suffix = "browse"
-    case .catchUpCard: suffix = "catch-up"
-    case .whatsNewDraft(let prompt): suffix = "draft:\(prompt)"
-    }
-    return "\(serverID)|\(sessionID)|\(suffix)"
-  }
-}
-
 /// The drawer row's dot. A waiting request wins over a running session, which wins over unread.
 public enum DrawerIndicator: String, Equatable, Sendable {
   case attention

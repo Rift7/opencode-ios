@@ -6,15 +6,15 @@
 | --- | --- |
 | Integration branch | `ios` |
 | Behaviour baseline | `7358160e808fb1870eeb20f5da8df832667019d1` (`origin/dev`) |
-| `ios` head when P6 started | `3b34932c8c3d1e7dcc9f4985264bcec49ec64782` (PR #4) |
-| P6 branch | `ios-home`, created from `origin/ios` after `git fetch origin` |
+| P7 base | `7966dcfea6348a70dee7df05ddc2bec9a4b95048` (`origin/ios`, PR #5) |
+| P7 branch | `ios-session`, created from `origin/ios` after `git fetch origin` |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
-`git fetch origin` moved `origin/ios` from `5f143ea7` to `3b34932c`. PR #4 (`ios: wire launch,
-connection, pairing and reconnect`) is **MERGED** (`mergedAt=2026-11-22T04:08:50Z`, merge commit
-`3b34932c`, base `ios`, head `ios-shell`). The review correction `e64c1154` (“word the saved-data
-warning for a connecting server”) is not an ancestor because the merge was squashed; its copy is present
-in `origin/ios:ios/OpenCode/Resources/Localizable.xcstrings`, and the gate was checked before any P6 work.
+`git fetch origin` moved `origin/ios` from `3b34932c` to `7966dcfe`. PR #5 (`ios: add the native Home,
+drawer, projects and Catch Up`) is **MERGED** into `ios`. Its merge commit tree is `25b6d297`, byte-
+identical to the reviewed `ios-home` tree at `eff8b45f`; `git diff eff8b45f 7966dcfe -- ios
+docs/ios-migration` is empty. The squash merge means the task commit is not an ancestor, so tree equality
+is the hand-off check.
 
 ## Phase status
 
@@ -25,8 +25,8 @@ in `origin/ios:ios/OpenCode/Resources/Localizable.xcstrings`, and the gate was c
 | 3 | Core: store, dependencies, sharing, tokens, logging, haptics | complete — `d0fdf2f5` (PR #2) |
 | 4 | Server: transport, retry, models, SSE, pairing | complete — `5f143ea7` (PR #3, tree `2326a49b`) |
 | 5 | App shell: launch, connection, pairing, reconnect | complete — `3b34932c` (PR #4) |
-| 6 | Home, drawer, projects, Catch Up, What's New | **complete on `ios-home`** (draft PR #5) |
-| 7 | Session, subagents, background work, request review | not started |
+| 6 | Home, drawer, projects, Catch Up, What's New | complete — `7966dcfe` (PR #5, tree `25b6d297`) |
+| 7 | Session, subagents, background work, request review | **complete on `ios-session`** (draft PR #6) |
 | 8 | Transcript | not started |
 | 9 | Composer | not started |
 | 10 | Media | not started |
@@ -102,42 +102,115 @@ in `origin/ios:ios/OpenCode/Resources/Localizable.xcstrings`, and the gate was c
 This is a simulator trace, not a device claim. The 33.3 ms maximum means one frame took two display
 intervals during the measured swipes; the p95 stays at one interval.
 
+## Phase 7 — what landed
+
+| Area | New or changed path | Gate |
+| --- | --- | --- |
+| Session reducer, refresh identity, run lifecycle, family pages, request review, shell panel | `OpenCodeKit/Sources/OpenCodeSession/SessionFeature.swift`, `SessionModels.swift` | `SessionFeatureTests` — 25 Swift Testing cases (coalescing, races, settlement, interrupt ambiguity/resume, stranded steer, validation, duplicate submit, conflict, permission rules, root/child/sibling navigation, uncached load/retry/reconnect, stale read, shell poll timing, byte ranges, drain/failure/cancel) |
+| Session destination and App → Home → Session ownership | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift`, `ios/OpenCode/App/RootView.swift`, `ios/OpenCode/Session/SessionView.swift` | `AppFeatureTests.sessionOwnership`, `sessionServerIsolation`, `sessionEventForwarding`; `SessionUITests.testSessionAndSubagentNavigation` |
+| Request models: fields, values, conditions, defaults, validation, permissions, form state and settlement | `OpenCodeServer/Models/RequestModels.swift` | `RequestModelsTests` — 6 cases (value order, defaults/visibility, typed validation, hidden answers, strict type decoding, global question) |
+| Family and shell models, selection moved down to the server layer | `OpenCodeServer/Models/SessionModels.swift` | `SessionFamilyTests` — breadth-first, cycle/dedupe, 100-session cap, running descendant |
+| Client operations: interrupt, active, family BFS, pending requests, permission/form replies with settlement, inbox, shells/output/stop, jobs/cancel | `OpenCodeServer/Client/OpenCodeClient.swift`, `SessionOperations.swift` | `SessionFamilyTests` through `OpenCodeClient.live`; request-model tests; no live host |
+| Mark All as Read | `HomeFeature.markAllReadTapped`, drawer menu and Catch Up menu action | `HomeFeatureTests.markAllReadOnlyUnread`, `markAllFailureRestores`; `HomeUITests.testMarkAllReadFromTheCatchUpMenu` |
+| Permission/form review UI | `ios/OpenCode/Session/SessionView.swift` | `SessionUITests` form validation/submit, approve, reject path, failed reply retry |
+| Copy and accessibility identifiers | `ios/OpenCode/Resources/Localizable.xcstrings` | 84 new English keys; `session-review-requests`, `request-permission-*`, `request-field-*`, `background-*`, `shell-output*`, `session-subagents`, `session-page-back` |
+| Colour provider crash found by the form UI test | `OpenCodeCore/Design/OpenCodeColorTokens.swift` | `OpenCodeColors.color` is `nonisolated`; the dynamic `UIColor` provider no longer asserts a main-queue executor when SwiftUI resolves it off-main |
+
+### Refresh, runs and settlement
+
+- `RefreshReason` keeps all eight audited labels (`open`, `resume`, `reconnect`, `runState`,
+  `invalidation`, `settlement`, `watchdog`, `snapshot`). `invalidation`, `settlement` and `runState`
+  require a follow-up. At most one authoritative read is in flight: lifecycle duplicates coalesce, and a
+  racing mutation earns exactly one follow-up instead of cancelling the read (`.cancellable(id:)` without
+  `cancelInFlight`).
+- Responses are fenced by session ID and request ID. Events received while a read is in flight are queued
+  (bounded at 512), then replayed onto the snapshot; execution and request events also schedule one
+  follow-up. A settlement read sleeps the audited 200 ms coalescing window first.
+- Stop increments a run generation and cancels the previous interrupt, settle, run-end and stranded-steer
+  work. An ambiguous interrupt reads `/api/session/active` and the inbox before trying again: a finished run
+  or a resumed steering message is settled, never interrupted twice. An acknowledged stop polls at 1, 2, 4
+  and 8 seconds.
+- Stranded steering queues first when the message is still marked steer, then steers, reads the inbox and
+  checks the run state after 1.5 s.
+- A connection loss invalidates the in-flight read and clears the refresh; a return re-reads once.
+
+### Subagents, requests and background work
+
+- Family discovery is breadth-first with at most six child pages in flight, a visited set and a 100-session
+  cap; running descendants outside the cap are resolved through bounded metadata ancestry (24 lookups).
+  Responses are consumed in queue order, so the family is deterministic.
+- Subagent pages are a logical stack (session ID + page identity). The active page reads with `resume`
+  when it returns; the root's metadata, requests, pending inputs and shell state stay in the parent, so a
+  covered page loses nothing.
+- Permission and form models decode strictly. Forms apply defaults, external steps start false, conditions
+  hide dependent fields, hidden answers are not sent, and validation returns a typed problem plus the
+  active-field index. Submitting marks the request responding, so a second tap cannot send twice; a
+  settled request is completed and cannot be actioned again.
+- Form replies settle through a read-back: success, a matching read-back, a conflicting state, or a
+  `still pending` form resent once. A `409` is never blindly repeated. Conflicts are typed and shown.
+- Shell output reads 64 KiB pages, tails from the last 256 KiB, retains 1 MiB and can grow to 4 MiB with
+  Load Earlier. A trimmed range advances its start by the exact bytes discarded, including newline and
+  UTF-8 alignment, so `startCursor + output.utf8.count == endCursor` always holds. Load Earlier never
+  exceeds 4 MiB and joins at the retained start.
+- Polling starts only when the sheet is visible and the initial tail is loaded; the two can arrive in
+  either order. Stop cancels the poll, drains every remaining page to the current capture size, and only
+  then deletes. A failed or incomplete drain keeps the output and requires an explicit Discard Unread
+  Output choice; cancellation never deletes.
+- Mark All acknowledges only rows whose indicator is `unread`; waiting (attention) and running rows are
+  left untouched. Receipts run four at a time with a per-session backup, and a failure restores that row's
+  read date, viewed watermark, manual-unread mark and unread floor.
+
+### Reviewed Phase 7 corrections
+
+| Finding | Change | Regression |
+| --- | --- | --- |
+| The connection boundary dropped session events | `ConnectionFeature.streamEvent` forwards every event except `projectUpdated`, `connected`, `modelsChanged` and `agentsChanged`; token checks stay in place. | `AppFeatureTests.sessionEventForwarding` sends shell, job, inbox, durable content, revert and shell-ended events through App/Connection and observes Session state. |
+| A child refresh replaced the family root | The read always discovers the family from its original root; a narrower subtree can no longer replace a known family. | `familyIdentityAcrossPages`: root → child → sibling → back with a client that returns a subtree for each supplied root; inactive child clears the run and unsent answers survive. |
+| A selection with no cache rejected its first snapshot | The refresh identity guard accepts the selected session when root and family are still empty; reconnect is allowed during the initial load. | `uncachedInitialLoad`: success, failure, retry, and interruption followed by reconnect. |
+| Shell polling could miss its only start | `isVisible` is tracked; prepared or appeared starts exactly one poll when both are ready; reconnection restarts it. | `shellPollTiming`: appearance before load, load before appearance, dismissal during load, reconnect. |
+| Trimmed output ranges were not contiguous | Trimming returns the discarded byte count, which advances `startCursor`; Load Earlier joins the retained start and never exceeds 4 MiB. | `shellRangeContiguity`, `shellTrimThenEarlier`, `shellEarlierBounded` (multibyte and page crossing the cap). |
+| Stop deleted after one page read | Stop cancels polling, drains to the probing completion boundary, retains bounded output, and only then deletes. Cooperative cancellation is checked throughout the drain and immediately before DELETE; a dependency that succeeds after cancellation cannot reach the stop. A failed/incomplete drain needs an explicit discard. | `shellDrainAndFailure`, `shellDrainCancellationAtProbe`, `shellDrainCancellationAtPage`, `shellDrainControl`: multiple pages, failure, discard decision, cancellation at the probe/page and a successful control. |
+
 ## Verified in this phase
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | **321 tests pass**: 161 server, 67 core, 58 app, 35 drawer; live and loopback-opt-out suites behave as before |
-| `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; `OpenCodeTests` passes; **26 UI tests pass** (18 existing + 8 P6); package suites pass |
+| `swift test --package-path ios/OpenCodeKit` | **365 tests pass**: 174 server, 67 core, 61 app, 38 drawer, 25 session; live and loopback opt-outs behave as before |
+| `ios/scripts/verify.sh` | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **34 UI tests pass**; package suites pass |
+| `xcodebuild ... -only-testing:OpenCodeUITests/SessionUITests` | 6 journeys: session/subagent navigation, permission approval, permission rejection, form validation/submission, failed reply retry, shell output and stop |
+| `xcodebuild ... -only-testing:OpenCodeUITests/HomeUITests` | 8 tests including Mark All from the drawer menu |
+| Screenshots | `docs/ios-migration/screens/p7-{session,request,background}[-dark].png` |
+
+The counts are the numbers the package runner printed; the gate log is in `ios/.build-results/`.
 
 ## Not verified
 
-- **Physical device**: no P6 run on hardware. VoiceOver order, Taptic feel, real LAN reconnection and the
-  local-network prompt remain device checks; the simulator covers accessibility labels and Dynamic Type
-  layout only.
-- **Reduce Motion**: P6 adds no custom animation; sheets, navigation and system controls keep platform
-  motion. The Reduce Motion policy is therefore inherited, not separately exercised.
-- **Live V2 server**: no build with the audited `/api/info`, `/api/project` and new Home routes was
-  tested in P6. The P4/P5 `.incompatibleAPI` outcome is preserved; no route was remapped.
-- **Real session mutations**: none. Delete/read receipts were exercised against fixture clients only.
+- **Physical device**: no P7 run on hardware. VoiceOver order, Taptic feel, real LAN reconnection and the
+  local-network prompt remain device checks; the simulator covers accessibility identifiers and Dynamic
+  Type layout only.
+- **Reduce Motion**: P7 adds no custom animation; sheets, navigation and system controls keep platform
+  motion. The policy is inherited, not separately exercised.
+- **Live V2 server**: no build with the audited request, family, shell or job routes was tested. The P4/P5
+  `.incompatibleAPI` outcome is preserved; nothing was remapped.
+- **Real session mutations**: no real interrupt, reply, shell stop or job cancel ran against a live
+  server. Reducer and UI tests use the fixture client only.
 - **Visual comparison with the original app**: unavailable; October captures are evidence, not a target.
 - **iPad**: out of scope (D-16).
 
-## Deferred P5 items — later phase and acceptance check
+## Deferred P7 items — later phase and acceptance check
 
 | Deferred item | Later phase | Acceptance check |
 | --- | --- | --- |
-| Camera QR pairing (`PairingScanner`) | P11 (Settings › Servers) | On a device, scanning a valid `opencode pair` code presents the pairing confirmation and redeems once; denied camera shows a typed outcome. Simulator records **unverified**. |
-| Custom request headers in the manual form | P11 (Settings › Servers) | A saved header round-trips through Keychain, is sent only to its server's origins, and an invalid name/value is refused without locking the person out. |
-| Copied error report | P11 (Diagnostics/connection) | The copied report contains status/feature/typed facts only; a redaction test fails if a credential, address, pairing code or message text appears. |
-| Haptics live feel | P14 (hardware hardening) | Each of the eleven haptics is felt and distinguished on a device with System Haptics on; simulator remains **unverified**. |
-| Local-network prompt / real LAN socket | P14 (hardware hardening) | Denied prompt → unreachable copy, no request at the fixture; allowed → request reaches the Mac fixture; background/foreground reconnect over the real socket. |
-| Production identifiers (bundle id, team, App Group, Keychain service) | P12/P14 owner configuration | Owner-supplied values build/sign; credentials survive relaunch in the configured service; no historical team or group is copied. |
-| Push notifications | P12 (Experimental, off) | Relay credentials exist; notifications default off; a fixture push reaches the app only after opt-in. Without a relay the path is **blocked/unverified**. |
-| Session/transcript/composer | P7–P9 | P6 carries a stable `SessionSelection` to a placeholder only; P7 adds the session destination, P8 the transcript, P9 the composer. |
+| Transcript rows, grouping, markdown and the off-screen pressure policy | P8 | A 600-token stream loses no tail; 1,000 rows scroll without binding churn; settlement reads extend the P7 refresh identity |
+| Composer editing, drafts, sends, queued-message sheet and steer menu | P9 | Draft survives termination; a failed send retries with a new message id; the queued INPUT model from P7 is the only data source |
+| Full request dock in the composer (fold, pages, answer bar) | P9 | Keyboard Send cannot become chat input while a request is docked; the sheet path remains for large forms |
+| Shell output copy/share and background subagent stop | P9/P10 | Copy uses the pasteboard dependency; stopping a subagent interrupts and cancels every job in its tree |
+| Global form location directory from the composer context | P9 | A global form replies with the session's directory; the P7 client already accepts it |
+| Camera QR pairing, custom headers, settings and diagnostics | P11 | Device QR redemption; header round-trip; redacted report |
+| Haptics live feel and local-network prompt | P14 | Each haptic is distinguished on a device; denied prompt shows unreachable, allowed prompt reaches the fixture |
 
 ## Next
 
-1. P7 (`ios-session`): `SessionFeature`, subagent pages, background work, request review. Consume
-   `SessionSelection` (server ID + intent) rather than adding a second navigation model.
-2. P8: transcript and the off-screen event pressure policy (D-23).
-3. P11: settings, the shipped What's New catalogue, custom headers, camera pairing and report copy.
+1. P8 (`ios-transcript`): transcript windows, markdown and settlement using the P7 refresh identity.
+2. P9: composer, drafts, sends and the queued-input UI over the P7 inbox model.
+3. P11: settings, shipped What's New catalogue, custom headers and camera pairing.

@@ -29,19 +29,23 @@ public struct AppLaunchConfiguration: Sendable {
 
   /// Which synthetic data set the fixture client serves (`connected` or `connected-scroll`).
   public let uiTestFixture: String?
+  /// A UI test's requested appearance (`OPENCODE_UI_TEST_APPEARANCE`); nil uses the system.
+  public let uiTestAppearance: String?
 
   public init(
     uiTestScenario: UITestScenario? = nil,
     uiTestOpenURL: String? = nil,
     uiTestClipboard: String? = nil,
     usesFixtureClient: Bool = false,
-    uiTestFixture: String? = nil
+    uiTestFixture: String? = nil,
+    uiTestAppearance: String? = nil
   ) {
     self.uiTestScenario = uiTestScenario
     self.uiTestOpenURL = uiTestOpenURL
     self.uiTestClipboard = uiTestClipboard
     self.usesFixtureClient = usesFixtureClient
     self.uiTestFixture = uiTestFixture
+    self.uiTestAppearance = uiTestAppearance
   }
 
   public var initialState: AppFeature.State {
@@ -199,8 +203,9 @@ public struct AppLaunchConfiguration: Sendable {
       uiTestScenario: scenario.flatMap(UITestScenario.init(rawValue:)),
       uiTestOpenURL: process.environment["OPENCODE_UI_TEST_OPEN_URL"] ?? argumentValue(after: "-uiTestOpenURL"),
       uiTestClipboard: process.environment["OPENCODE_UI_TEST_CLIPBOARD"] ?? argumentValue(after: "-uiTestClipboard"),
-      usesFixtureClient: fixture == "connected" || fixture == "connected-scroll",
-      uiTestFixture: fixture
+      usesFixtureClient: fixture?.hasPrefix("connected") == true,
+      uiTestFixture: fixture,
+      uiTestAppearance: process.environment["OPENCODE_UI_TEST_APPEARANCE"]
     )
   }
 

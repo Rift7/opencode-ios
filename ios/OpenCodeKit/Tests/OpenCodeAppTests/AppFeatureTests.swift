@@ -4,6 +4,7 @@ import OpenCodeApp
 import OpenCodeCore
 import OpenCodeDrawer
 import OpenCodeServer
+import OpenCodeSession
 import OpenCodeTestSupport
 import Synchronization
 import Testing
@@ -68,6 +69,184 @@ struct AppFeatureTests {
       $0.savedData = .unreadable(.storage(.denied))
     }
     #expect(store.state.savedServer == TestServer.server)
+  }
+
+
+
+  @Test("the shell forwards queues, durable boundaries, reverts, shells and jobs to the session")
+  func sessionEventForwarding() async {
+    let server = TestServer.server
+    let root = OpenCodeSession(
+      id: "root",
+      serverTitle: "Root",
+      projectID: "p1",
+      directory: "/work/opencode",
+      updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let selection = SessionSelection(
+      serverID: server.persistenceID,
+      sessionID: "root",
+      intent: .browse
+    )
+    var session = SessionFeature.State(
+      id: 1,
+      server: server,
+      selection: selection,
+      session: root
+    )
+    session.isLive = true
+    let home = HomeFeature.State(server: server, sessions: [root], hasLoaded: true)
+    let connection = ConnectionFeature.State(id: 1, server: server, phase: .connected)
+    let app = AppFeature.State(connection: connection, home: home, session: session)
+    let clientCalls = CallCounter()
+    let client = OpenCodeClient(
+      health: { _ in throw OpenCodeClientError(.unsupported) },
+      redeemPairing: { _ in throw OpenCodeClientError(.unsupported) },
+      projects: { _ in [] },
+      sessionPage: { _, _, _ in SessionPage(sessions: []) },
+      getSession: { _, _ in
+        _ = clientCalls.next()
+        return root
+      },
+      activeSessionIDs: { _ in [] },
+      sessionIsActive: { _, _ in false },
+      pendingInputs: { _, _ in
+        [PendingInput(id: "steer-1", text: "keep going", delivery: .steer)]
+      },
+      events: { _, _ in AsyncThrowingStream { $0.finish() } }
+    )
+    let store = TestStore(initialState: app) {
+      AppFeature()
+    } withDependencies: {
+      $0.sharedStore = self.storage()
+      $0.networkPath = self.quietPath()
+      $0.openCodeClient = client
+      $0.clock = .testValue
+    }
+    store.exhaustivity = .off
+    let token = ConnectionFeature.Token(attempt: 1_000, stream: 0)
+    let shell = ServerShell(id: "shell-1", command: "swift test", sessionID: "root")
+
+    await store.send(.connection(.streamEvent(token: token, event: .shellStarted(shell))))
+    await settle(store)
+    #expect(store.state.session?.background.shells.map(\.id) == ["shell-1"])
+
+    let job = ServerJob(id: "job-1", kind: .codemode, sessionID: "root", isRunning: true)
+    await store.send(.connection(.streamEvent(token: token, event: .jobUpdated(job))))
+    await settle(store)
+    #expect(store.state.session?.background.jobs.map(\.id) == ["job-1"])
+
+    await store.send(
+      .connection(
+        .streamEvent(token: token, event: .inputQueueChanged(sessionID: "root", inputID: "steer-1"))
+      )
+    )
+    await settle(store)
+    #expect(store.state.session?.pendingInputs.map(\.id) == ["steer-1"])
+
+    let before = clientCalls.count
+    await store.send(
+      .connection(
+        .streamEvent(
+          token: token,
+          event: .contentBatch(
+            sessionID: "root",
+            events: [.textEnded(messageID: "m1", ordinal: 0, text: "done")]
+          )
+        )
+      )
+    )
+    await settle(store)
+    #expect(clientCalls.count > before)
+
+    await store.send(
+      .connection(
+        .streamEvent(token: token, event: .revertChanged(sessionID: "root", messageID: "m1", committed: false))
+      )
+    )
+    await settle(store)
+    #expect(store.state.session?.root?.revertMessageID == "m1")
+
+    await store.send(
+      .connection(.streamEvent(token: token, event: .shellEnded(shellID: "shell-1")))
+    )
+    await settle(store)
+    #expect(store.state.session?.background.shells.isEmpty == true)
+  }
+
+  @Test("opening a session creates the child and a replacement gets a new identity")
+  func sessionOwnership() async {
+    let home = HomeFeature.State(
+      server: TestServer.server,
+      sessions: [
+        OpenCodeSession(
+          id: "a", serverTitle: "A", projectID: "p1", directory: "/work/opencode",
+          updatedAt: Date(timeIntervalSince1970: 1_700_000_000)),
+        OpenCodeSession(
+          id: "b", serverTitle: "B", projectID: "p1", directory: "/work/opencode",
+          updatedAt: Date(timeIntervalSince1970: 1_700_000_100)),
+      ],
+      hasLoaded: true
+    )
+    let store = TestStore(
+      initialState: AppFeature.State(home: home)
+    ) {
+      AppFeature()
+    } withDependencies: {
+      $0.sharedStore = self.storage()
+      $0.networkPath = self.quietPath()
+      $0.openCodeClient = .testValue
+    }
+    store.exhaustivity = .off
+
+    let first = SessionSelection(
+      serverID: TestServer.server.persistenceID, sessionID: "a", intent: .catchUpCard
+    )
+    await store.send(.home(.delegate(.openSession(first))))
+    let firstID = store.state.session?.id
+    #expect(firstID != nil)
+    #expect(store.state.session?.selection.intent == .catchUpCard)
+    #expect(store.state.session?.root?.id == "a")
+
+    let second = SessionSelection(
+      serverID: TestServer.server.persistenceID, sessionID: "b", intent: .browse
+    )
+    await store.send(.home(.delegate(.openSession(second))))
+    #expect(store.state.session?.id != firstID)
+    #expect(store.state.session?.root?.id == "b")
+    #expect(store.state.sessionDestination == second)
+
+    await store.send(.sessionDestinationDismissed)
+    #expect(store.state.session == nil)
+    #expect(store.state.sessionDestination == nil)
+  }
+
+  @Test("a selection from another server cannot open a session here")
+  func sessionServerIsolation() async {
+    let home = HomeFeature.State(server: TestServer.server, hasLoaded: true)
+    let store = TestStore(initialState: AppFeature.State(home: home)) {
+      AppFeature()
+    } withDependencies: {
+      $0.sharedStore = self.storage()
+      $0.networkPath = self.quietPath()
+      $0.openCodeClient = .testValue
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .home(
+        .delegate(
+          .openSession(
+            SessionSelection(
+              serverID: TestServer.other.persistenceID,
+              sessionID: "a",
+              intent: .browse
+            )
+          )
+        )
+      )
+    )
+    #expect(store.state.session == nil)
   }
 
   @Test("a valid saved server and its launch cache restore together")
@@ -801,6 +980,13 @@ struct AppFeatureTests {
     }
     #expect(store.state.savedData == .unreadable(.storage(.unavailable)))
     #expect(keychain.writes == 0)
+  }
+
+  private func settle(_ store: TestStoreOf<AppFeature>) async {
+    for _ in 0..<10 {
+      await store.finish()
+      await store.skipReceivedActions(strict: false)
+    }
   }
 
   private func quietPath() -> NetworkPathClient {
