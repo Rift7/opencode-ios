@@ -71,6 +71,20 @@ Package-only tests, without the app target:
 swift test --package-path ios/OpenCodeKit
 ```
 
+P8 surfaces:
+
+```sh
+xcodebuild -project ios/OpenCode.xcodeproj -scheme OpenCode \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro Max' -skipMacroValidation \
+  -only-testing:OpenCodeUITests/TranscriptUITests test
+xcodebuild -project ios/OpenCode.xcodeproj -scheme OpenCode \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro Max' -skipMacroValidation \
+  -only-testing:OpenCodeUITests/TranscriptScrollTraceUITests test
+```
+
+The fixture modes `connected-transcript-long`, `connected-transcript-older` and
+`connected-transcript-stream` are synthetic and never open a socket.
+
 ## Where tests run
 
 | Suite | Location | Runner |
@@ -99,6 +113,28 @@ entitlement note that puts the round-trip in the UI tests.
 The device probes print `OPENCODE_PROBE …` lines with a classification only: no address, credential,
 message or file content.
 
+## Transcript (P8)
+
+- `SessionFeature` owns one authoritative read; the transcript is part of it. Older history has
+  session + generation + cursor fencing. Do not add a second transcript refresh queue.
+- Grouping and projection are pure (`OpenCodeTranscript`). The view renders values and sends actions; it
+  does not parse Markdown in a `body` getter.
+- Markdown parses off the main actor into `MarkdownBlockCache` (256 entries / 4 MiB, cleared on memory
+  warning). Remote images and links are inert until the person confirms; no web view.
+- The list is a SwiftUI `ScrollView` + `LazyVStack`. Do not reintroduce the UIKit follower, send flights or
+  row growth. Following survives tail height changes while the reader was at the end; only a reader drag
+  stops it, and browsing never re-pins. Reduce Motion replaces the jump glide with the shared reduced fade.
+- Markdown publication carries a revision. A newer text or a disappeared row fences every older parse;
+  `MarkdownBlockPresenter` is the only publisher and the cache stays bounded. Do not assign parse results
+  straight into view state.
+- Events racing a read are replayed up to 512 batches. Crossing the bound is explicit: the partial replay is
+  discarded, persistent `SessionRecovery` is set, and the refresh coordinator runs a bounded recovery. A
+  durable boundary stored with it keeps the 200 ms settlement delay; failure keeps the requirement; only a
+  successful authoritative transcript with no new overflow clears it. One immediate attempt plus one delayed
+  retry, then a recoverable failure. Do not silently drop, truncate, or raise the buffer without changing that
+  policy and its tests.
+- Media, file opening, math/Mermaid typesetting and composer quote actions belong to P9/P10.
+
 ## Test conventions
 
 - Swift Testing for reducers, dependency clients, transport decoding, persistence and formatting.
@@ -110,9 +146,9 @@ message or file content.
 
 ## Where the work stands
 
-`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P5 and P6 are merged into
-`ios`; P7 is implemented on `ios-session`. Transcript and composer behavior is **not** claimed; P7 leaves
-their state boundaries in place.
+`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P7 are merged into `ios`
+(P7 as `92a7c677`). P8 is implemented on `ios-transcript` (draft PR #7; corrections at `151b7ff5`); the composer is P9. The transcript's
+state boundaries are P7's refresh identity plus P8's per-session `TranscriptState`.
 
 What P6 added, in one paragraph: `HomeFeature` replaces the project-only connected destination with the
 authenticated Home — projects, the drawer's pinned/recent session lists, 50-session paging, local and
@@ -129,7 +165,7 @@ shell/background panel. One authoritative read carries the audited refresh reaso
 follow-up and replayed raced events; Stop resolves ambiguous failures by reading the run and the inbox
 before retrying, and a resumed run is a success. The family walk is bounded and cycle-safe; requests use
 strict models, typed validation and read-back settlement; shells tail bounded output and drain before
-stop. Mark All fans receipts out to unread Home rows only. Transcript and composer remain P8/P9.
+stop. Mark All fans receipts out to unread Home rows only. The transcript is P8; composer editing and sends are P9.
 
 Useful entry points:
 
@@ -185,7 +221,7 @@ Useful entry points:
 | Local-network prompt / real socket | P14 | Denied prompt → no fixture request and unreachable copy; allowed → fixture request; real background/foreground socket reconnect. |
 | Production identifiers (bundle/team/App Group/Keychain) | P12/P14 | Owner-supplied identity builds and signs; credentials persist across relaunch; no historical values copied. |
 | Push notifications | P12 | Relay + credentials exist and the feature defaults off; without them, blocked/unverified. |
-| Transcript and composer | P8–P9 | P7's `SessionSelection` and refresh identity are consumed; P8 transcript rows; P9 composer/drafts/sends. |
+| Composer and quote intent | P9 | P8 renders transcript rows and quote cards; P9 consumes selection as a quote and owns drafts/sends. |
 
 ## Phase-end checklist
 

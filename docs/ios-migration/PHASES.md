@@ -16,7 +16,7 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | P5 | App shell: launch, connection, pairing, reconnect | done — merged into `ios` as `3b34932c` (PR #4) | `STATUS.md`, `PARITY.md` App shell, `ConnectionFeatureTests`, UI tests |
 | P6 | Home, drawer, projects, Catch Up, What's New | done — merged into `ios` as `7966dcfe` (PR #5, tree `25b6d297`) | `STATUS.md` Phase 6, `PARITY.md` Home, `HomeFeatureTests`, 8 UI tests, screenshots, scroll trace |
 | **P7** | **Session, subagents, background work, request review** | **done on `ios-session`** (draft PR) | `STATUS.md` Phase 7, `PARITY.md` Session, `SessionFeatureTests`, request-model and family tests, 5 UI tests, screenshots |
-| P8 | Transcript | not started | folders only |
+| **P8** | **Transcript** | **done on `ios-transcript`** (draft PR #7, overflow-recovery head `151b7ff5`) | `STATUS.md` Phase 8, `PARITY.md` Transcript, 26 grouping/Markdown + 19 session + 11 decoding tests, 9 UI journeys, 2 scroll traces, 6 screenshots |
 | P9 | Composer | not started | folders only |
 | P10 | Media | not started | folders only |
 | P11 | Settings, experiments, diagnostics, onboarding | not started | folders only |
@@ -84,14 +84,17 @@ P7 consumes `SessionSelection(serverID, sessionID, intent)` from Home; the P6 pl
 session screen shows metadata, the run's Stop, subagent pages, permission/form review, pending inputs and
 the shell/background panel. It deliberately does **not** render transcript rows or a composer.
 
-P8 starts from `ios` once P7 is merged. Prerequisites:
+P8 started from `origin/ios` at `92a7c677` (PR #6 merged; merged tree `e8e1db5b`, byte-identical to the
+reviewed `56c10086`). The task branch is `ios-transcript`. It consumes `SessionRefresh.id`/`RefreshReason`
+rather than adding a second read queue; transcript windows and settlement extend the same read plan (D-58).
+The transcript target is `OpenCodeTranscript`; the UI lives in `ios/OpenCode/Transcript` (D-63).
 
-1. **`ios-session` reviewed and merged into `ios`.** The merge is the hand-off.
-2. P8 consumes the session's refresh identity (`SessionRefresh.id`, `RefreshReason`) rather than adding a
-   second authoritative-read queue; transcript windows and settlement reads extend the same read plan.
-3. P9 owns composer editing, drafts, sends and queued-input presentation. P7 exposes the inbox model and
-   `strandedSteerTapped`; it does not claim the composer.
-4. Production identifiers (bundle id, App Group) must be settled before a distributed build stores real
-   credentials; the Keychain service derives from the configured bundle id (D-32).
-5. The haptics live path, camera QR scanning, VoiceOver on device and the local-network prompt need
-   physical checks; they are reported unverified.
+P9 starts from `ios` once P8 is merged. Prerequisites:
+
+1. **`ios-transcript` reviewed and merged into `ios`.** The merge is the hand-off.
+2. P9 owns composer editing, drafts, sends, the queued-input sheet, the request dock and quote-to-composer.
+   P8 renders quotes but exposes no composer action.
+3. P10 owns media, file opening, image/tool mosaics, the browser, math typesetting and Mermaid.
+4. `/api/experimental/session/{id}/wait` has no call site until the P9 send path.
+5. Production identifiers, device VoiceOver/selection and the local-network prompt still need the documented
+   checks; they remain unverified.

@@ -45,6 +45,17 @@
         }
       }
     },
+    "common.done": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done"
+          }
+        }
+      }
+    },
     "common.pair": {
       "extractionState": "manual",
       "localizations": {
@@ -52,6 +63,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pair"
+          }
+        }
+      }
+    },
+    "common.send": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send"
           }
         }
       }
@@ -727,6 +749,523 @@
         }
       }
     },
+    "home.all_caught_up": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All Caught Up"
+          }
+        }
+      }
+    },
+    "home.all_caught_up_detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing is waiting on you."
+          }
+        }
+      }
+    },
+    "home.catch_up": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Catch Up"
+          }
+        }
+      }
+    },
+    "home.catch_up_count": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld"
+          }
+        }
+      }
+    },
+    "home.catch_up_error": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t mark “%@” as read. Undo to put the card back."
+          }
+        }
+      }
+    },
+    "home.catch_up_hint": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark it read, or keep it unread for later."
+          }
+        }
+      }
+    },
+    "home.clear_search": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear search"
+          }
+        }
+      }
+    },
+    "home.connected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connected"
+          }
+        }
+      }
+    },
+    "home.delete.action": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete"
+          }
+        }
+      }
+    },
+    "home.delete.message": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete “%@”? This can’t be undone."
+          }
+        }
+      }
+    },
+    "home.delete.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Session?"
+          }
+        }
+      }
+    },
+    "home.delete_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t delete “%@”. It’s back in the list."
+          }
+        }
+      }
+    },
+    "home.delete_unverified": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t confirm whether “%@” was deleted. Its pins and read history are safe."
+          }
+        }
+      }
+    },
+    "home.keep_unread": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep Unread"
+          }
+        }
+      }
+    },
+    "home.load_more": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load More"
+          }
+        }
+      }
+    },
+    "home.mark_all_read": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark All as Read"
+          }
+        }
+      }
+    },
+    "home.mark_read": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark Read"
+          }
+        }
+      }
+    },
+    "home.mark_read_action": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark as Read"
+          }
+        }
+      }
+    },
+    "home.mark_read_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t mark “%@” as read."
+          }
+        }
+      }
+    },
+    "home.mark_unread_action": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark as Unread"
+          }
+        }
+      }
+    },
+    "home.needs_attention": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needs your input"
+          }
+        }
+      }
+    },
+    "home.no_matches": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No sessions match."
+          }
+        }
+      }
+    },
+    "home.no_projects": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No projects yet."
+          }
+        }
+      }
+    },
+    "home.no_sessions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No sessions yet."
+          }
+        }
+      }
+    },
+    "home.older_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t load older sessions."
+          }
+        }
+      }
+    },
+    "home.open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open"
+          }
+        }
+      }
+    },
+    "home.open_sessions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Sessions"
+          }
+        }
+      }
+    },
+    "home.pin": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pin"
+          }
+        }
+      }
+    },
+    "home.pinned": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pinned"
+          }
+        }
+      }
+    },
+    "home.pinned_label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pinned"
+          }
+        }
+      }
+    },
+    "home.projects": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Projects"
+          }
+        }
+      }
+    },
+    "home.recent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recents"
+          }
+        }
+      }
+    },
+    "home.recents": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recents"
+          }
+        }
+      }
+    },
+    "home.reconnecting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconnecting…"
+          }
+        }
+      }
+    },
+    "home.refresh_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t refresh Home."
+          }
+        }
+      }
+    },
+    "home.running": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working"
+          }
+        }
+      }
+    },
+    "home.search": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search sessions"
+          }
+        }
+      }
+    },
+    "home.search_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t search sessions."
+          }
+        }
+      }
+    },
+    "home.server_switcher.saved": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved Servers"
+          }
+        }
+      }
+    },
+    "home.server_switcher.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server"
+          }
+        }
+      }
+    },
+    "home.sessions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessions"
+          }
+        }
+      }
+    },
+    "home.snapshot_save_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t save the Home cache."
+          }
+        }
+      }
+    },
+    "home.snapshot_unreadable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t read the saved Home cache."
+          }
+        }
+      }
+    },
+    "home.undo": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Undo"
+          }
+        }
+      }
+    },
+    "home.unpin": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unpin"
+          }
+        }
+      }
+    },
+    "home.unread": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unread"
+          }
+        }
+      }
+    },
+    "home.whats_new": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What’s New"
+          }
+        }
+      }
+    },
     "notice.cache_unreadable": {
       "extractionState": "manual",
       "localizations": {
@@ -1013,710 +1552,6 @@
         }
       }
     },
-    "common.done": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Done"
-          }
-        }
-      }
-    },
-    "home.connected": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Connected"
-          }
-        }
-      }
-    },
-    "home.projects": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Projects"
-          }
-        }
-      }
-    },
-    "home.no_projects": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No projects yet."
-          }
-        }
-      }
-    },
-    "home.recent": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recents"
-          }
-        }
-      }
-    },
-    "home.no_sessions": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No sessions yet."
-          }
-        }
-      }
-    },
-    "home.reconnecting": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reconnecting…"
-          }
-        }
-      }
-    },
-    "home.open_sessions": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open Sessions"
-          }
-        }
-      }
-    },
-    "home.sessions": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sessions"
-          }
-        }
-      }
-    },
-    "home.search": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Search sessions"
-          }
-        }
-      }
-    },
-    "home.clear_search": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clear search"
-          }
-        }
-      }
-    },
-    "home.pinned": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pinned"
-          }
-        }
-      }
-    },
-    "home.recents": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recents"
-          }
-        }
-      }
-    },
-    "home.no_matches": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No sessions match."
-          }
-        }
-      }
-    },
-    "home.catch_up": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Catch Up"
-          }
-        }
-      }
-    },
-    "home.catch_up_count": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld"
-          }
-        }
-      }
-    },
-    "home.whats_new": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "What’s New"
-          }
-        }
-      }
-    },
-    "home.load_more": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Load More"
-          }
-        }
-      }
-    },
-    "home.mark_read": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mark Read"
-          }
-        }
-      }
-    },
-    "home.keep_unread": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Keep Unread"
-          }
-        }
-      }
-    },
-    "home.open": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open"
-          }
-        }
-      }
-    },
-    "home.undo": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Undo"
-          }
-        }
-      }
-    },
-    "home.all_caught_up": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "All Caught Up"
-          }
-        }
-      }
-    },
-    "home.all_caught_up_detail": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nothing is waiting on you."
-          }
-        }
-      }
-    },
-    "home.catch_up_hint": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mark it read, or keep it unread for later."
-          }
-        }
-      }
-    },
-    "home.catch_up_error": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t mark “%@” as read. Undo to put the card back."
-          }
-        }
-      }
-    },
-    "home.needs_attention": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Needs your input"
-          }
-        }
-      }
-    },
-    "home.running": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Working"
-          }
-        }
-      }
-    },
-    "home.unread": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unread"
-          }
-        }
-      }
-    },
-    "home.pinned_label": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pinned"
-          }
-        }
-      }
-    },
-    "home.pin": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pin"
-          }
-        }
-      }
-    },
-    "home.unpin": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unpin"
-          }
-        }
-      }
-    },
-    "home.mark_read_action": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mark as Read"
-          }
-        }
-      }
-    },
-    "home.mark_unread_action": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mark as Unread"
-          }
-        }
-      }
-    },
-    "home.delete.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete Session?"
-          }
-        }
-      }
-    },
-    "home.delete.message": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete “%@”? This can’t be undone."
-          }
-        }
-      }
-    },
-    "home.delete.action": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete"
-          }
-        }
-      }
-    },
-    "home.delete_failed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t delete “%@”. It’s back in the list."
-          }
-        }
-      }
-    },
-    "home.mark_read_failed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t mark “%@” as read."
-          }
-        }
-      }
-    },
-    "home.refresh_failed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t refresh Home."
-          }
-        }
-      }
-    },
-    "home.snapshot_unreadable": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t read the saved Home cache."
-          }
-        }
-      }
-    },
-    "home.snapshot_save_failed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t save the Home cache."
-          }
-        }
-      }
-    },
-    "home.search_failed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t search sessions."
-          }
-        }
-      }
-    },
-    "home.older_failed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t load older sessions."
-          }
-        }
-      }
-    },
-    "home.server_switcher.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server"
-          }
-        }
-      }
-    },
-    "home.server_switcher.saved": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Saved Servers"
-          }
-        }
-      }
-    },
-    "session.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Session"
-          }
-        }
-      }
-    },
-    "session.from_catch_up": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Opened from Catch Up"
-          }
-        }
-      }
-    },
-    "session.later": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The session screen arrives in a later phase."
-          }
-        }
-      }
-    },
-    "session.later_detail": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This build carries the selection but does not show a transcript or composer yet."
-          }
-        }
-      }
-    },
-    "whats_new.intro": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "What’s new in this build."
-          }
-        }
-      }
-    },
-    "whats_new.home_drawer.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Drawer and Catch Up"
-          }
-        }
-      }
-    },
-    "whats_new.home_drawer.body": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sessions, pins, read state and Catch Up now live in the native drawer."
-          }
-        }
-      }
-    },
-    "whats_new.catch_up.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Catch Up"
-          }
-        }
-      }
-    },
-    "whats_new.catch_up.body": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Swipe or use the actions to mark a session read, or keep it unread."
-          }
-        }
-      }
-    },
-    "whats_new.project_icons.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Project Icons"
-          }
-        }
-      }
-    },
-    "whats_new.project_icons.body": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Projects show their initial and directory beside each session."
-          }
-        }
-      }
-    },
-    "home.delete_unverified": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t confirm whether “%@” was deleted. Its pins and read history are safe."
-          }
-        }
-      }
-    },
-    "common.send": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Send"
-          }
-        }
-      }
-    },
-    "home.mark_all_read": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mark All as Read"
-          }
-        }
-      }
-    },
-    "session.working": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Working"
-          }
-        }
-      }
-    },
-    "session.stopping": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stopping…"
-          }
-        }
-      }
-    },
-    "session.stop": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop"
-          }
-        }
-      }
-    },
-    "session.subagents": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Subagents"
-          }
-        }
-      }
-    },
     "session.back": {
       "extractionState": "manual",
       "localizations": {
@@ -1728,50 +1563,6 @@
         }
       }
     },
-    "session.transcript_later": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The transcript arrives in Phase 8."
-          }
-        }
-      }
-    },
-    "session.transcript_later_detail": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Session controls, subagents, requests and background work are live."
-          }
-        }
-      }
-    },
-    "session.requests.pending": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Needs your input"
-          }
-        }
-      }
-    },
-    "session.requests.review": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Review"
-          }
-        }
-      }
-    },
     "session.background": {
       "extractionState": "manual",
       "localizations": {
@@ -1779,710 +1570,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Background Work"
-          }
-        }
-      }
-    },
-    "session.background_summary": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$@ · %2$@"
-          }
-        }
-      }
-    },
-    "session.background.shells": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shells"
-          }
-        }
-      }
-    },
-    "session.background.jobs": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Jobs"
-          }
-        }
-      }
-    },
-    "session.background.none": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nothing is running in the background."
-          }
-        }
-      }
-    },
-    "session.shell.load_earlier": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Load Earlier"
-          }
-        }
-      }
-    },
-    "session.shell.stop": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop Shell"
-          }
-        }
-      }
-    },
-    "session.shell.stop_title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop This Shell?"
-          }
-        }
-      }
-    },
-    "session.shell.stop_message": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The command ends now. The output shown here stays until you close it."
-          }
-        }
-      }
-    },
-    "session.shell.no_output": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No Output Yet"
-          }
-        }
-      }
-    },
-    "session.shell.unavailable": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Output Unavailable"
-          }
-        }
-      }
-    },
-    "session.requests.run_command": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Run Command?"
-          }
-        }
-      }
-    },
-    "session.requests.allow_once": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Allow Once"
-          }
-        }
-      }
-    },
-    "session.requests.always": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Always Allow"
-          }
-        }
-      }
-    },
-    "session.requests.deny": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Deny"
-          }
-        }
-      }
-    },
-    "session.requests.failed_reply": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t send reply"
-          }
-        }
-      }
-    },
-    "session.requests.failed_answer": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t send answer"
-          }
-        }
-      }
-    },
-    "session.requests.failed_dismiss": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t dismiss request"
-          }
-        }
-      }
-    },
-    "session.requests.settled": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This request was already settled."
-          }
-        }
-      }
-    },
-    "session.requests.settled_elsewhere": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This request was already answered or dismissed elsewhere."
-          }
-        }
-      }
-    },
-    "session.requests.no_longer_waiting": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This request is no longer waiting."
-          }
-        }
-      }
-    },
-    "session.requests.requested_by": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Requested by %1$s"
-          }
-        }
-      }
-    },
-    "session.requests.choose_multiple": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose one or more"
-          }
-        }
-      }
-    },
-    "session.requests.completed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Completed"
-          }
-        }
-      }
-    },
-    "session.requests.open_step": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open Step"
-          }
-        }
-      }
-    },
-    "session.requests.answer_placeholder": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Answer"
-          }
-        }
-      }
-    },
-    "session.requests.own_answer": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your answer"
-          }
-        }
-      }
-    },
-    "session.requests.deny_reason": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tell the agent what to do instead (optional)"
-          }
-        }
-      }
-    },
-    "session.requests.validation.required": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This field is required."
-          }
-        }
-      }
-    },
-    "session.requests.validation.complete_step": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Complete this step."
-          }
-        }
-      }
-    },
-    "session.requests.validation.min_length": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Must be at least %1$d characters."
-          }
-        }
-      }
-    },
-    "session.requests.validation.max_length": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Must be at most %1$d characters."
-          }
-        }
-      }
-    },
-    "session.requests.validation.invalid_format": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This answer does not match the requested format."
-          }
-        }
-      }
-    },
-    "session.requests.validation.choose_option": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose an available option."
-          }
-        }
-      }
-    },
-    "session.requests.validation.invalid_email": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enter an email address."
-          }
-        }
-      }
-    },
-    "session.requests.validation.invalid_url": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enter a web address."
-          }
-        }
-      }
-    },
-    "session.requests.validation.invalid_date": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enter a date as YYYY-MM-DD."
-          }
-        }
-      }
-    },
-    "session.requests.validation.invalid_date_time": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enter a date and time."
-          }
-        }
-      }
-    },
-    "session.requests.validation.minimum": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Must be at least %1$s."
-          }
-        }
-      }
-    },
-    "session.requests.validation.maximum": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Must be at most %1$s."
-          }
-        }
-      }
-    },
-    "session.requests.validation.whole_number": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enter a whole number."
-          }
-        }
-      }
-    },
-    "session.requests.validation.min_items": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose at least %1$d."
-          }
-        }
-      }
-    },
-    "session.requests.validation.max_items": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose at most %1$d."
-          }
-        }
-      }
-    },
-    "session.requests.validation.invalid_value": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This answer is not valid."
-          }
-        }
-      }
-    },
-    "session.notice.refresh": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t refresh the session"
-          }
-        }
-      }
-    },
-    "session.notice.family": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t load the session family"
-          }
-        }
-      }
-    },
-    "session.notice.requests": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t load requests"
-          }
-        }
-      }
-    },
-    "session.notice.interrupt": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t stop session"
-          }
-        }
-      }
-    },
-    "session.notice.shell": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t stop shell"
-          }
-        }
-      }
-    },
-    "session.notice.output": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t refresh output"
-          }
-        }
-      }
-    },
-    "session.notice.job": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t stop background job"
-          }
-        }
-      }
-    },
-    "session.notice.wake": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t send the pending message now"
-          }
-        }
-      }
-    },
-    "session.notice.gone": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This session no longer exists."
-          }
-        }
-      }
-    },
-    "session.inputs.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pending Messages"
-          }
-        }
-      }
-    },
-    "session.inputs.send_now": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Send Now"
-          }
-        }
-      }
-    },
-    "session.inputs.steering": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Steering"
-          }
-        }
-      }
-    },
-    "session.inputs.queued": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Queued"
-          }
-        }
-      }
-    },
-    "session.requests.yes": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Yes"
-          }
-        }
-      }
-    },
-    "session.requests.no": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No"
-          }
-        }
-      }
-    },
-    "session.subagent_count.one": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$d subagent"
-          }
-        }
-      }
-    },
-    "session.subagent_count.other": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$d subagents"
-          }
-        }
-      }
-    },
-    "session.requests.count.one": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$d pending request"
-          }
-        }
-      }
-    },
-    "session.requests.count.other": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$d pending requests"
-          }
-        }
-      }
-    },
-    "session.background.shell.one": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$d shell"
-          }
-        }
-      }
-    },
-    "session.background.shell.other": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$d shells"
           }
         }
       }
@@ -2509,13 +1596,145 @@
         }
       }
     },
-    "session.loading": {
+    "session.background.jobs": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Loading session…"
+            "value": "Jobs"
+          }
+        }
+      }
+    },
+    "session.background.none": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing is running in the background."
+          }
+        }
+      }
+    },
+    "session.background.shell.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$d shell"
+          }
+        }
+      }
+    },
+    "session.background.shell.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$d shells"
+          }
+        }
+      }
+    },
+    "session.background.shells": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shells"
+          }
+        }
+      }
+    },
+    "session.background_summary": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "session.from_catch_up": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opened from Catch Up"
+          }
+        }
+      }
+    },
+    "session.inputs.queued": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queued"
+          }
+        }
+      }
+    },
+    "session.inputs.send_now": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send Now"
+          }
+        }
+      }
+    },
+    "session.inputs.steering": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steering"
+          }
+        }
+      }
+    },
+    "session.inputs.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pending Messages"
+          }
+        }
+      }
+    },
+    "session.later": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The session screen arrives in a later phase."
+          }
+        }
+      }
+    },
+    "session.later_detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This build carries the selection but does not show a transcript or composer yet."
           }
         }
       }
@@ -2531,24 +1750,541 @@
         }
       }
     },
-    "session.shell.drain_title": {
+    "session.loading": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Couldn’t read all output"
+            "value": "Loading session…"
           }
         }
       }
     },
-    "session.shell.drain_message": {
+    "session.notice.family": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The shell may still be running. Discard the unread output and stop it?"
+            "value": "Couldn’t load the session family"
+          }
+        }
+      }
+    },
+    "session.notice.gone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This session no longer exists."
+          }
+        }
+      }
+    },
+    "session.notice.interrupt": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t stop session"
+          }
+        }
+      }
+    },
+    "session.notice.job": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t stop background job"
+          }
+        }
+      }
+    },
+    "session.notice.output": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t refresh output"
+          }
+        }
+      }
+    },
+    "session.notice.refresh": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t refresh the session"
+          }
+        }
+      }
+    },
+    "session.notice.requests": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t load requests"
+          }
+        }
+      }
+    },
+    "session.notice.shell": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t stop shell"
+          }
+        }
+      }
+    },
+    "session.notice.wake": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t send the pending message now"
+          }
+        }
+      }
+    },
+    "session.requests.allow_once": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow Once"
+          }
+        }
+      }
+    },
+    "session.requests.always": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Always Allow"
+          }
+        }
+      }
+    },
+    "session.requests.answer_placeholder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answer"
+          }
+        }
+      }
+    },
+    "session.requests.choose_multiple": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose one or more"
+          }
+        }
+      }
+    },
+    "session.requests.completed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Completed"
+          }
+        }
+      }
+    },
+    "session.requests.count.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$d pending request"
+          }
+        }
+      }
+    },
+    "session.requests.count.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$d pending requests"
+          }
+        }
+      }
+    },
+    "session.requests.deny": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deny"
+          }
+        }
+      }
+    },
+    "session.requests.deny_reason": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tell the agent what to do instead (optional)"
+          }
+        }
+      }
+    },
+    "session.requests.failed_answer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t send answer"
+          }
+        }
+      }
+    },
+    "session.requests.failed_dismiss": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t dismiss request"
+          }
+        }
+      }
+    },
+    "session.requests.failed_reply": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t send reply"
+          }
+        }
+      }
+    },
+    "session.requests.no": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No"
+          }
+        }
+      }
+    },
+    "session.requests.no_longer_waiting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This request is no longer waiting."
+          }
+        }
+      }
+    },
+    "session.requests.open_step": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Step"
+          }
+        }
+      }
+    },
+    "session.requests.own_answer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your answer"
+          }
+        }
+      }
+    },
+    "session.requests.pending": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needs your input"
+          }
+        }
+      }
+    },
+    "session.requests.requested_by": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Requested by %1$s"
+          }
+        }
+      }
+    },
+    "session.requests.review": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review"
+          }
+        }
+      }
+    },
+    "session.requests.run_command": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run Command?"
+          }
+        }
+      }
+    },
+    "session.requests.settled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This request was already settled."
+          }
+        }
+      }
+    },
+    "session.requests.settled_elsewhere": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This request was already answered or dismissed elsewhere."
+          }
+        }
+      }
+    },
+    "session.requests.validation.choose_option": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose an available option."
+          }
+        }
+      }
+    },
+    "session.requests.validation.complete_step": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Complete this step."
+          }
+        }
+      }
+    },
+    "session.requests.validation.invalid_date": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter a date as YYYY-MM-DD."
+          }
+        }
+      }
+    },
+    "session.requests.validation.invalid_date_time": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter a date and time."
+          }
+        }
+      }
+    },
+    "session.requests.validation.invalid_email": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter an email address."
+          }
+        }
+      }
+    },
+    "session.requests.validation.invalid_format": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This answer does not match the requested format."
+          }
+        }
+      }
+    },
+    "session.requests.validation.invalid_url": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter a web address."
+          }
+        }
+      }
+    },
+    "session.requests.validation.invalid_value": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This answer is not valid."
+          }
+        }
+      }
+    },
+    "session.requests.validation.max_items": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose at most %1$d."
+          }
+        }
+      }
+    },
+    "session.requests.validation.max_length": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Must be at most %1$d characters."
+          }
+        }
+      }
+    },
+    "session.requests.validation.maximum": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Must be at most %1$s."
+          }
+        }
+      }
+    },
+    "session.requests.validation.min_items": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose at least %1$d."
+          }
+        }
+      }
+    },
+    "session.requests.validation.min_length": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Must be at least %1$d characters."
+          }
+        }
+      }
+    },
+    "session.requests.validation.minimum": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Must be at least %1$s."
+          }
+        }
+      }
+    },
+    "session.requests.validation.required": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This field is required."
+          }
+        }
+      }
+    },
+    "session.requests.validation.whole_number": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter a whole number."
+          }
+        }
+      }
+    },
+    "session.requests.yes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yes"
           }
         }
       }
@@ -2564,6 +2300,28 @@
         }
       }
     },
+    "session.shell.drain_message": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The shell may still be running. Discard the unread output and stop it?"
+          }
+        }
+      }
+    },
+    "session.shell.drain_title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t read all output"
+          }
+        }
+      }
+    },
     "session.shell.keep": {
       "extractionState": "manual",
       "localizations": {
@@ -2571,6 +2329,1051 @@
           "stringUnit": {
             "state": "translated",
             "value": "Keep Output"
+          }
+        }
+      }
+    },
+    "session.shell.load_earlier": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load Earlier"
+          }
+        }
+      }
+    },
+    "session.shell.no_output": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Output Yet"
+          }
+        }
+      }
+    },
+    "session.shell.stop": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop Shell"
+          }
+        }
+      }
+    },
+    "session.shell.stop_message": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The command ends now. The output shown here stays until you close it."
+          }
+        }
+      }
+    },
+    "session.shell.stop_title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop This Shell?"
+          }
+        }
+      }
+    },
+    "session.shell.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Output Unavailable"
+          }
+        }
+      }
+    },
+    "session.stop": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop"
+          }
+        }
+      }
+    },
+    "session.stopping": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopping…"
+          }
+        }
+      }
+    },
+    "session.subagent_count.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$d subagent"
+          }
+        }
+      }
+    },
+    "session.subagent_count.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$d subagents"
+          }
+        }
+      }
+    },
+    "session.subagents": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subagents"
+          }
+        }
+      }
+    },
+    "session.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session"
+          }
+        }
+      }
+    },
+    "session.transcript_later": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The transcript arrives in Phase 8."
+          }
+        }
+      }
+    },
+    "session.transcript_later_detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session controls, subagents, requests and background work are live."
+          }
+        }
+      }
+    },
+    "session.working": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working"
+          }
+        }
+      }
+    },
+    "transcript.attached_image": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attached image"
+          }
+        }
+      }
+    },
+    "transcript.code": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CODE"
+          }
+        }
+      }
+    },
+    "transcript.compaction.cancelled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compaction interrupted"
+          }
+        }
+      }
+    },
+    "transcript.compaction.completed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compacted context"
+          }
+        }
+      }
+    },
+    "transcript.compaction.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compaction failed"
+          }
+        }
+      }
+    },
+    "transcript.compaction.provider": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Provider compacted its context"
+          }
+        }
+      }
+    },
+    "transcript.compaction.running": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compacting context…"
+          }
+        }
+      }
+    },
+    "transcript.compaction_usage": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$d input · %2$d output tokens"
+          }
+        }
+      }
+    },
+    "transcript.copy_code": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy Code"
+          }
+        }
+      }
+    },
+    "transcript.copy_path": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy Path"
+          }
+        }
+      }
+    },
+    "transcript.copy_reply": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy"
+          }
+        }
+      }
+    },
+    "transcript.empty_detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start the conversation below."
+          }
+        }
+      }
+    },
+    "transcript.empty_title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No messages yet"
+          }
+        }
+      }
+    },
+    "transcript.error.credentials": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server rejected these credentials."
+          }
+        }
+      }
+    },
+    "transcript.error.earlier": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t load earlier messages."
+          }
+        }
+      }
+    },
+    "transcript.error.generic": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t load the transcript."
+          }
+        }
+      }
+    },
+    "transcript.error.incompatible": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server isn’t an OpenCode V2 server."
+          }
+        }
+      }
+    },
+    "transcript.error.malformed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server sent messages this app couldn’t read."
+          }
+        }
+      }
+    },
+    "transcript.error.offline": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You’re offline."
+          }
+        }
+      }
+    },
+    "transcript.error.status": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server answered %1$d."
+          }
+        }
+      }
+    },
+    "transcript.error.timed_out": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server didn’t answer in time."
+          }
+        }
+      }
+    },
+    "transcript.error.unreachable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t reach the server."
+          }
+        }
+      }
+    },
+    "transcript.file": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File"
+          }
+        }
+      }
+    },
+    "transcript.file_later": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opening files arrives with the media phase. The path stays copied here."
+          }
+        }
+      }
+    },
+    "transcript.file_unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file is no longer available on the server."
+          }
+        }
+      }
+    },
+    "transcript.from_parent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sent by the parent agent"
+          }
+        }
+      }
+    },
+    "transcript.from_subagent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sent by a subagent"
+          }
+        }
+      }
+    },
+    "transcript.image": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image"
+          }
+        }
+      }
+    },
+    "transcript.jump_latest": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jump to Latest"
+          }
+        }
+      }
+    },
+    "transcript.link_copy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy Link"
+          }
+        }
+      }
+    },
+    "transcript.link_open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open"
+          }
+        }
+      }
+    },
+    "transcript.link_title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Link?"
+          }
+        }
+      }
+    },
+    "transcript.load_earlier": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load Earlier"
+          }
+        }
+      }
+    },
+    "transcript.loading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading messages…"
+          }
+        }
+      }
+    },
+    "transcript.loading_earlier": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading earlier messages…"
+          }
+        }
+      }
+    },
+    "transcript.math": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Math"
+          }
+        }
+      }
+    },
+    "transcript.messages_undone.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$d message undone"
+          }
+        }
+      }
+    },
+    "transcript.messages_undone.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$d messages undone"
+          }
+        }
+      }
+    },
+    "transcript.model_switched_from": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switched to %1$@ from %2$@"
+          }
+        }
+      }
+    },
+    "transcript.model_switched_to": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switched to %1$@"
+          }
+        }
+      }
+    },
+    "transcript.notice.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ failed"
+          }
+        }
+      }
+    },
+    "transcript.notice.finished": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ finished"
+          }
+        }
+      }
+    },
+    "transcript.notice.interrupted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ was interrupted"
+          }
+        }
+      }
+    },
+    "transcript.notice.shell": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shell"
+          }
+        }
+      }
+    },
+    "transcript.notice.subagent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subagent"
+          }
+        }
+      }
+    },
+    "transcript.quote": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quote"
+          }
+        }
+      }
+    },
+    "transcript.reply_end": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "End of reply"
+          }
+        }
+      }
+    },
+    "transcript.retrying": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ · retrying (attempt %2$d)"
+          }
+        }
+      }
+    },
+    "transcript.run_error.auth": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider rejected its credentials."
+          }
+        }
+      }
+    },
+    "transcript.run_error.content_filter": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider filtered this reply."
+          }
+        }
+      }
+    },
+    "transcript.run_error.context_overflow": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The conversation is too long for this model."
+          }
+        }
+      }
+    },
+    "transcript.run_error.internal": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider failed internally."
+          }
+        }
+      }
+    },
+    "transcript.run_error.invalid_output": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider sent an unreadable reply."
+          }
+        }
+      }
+    },
+    "transcript.run_error.invalid_request": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider rejected the request."
+          }
+        }
+      }
+    },
+    "transcript.run_error.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The run failed."
+          }
+        }
+      }
+    },
+    "transcript.run_error.overloaded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider is overloaded."
+          }
+        }
+      }
+    },
+    "transcript.run_error.quota": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider quota is used up."
+          }
+        }
+      }
+    },
+    "transcript.run_error.rate_limit": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider is rate limiting requests."
+          }
+        }
+      }
+    },
+    "transcript.run_error.stopped": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopped"
+          }
+        }
+      }
+    },
+    "transcript.run_error.timeout": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider timed out."
+          }
+        }
+      }
+    },
+    "transcript.run_error.tool": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A tool failed."
+          }
+        }
+      }
+    },
+    "transcript.run_error.transport": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t reach the provider."
+          }
+        }
+      }
+    },
+    "transcript.run_error.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model is unavailable."
+          }
+        }
+      }
+    },
+    "transcript.run_error.unsupported": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider doesn’t support this request."
+          }
+        }
+      }
+    },
+    "transcript.send_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message not sent"
+          }
+        }
+      }
+    },
+    "transcript.shell_exit": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exited with code %1$d"
+          }
+        }
+      }
+    },
+    "transcript.tool_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed tool"
+          }
+        }
+      }
+    },
+    "transcript.tool_image.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$d image"
+          }
+        }
+      }
+    },
+    "transcript.tool_image.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$d images"
+          }
+        }
+      }
+    },
+    "transcript.used_tools.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used %1$d Tool"
+          }
+        }
+      }
+    },
+    "transcript.used_tools.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used %1$d Tools"
+          }
+        }
+      }
+    },
+    "transcript.video": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video"
+          }
+        }
+      }
+    },
+    "transcript.working": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working"
+          }
+        }
+      }
+    },
+    "whats_new.catch_up.body": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swipe or use the actions to mark a session read, or keep it unread."
+          }
+        }
+      }
+    },
+    "whats_new.catch_up.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Catch Up"
+          }
+        }
+      }
+    },
+    "whats_new.home_drawer.body": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessions, pins, read state and Catch Up now live in the native drawer."
+          }
+        }
+      }
+    },
+    "whats_new.home_drawer.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drawer and Catch Up"
+          }
+        }
+      }
+    },
+    "whats_new.intro": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What’s new in this build."
+          }
+        }
+      }
+    },
+    "whats_new.project_icons.body": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Projects show their initial and directory beside each session."
+          }
+        }
+      }
+    },
+    "whats_new.project_icons.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project Icons"
           }
         }
       }

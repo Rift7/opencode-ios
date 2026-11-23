@@ -113,6 +113,11 @@ struct AppFeatureTests {
       pendingInputs: { _, _ in
         [PendingInput(id: "steer-1", text: "keep going", delivery: .steer)]
       },
+      transcript: { _, _, _ in
+        TranscriptPage(
+          items: [.assistantMarkdown(id: "m1-text-0", text: "done", inProgress: false)]
+        )
+      },
       events: { _, _ in AsyncThrowingStream { $0.finish() } }
     )
     let store = TestStore(initialState: app) {
@@ -158,6 +163,9 @@ struct AppFeatureTests {
     )
     await settle(store)
     #expect(clientCalls.count > before)
+    #expect(
+      store.state.session?.transcripts["root"]?.items.contains(where: { $0.id == "m1-text-0" }) == true
+    )
 
     await store.send(
       .connection(

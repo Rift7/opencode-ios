@@ -38,7 +38,7 @@ final class HomeUITests: XCTestCase {
 
     XCTAssertTrue(app.descendants(matching: .any)["root-phase-session"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.staticTexts["Alpha release notes"].exists)
-    XCTAssertTrue(app.staticTexts["The transcript arrives in Phase 8."].exists)
+    XCTAssertTrue(app.staticTexts["Can you review the transcript implementation?"].waitForExistence(timeout: 10))
     app.buttons["session-done"].tap()
     XCTAssertTrue(app.descendants(matching: .any)["root-phase-connected"].waitForExistence(timeout: 10))
   }

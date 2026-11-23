@@ -116,6 +116,14 @@ public struct OpenCodeClient: Sendable {
   public var stopShell: @Sendable (OpenCodeServer, String, String) async throws -> Void
   public var runningJobs: @Sendable (OpenCodeServer, String) async throws -> [ServerJob]
   public var cancelJob: @Sendable (OpenCodeServer, String) async throws -> Void
+  /// The newest messages, oldest first, and the cursor of the older page.
+  public var transcript: @Sendable (OpenCodeServer, String, Int) async throws -> TranscriptPage
+  /// One older page: the first call with no cursor reads the newest window again, so the client
+  /// can find its overlap before walking backwards.
+  public var transcriptHistory:
+    @Sendable (OpenCodeServer, String, String?) async throws -> TranscriptPage
+  /// One message's rows, ordered oldest first.
+  public var message: @Sendable (OpenCodeServer, String, String) async throws -> [TranscriptItem]
   /// The long-lived event subscription. The flow throws on disconnect; the owner reconnects.
   /// `onPhase` is awaited before the reconnect loop acts, so a consumer can show the state and
   /// re-read REST before the next socket opens.
@@ -181,6 +189,14 @@ public struct OpenCodeClient: Sendable {
     cancelJob: @escaping @Sendable (OpenCodeServer, String) async throws -> Void = { _, _ in
       throw OpenCodeClientError(.unsupported)
     },
+    transcript: @escaping @Sendable (OpenCodeServer, String, Int) async throws -> TranscriptPage = {
+      _, _, _ in TranscriptPage(items: [])
+    },
+    transcriptHistory: @escaping @Sendable (OpenCodeServer, String, String?) async throws ->
+      TranscriptPage = { _, _, _ in TranscriptPage(items: []) },
+    message: @escaping @Sendable (OpenCodeServer, String, String) async throws -> [TranscriptItem] = {
+      _, _, _ in []
+    },
     events: @escaping @Sendable (OpenCodeServer, @escaping @Sendable (EventStreamPhase) async -> Void) ->
       AsyncThrowingStream<ServerEvent, any Error>
   ) {
@@ -209,6 +225,9 @@ public struct OpenCodeClient: Sendable {
     self.stopShell = stopShell
     self.runningJobs = runningJobs
     self.cancelJob = cancelJob
+    self.transcript = transcript
+    self.transcriptHistory = transcriptHistory
+    self.message = message
     self.events = events
   }
 }
@@ -232,6 +251,9 @@ extension OpenCodeClient: DependencyKey {
     attentionSessionIDs: { _, _, _ in throw OpenCodeClientError(.unreachable) },
     viewSession: { _, _, _ in throw OpenCodeClientError(.unreachable) },
     deleteSession: { _, _ in throw OpenCodeClientError(.unreachable) },
+    transcript: { _, _, _ in throw OpenCodeClientError(.unreachable) },
+    transcriptHistory: { _, _, _ in throw OpenCodeClientError(.unreachable) },
+    message: { _, _, _ in throw OpenCodeClientError(.unreachable) },
     events: { _, _ in
       AsyncThrowingStream { $0.finish(throwing: OpenCodeClientError(.unreachable)) }
     }
@@ -490,6 +512,33 @@ private struct Runtime: Sendable {
         try await Operations.cancelJob(
           server,
           jobID: jobID,
+          environment: environment,
+          policy: policy
+        )
+      },
+      transcript: { server, sessionID, limit in
+        try await Operations.transcript(
+          server,
+          sessionID: sessionID,
+          limit: limit,
+          environment: environment,
+          policy: policy
+        )
+      },
+      transcriptHistory: { server, sessionID, cursor in
+        try await Operations.transcriptHistory(
+          server,
+          sessionID: sessionID,
+          cursor: cursor,
+          environment: environment,
+          policy: policy
+        )
+      },
+      message: { server, sessionID, messageID in
+        try await Operations.message(
+          server,
+          sessionID: sessionID,
+          messageID: messageID,
           environment: environment,
           policy: policy
         )
