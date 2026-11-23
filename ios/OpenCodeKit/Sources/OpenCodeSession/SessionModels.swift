@@ -1,4 +1,5 @@
 import Foundation
+import OpenCodeComposer
 import OpenCodeServer
 
 /// Why the session could not be read. Typed facts only; copy lives at the view edge.
@@ -353,5 +354,25 @@ public enum SessionNotice: Equatable, Sendable {
   case couldNotLoadOutput
   case couldNotCancelJob
   case couldNotWakeInput
+  case couldNotUpdateInput
+  case couldNotCancelInput
+  case couldNotCreateSession
   case sessionGone
+}
+
+/// A send in flight. Its operation ID fences late callbacks from a replaced screen or server.
+struct ComposerSendOperation: Equatable, Sendable {
+  var id: Int
+  var send: ComposerSend
+  var isRetry: Bool
+  var createdSession: OpenCodeSession?
+}
+
+public enum ComposerSendResult: Equatable, Sendable {
+  case accepted(sessionID: String, created: OpenCodeSession?)
+  case failed(created: OpenCodeSession?, failure: ComposerSendFailure)
+  case unverified(created: OpenCodeSession?)
+  /// Reconciliation proved an ambiguous retry never landed. The composer must persist a new
+  /// identity before a prompt is issued again.
+  case retryAbsent(created: OpenCodeSession?)
 }

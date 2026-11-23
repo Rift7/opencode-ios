@@ -16,10 +16,10 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | P5 | App shell: launch, connection, pairing, reconnect | done — merged into `ios` as `3b34932c` (PR #4) | `STATUS.md`, `PARITY.md` App shell, `ConnectionFeatureTests`, UI tests |
 | P6 | Home, drawer, projects, Catch Up, What's New | done — merged into `ios` as `7966dcfe` (PR #5, tree `25b6d297`) | `STATUS.md` Phase 6, `PARITY.md` Home, `HomeFeatureTests`, 8 UI tests, screenshots, scroll trace |
 | **P7** | **Session, subagents, background work, request review** | **done on `ios-session`** (draft PR) | `STATUS.md` Phase 7, `PARITY.md` Session, `SessionFeatureTests`, request-model and family tests, 5 UI tests, screenshots |
-| **P8** | **Transcript** | **done on `ios-transcript`** (draft PR #7, overflow-recovery head `151b7ff5`) | `STATUS.md` Phase 8, `PARITY.md` Transcript, 26 grouping/Markdown + 19 session + 11 decoding tests, 9 UI journeys, 2 scroll traces, 6 screenshots |
-| P9 | Composer | not started | folders only |
-| P10 | Media | not started | folders only |
-| P11 | Settings, experiments, diagnostics, onboarding | not started | folders only |
+| P8 | Transcript | done — merged as `2823c06e` (PR #7); merged tree `1147dca8` equals reviewed head `5ea6ea65` | `STATUS.md` Phase 8, `PARITY.md` Transcript, 26 grouping/Markdown + 19 session + 11 decoding tests, 9 UI journeys, 2 scroll traces, 6 screenshots |
+| **P9** | **Composer, drafts, sends, queue, request dock, quotes** | **done on `ios-composer`** (draft PR, base `ios`) | `STATUS.md` Phase 9, `PARITY.md` Composer, 26 composer + 22 session + 9 server tests, 11 UI journeys, typing traces, 10 screenshots |
+| P10 | Media | not started | folders only; P9 attachment and cross-block quote boundaries recorded |
+| P11 | Settings, experiments, diagnostics, onboarding | not started | folders only; P9 model/agent/mentions deferral recorded |
 | P12 | System integrations | not started | folders only |
 | P13 | Voice (Experimental, off) | not started | folders only |
 | P14 | Hardening | not started | — |
@@ -66,8 +66,9 @@ leaving the parent to clear the presented state.
   feature reducer exists yet.
 - **Navigation.** The app currently switches between four launch states. The App → Home → Session store
   topology, `@Presents` children and page stack belong to P5–P7 and are not started.
-- **Platform decisions.** Implementation decisions D-1…D-20 are recorded. Plan questions still open: `P-2`
-  (transcript motion), `P-3` (text input), `P-4` (photo picking), `P-5` (glass), `P-9` (push). `P-7`
+- **Platform decisions.** Implementation decisions D-1…D-69 are recorded. `P-3` (composer text input) is
+  resolved by D-64: a focused `UITextView` bridge for selection, marked text and hardware Return. Plan questions
+  still open: `P-2` (transcript motion), `P-4` (photo picking, P10), `P-5` (glass), `P-9` (push). `P-7`
   (identifiers) is partially resolved: the Keychain service is application-defined and configurable (D-15), and
   production naming must be settled before real credentials are stored — it is not a blocker for core work.
   `DECISIONS.md` maps the two ID namespaces.
@@ -89,12 +90,13 @@ reviewed `56c10086`). The task branch is `ios-transcript`. It consumes `SessionR
 rather than adding a second read queue; transcript windows and settlement extend the same read plan (D-58).
 The transcript target is `OpenCodeTranscript`; the UI lives in `ios/OpenCode/Transcript` (D-63).
 
-P9 starts from `ios` once P8 is merged. Prerequisites:
+P9 started from `origin/ios` at `2823c06e` after PR #7 merged; its tree `1147dca8` equaled the reviewed
+`5ea6ea65`. The task branch is `ios-composer`.
 
-1. **`ios-transcript` reviewed and merged into `ios`.** The merge is the hand-off.
-2. P9 owns composer editing, drafts, sends, the queued-input sheet, the request dock and quote-to-composer.
-   P8 renders quotes but exposes no composer action.
-3. P10 owns media, file opening, image/tool mosaics, the browser, math typesetting and Mermaid.
-4. `/api/experimental/session/{id}/wait` has no call site until the P9 send path.
-5. Production identifiers, device VoiceOver/selection and the local-network prompt still need the documented
-   checks; they remain unverified.
+1. P9 owns composer editing, drafts, sends, the queued-input sheet, the request dock and quote-to-composer.
+2. `/api/experimental/session/{id}/wait` is now implemented in the send path with one retry owner.
+3. P10 owns media, file opening, image/tool mosaics, the browser, math typesetting and Mermaid, plus the
+   deferred composer attachment boundary.
+4. P11 owns model/agent/mode pickers, autocomplete, mentions and commands.
+5. Production identifiers, device VoiceOver/IME/selection, hardware keyboard and the local-network prompt still
+   need the documented checks; they remain unverified.

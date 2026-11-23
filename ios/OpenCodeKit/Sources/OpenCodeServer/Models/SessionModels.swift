@@ -10,6 +10,8 @@ public struct SessionSelection: Equatable, Sendable, Identifiable {
     case catchUpCard
     /// A What's New prompt, typed into a new session but never sent.
     case whatsNewDraft(prompt: String)
+    /// An empty new-session screen. `sessionID` is the client-made ID the first send creates with.
+    case newSession(directory: String)
   }
 
   public var serverID: String
@@ -28,6 +30,7 @@ public struct SessionSelection: Equatable, Sendable, Identifiable {
     case .browse: suffix = "browse"
     case .catchUpCard: suffix = "catch-up"
     case .whatsNewDraft(let prompt): suffix = "draft:\(prompt)"
+    case .newSession(let directory): suffix = "new:\(directory)"
     }
     return "\(serverID)|\(sessionID)|\(suffix)"
   }

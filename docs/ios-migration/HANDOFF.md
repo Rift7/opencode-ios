@@ -30,7 +30,11 @@ The Android tree is not modified by this work.
 - `ios-home` — Phase 6: Home, drawer, projects, Catch Up and What's New. Merged into `ios` as
   `7966dcfe` (PR #5); the merged tree is identical to `eff8b45f`.
 - `ios-session` — Phase 7: session, subagents, background work and request review. Branched from
-  `origin/ios` `7966dcfe`; draft PR into `ios`: https://github.com/Rift7/opencode-ios/pull/6
+  `origin/ios` `7966dcfe`; merged as `92a7c677` (PR #6).
+- `ios-transcript` — Phase 8: transcript rows, Markdown and scrolling. Reviewed head `5ea6ea65`; merged
+  as `2823c06e` (PR #7), with an identical tree `1147dca8`.
+- `ios-composer` — Phase 9: composer, drafts, sends, queue, request dock and quotes. Branched from
+  `origin/ios` `2823c06e`; pushed to the fork with a draft PR into `ios`.
 - Later task branches from `ios` are pushed to the fork and opened as **draft** PRs into `ios`. Nothing is
   merged, released or distributed from here.
 
@@ -85,6 +89,22 @@ xcodebuild -project ios/OpenCode.xcodeproj -scheme OpenCode \
 The fixture modes `connected-transcript-long`, `connected-transcript-older` and
 `connected-transcript-stream` are synthetic and never open a socket.
 
+P9 surfaces:
+
+```sh
+xcodebuild -project ios/OpenCode.xcodeproj -scheme OpenCode \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro Max' -skipMacroValidation \
+  -only-testing:OpenCodeUITests/ComposerUITests test
+xcodebuild -project ios/OpenCode.xcodeproj -scheme OpenCode \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro Max' -skipMacroValidation \
+  -only-testing:OpenCodeUITests/ComposerScreenshotUITests test
+```
+
+The fixture modes `connected-composer`, `connected-composer-fail`, `connected-composer-running`,
+`connected-composer-question`, `connected-composer-queue`, `connected-composer-long` and
+`connected-composer-stream` are synthetic. `-uiTestResetDrafts` clears the isolated draft file before a
+journey; a relaunch check launches again without it.
+
 ## Where tests run
 
 | Suite | Location | Runner |
@@ -94,6 +114,9 @@ The fixture modes `connected-transcript-long`, `connected-transcript-older` and
 | Loopback HTTP fixture (real URLSession delegates, socket lifetimes) | `ios/OpenCodeKit/Tests/OpenCodeServerTests/LocalFixtureServerTests.swift` | `swift test`; loopback only, opt-out env var |
 | Live read-only server | `ios/OpenCodeKit/Tests/OpenCodeServerTests/LiveServerTests.swift` | `swift test` with env vars; skipped by default; records contract mismatches rather than hiding them |
 | App reducer, connection child, launch scenarios, store semantics | `ios/OpenCodeKit/Tests/OpenCodeAppTests` | `swift test` on the host |
+| Composer reducer, drafts, send eligibility | `ios/OpenCodeKit/Tests/OpenCodeComposerTests` | `swift test` on the host |
+| Composer in the session (sends, inbox, dock, quote) | `ios/OpenCodeKit/Tests/OpenCodeSessionTests/ComposerSessionTests.swift` | `swift test` on the host |
+| Prompt/create/wait routes and bounded wait loop | `ios/OpenCodeKit/Tests/OpenCodeServerTests/{ComposerClientTests,SessionWaitLoopTests}.swift` | `swift test` on the host |
 | Platform checks (UserDefaults, endpoint encoding, launch mapping) | `ios/OpenCodeTests` | `xcodebuild test` on the simulator |
 | Launch, connection, pairing and failure UI | `ios/OpenCodeUITests` | `xcodebuild test` on the simulator |
 | Keychain round-trip | `ios/OpenCodeUITests/KeychainProbeTests` | `xcodebuild test`; the hostless unit bundle has no keychain entitlement, so the probe runs in the app process behind `-uiTestKeychainProbe` |
@@ -135,6 +158,59 @@ message or file content.
   policy and its tests.
 - Media, file opening, math/Mermaid typesetting and composer quote actions belong to P9/P10.
 
+## Composer (P9)
+
+- `ComposerFeature` owns text, quotes, send eligibility, failed-send recovery and draft persistence. It never
+  reads the transcript and never starts a server read. `SessionFeature` scopes it and owns sends, creation,
+  reconciliation, the P7 inbox and the request dock.
+- `ComposerDraftStore` is one actor over an atomic JSON file; keys are `serverID|session:<id>` or
+  `serverID|new:<project directory>`. Debounce is 500 ms in the reducer; Done and backgrounding flush. Limits
+  are 128 KiB text / 64 KiB quotes / 200 quotes; over-limit is a typed failure and the text is kept in full.
+- The native input is `ios/OpenCode/Composer/ComposerTextInput.swift` (`UITextView`). It defers external draft
+  sync while marked text exists, clamps selection, grows to 168 pt, sends on Return and inserts a newline on
+  Shift+Return. Do not replace it with a `TextField` that writes the whole value per keystroke.
+- A send persists `ComposerOutbound` (target, message ID, text, quotes, delivery) before dispatch. A blocked
+  save does not dispatch; an offline/request-blocked delegate restores the payload; an unresolved record after
+  termination reopens as an unverified (ambiguous) failed send with its original ID and target, never as
+  editable text.
+- A send is admitted under a client message ID. A definite rejection can be retried under a new ID that is
+  written to the outbound record before the delegate runs. An ambiguous result is reconciled with
+  `GET /api/session/{id}/message/{id}` and the inbox before any retry; when the old ID is confirmed absent,
+  `ComposerFeature` replaces the outbound record with the new ID and saves it before the prompt. A failed save
+  sends nothing and restores the prior identity. An unreadable reconciliation is shown as unverified and never
+  duplicated. Results, optimistic rows and restarted records use the dispatched ID; they never fall back to a
+  different outbound record.
+- `SessionWaitLoop` is the only retry owner for `POST /api/experimental/session/{id}/wait`: 25 s polls, a 20 s
+  fast threshold, 12 fast failures, an active probe, and a caller-owned `.once` escape. A completed wait asks
+  the existing settlement read; it never opens another stream or read queue.
+- The composer follows the active page. Opening, pushing, popping or switching a page saves the outgoing
+  draft/outbound record and loads the destination’s; a child send uses the child ID. A send result that arrives
+  after navigation resolves the operation’s own target record and cannot touch the visible draft.
+- The P7 inbox remains the only queued-input model. The composer sheet sends Send Now (PATCH steer), moves to
+  queue (PATCH queue) or cancels (DELETE); an idle stranded item reuses queue-then-steer.
+- While any request is pending, the request dock owns the input bar. Permissions and questions/simple fields
+  answer there; larger forms keep the P7 sheet. The chat draft is not parked into request state and cannot be
+  sent by the answer bar’s Return.
+- Quotes are one block’s selected text plus an optional comment. The send body appends the audited quoted block
+  to the model text and writes `{"type":"quote"}` to `metadata.comments`.
+- Project-to-session draft migration writes the destination first, removes the source only after success, and
+  skips a newer destination (timestamp, then revision). A source keeps `createdSessionID` so a restart can
+  recover it. Draft records carry a monotonic `revision`; records written before it decode as revision 0.
+- Done uses an explicit flush request/identity and a content snapshot. If text, quotes, failed sends or the
+  outbound changed while persistence was suspended, the composer saves the newer content before reporting
+  success; a failure keeps the session open with a notice. Replacement, server switch, disconnect and
+  interactive dismissal transfer the draft through an App-owned effect before the child disappears. A failed
+  transfer is retained under its server/key in `AppFeature.retainedDraftTransfers`, surfaced as `draftKept`,
+  and retried on launch, foreground and navigation. `saveIfNewer` compares timestamp then revision, so an old
+  transfer never replaces newer typing after returning to the session. There is no dismissal timer.
+- Long input grows to 168 pt, then scrolls internally with the caret/selection visible.
+- Model/agent/mode pickers, autocomplete, mentions and attachments are deliberately absent until P11/P10; do not
+  add a control that looks functional before those boundaries exist.
+
+Composer surfaces: `ios/OpenCode/Composer/*`, `OpenCodeKit/Sources/OpenCodeComposer`, the send/inbox/dock
+parts of `OpenCodeKit/Sources/OpenCodeSession`, and the Home New Session entry. Screenshots:
+`docs/ios-migration/screens/p9-{composer,composer-quote,quote,request-dock,queued}[-dark].png`.
+
 ## Test conventions
 
 - Swift Testing for reducers, dependency clients, transport decoding, persistence and formatting.
@@ -146,9 +222,10 @@ message or file content.
 
 ## Where the work stands
 
-`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P7 are merged into `ios`
-(P7 as `92a7c677`). P8 is implemented on `ios-transcript` (draft PR #7; corrections at `151b7ff5`); the composer is P9. The transcript's
-state boundaries are P7's refresh identity plus P8's per-session `TranscriptState`.
+`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P8 are merged into `ios`
+(P8 as `2823c06e`). P9 is implemented on `ios-composer` (draft PR into `ios`). The transcript's state
+boundaries are P7's refresh identity plus P8's per-session `TranscriptState`; the composer sits above both and
+borrows the same settlement read. Media is P10.
 
 What P6 added, in one paragraph: `HomeFeature` replaces the project-only connected destination with the
 authenticated Home — projects, the drawer's pinned/recent session lists, 50-session paging, local and
@@ -177,6 +254,10 @@ Useful entry points:
 | Home/drawer/projects/Catch Up/What's New UI | `ios/OpenCode/Drawer/HomeView.swift` |
 | Session reducer: refresh, Stop, family pages, requests, shells | `OpenCodeKit/Sources/OpenCodeSession/SessionFeature.swift` |
 | Session models: problems, refresh, requests, background, shell output | `OpenCodeKit/Sources/OpenCodeSession/SessionModels.swift` |
+| Composer reducer, drafts, quotes, failed sends | `OpenCodeKit/Sources/OpenCodeComposer/ComposerFeature.swift` |
+| Draft persistence and bounds | `OpenCodeKit/Sources/OpenCodeComposer/ComposerDraftStore.swift` |
+| Composer native input, dock, answer bar, queued sheet, quote selection | `ios/OpenCode/Composer/{ComposerTextInput,ComposerViews}.swift` |
+| Prompt/create/wait/cancel routes and the wait loop | `OpenCodeKit/Sources/OpenCodeServer/Client/PromptOperations.swift`, `Retry/SessionWaitLoop.swift` |
 | Session screen, subagents, request sheet, background/output sheets | `ios/OpenCode/Session/SessionView.swift` |
 | App ↔ Home ↔ Session ownership | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` |
 | Request/family/shell wire models | `OpenCodeKit/Sources/OpenCodeServer/Models/{RequestModels,SessionModels}.swift` |
@@ -188,6 +269,19 @@ Useful entry points:
 | Reviewed boundary regressions | `OpenCodeKit/Tests/OpenCodeAppTests/AppFeatureTests.swift` (`sessionEventForwarding`), `OpenCodeSessionTests/SessionFeatureTests.swift` (family identity, uncached load, shell poll/range/drain) |
 | Screenshots and scroll trace | `ios/OpenCodeUITests/{HomeScreenshotUITests,SessionScreenshotUITests,HomeScrollTraceUITests}.swift` |
 | Debug frame probe | `ios/OpenCode/Drawer/ScrollFrameProbe.swift` |
+
+### P9 evidence
+
+- `swift test --package-path ios/OpenCodeKit`: 492 tests (194 server, 67 core, 75 app, 38 drawer, 66
+  session, 26 transcript, 26 composer).
+- Full XCUITest suite: 58 tests pass; `ComposerUITests` adds eleven journeys, including relaunch, failed-send
+  retry, separate session drafts, running/queue management, dock vs chat, quote handoff, Dynamic Type/dark,
+  long multiline scrolling and two typing traces.
+- Screenshots: `docs/ios-migration/screens/p9-{composer,composer-quote,quote,request-dock,queued}[-dark].png`.
+- Simulator typing trace: long static transcript 6.6 ms average / 24.3 ms max across 34 changes with no
+  Markdown reparse; streaming 9.1 ms average / 14.8 ms max across 17 changes.
+- Deferred: model/agent/mode pickers and autocomplete (P11), attachments and cross-block selection (P10/P14),
+  physical IME/hardware-keyboard/VoiceOver checks (P14).
 
 ### P7 evidence
 

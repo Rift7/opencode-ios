@@ -17,7 +17,7 @@ apart:
 | --- | --- | --- | --- |
 | `P-1` | Typography and colour system | D-1 (typography), D-2 (colour) | — |
 | `P-2` | Transcript motion | — | **open** |
-| `P-3` | Composer text input | — | **open** |
+| `P-3` | Composer text input | D-64 (`UITextView` bridge) | — |
 | `P-4` | Photo picking | — | **open** |
 | `P-5` | Glass | — | **open** |
 | `P-6` | Branch location | D-3 | — |
@@ -849,3 +849,134 @@ surface. This keeps P9's composer and P10's media above the transcript rather th
   `ios/OpenCode/Transcript/*`.
 - P10 owns image decoding, viewers, file opening, the browser and richer math/Mermaid. P8's placeholders and
   link cards are the routing boundary, not a claim that media is complete.
+
+### D-64 The composer's text input is a focused UITextView bridge
+`P-3` is resolved with `ios/OpenCode/Composer/ComposerTextInput.swift`, a small `UIViewRepresentable` around
+`UITextView`. It follows iOS model evidence (the historical app bridged `UITextView`) and the audited Kotlin
+input's behaviour: selection survives external drafts, an IME's marked text is never overwritten by a draft
+sync, Return sends, Shift+Return inserts a newline, and the field grows to 168 pt before scrolling.
+
+- Rejected: a SwiftUI `TextField` that writes the whole value on every keystroke; it cannot preserve marked
+  text against an external clear and loses selection.
+- Concurrency: the bridge is main-actor by the app target's default; the binding sends a semantic action, not
+  a whole-store update inside `textViewDidChange`.
+- Device-only checks (marked text, hardware keyboard, VoiceOver) are recorded unverified rather than inferred
+  from simulator typing.
+
+### D-65 Drafts are explicit, scoped and bounded
+`ComposerDraftStore` is one actor over an atomically written JSON record set. Keys are
+`server persistence ID | session:<sessionID>` or `server persistence ID | new:<project directory>`; the latter
+keeps a New Session draft stable across relaunch without letting one project overwrite another. The reducer
+debounces writes 500 ms, flushes on Done/background, and discards a delayed load when a newer edit or key exists.
+
+- Limits: 128 KiB text, 64 KiB quote text, 200 quotes. Exceeding them is `.tooLarge`: the reducer keeps the full
+  text and shows a recoverable line; it never saves or displays a prefix.
+- A read failure is `.couldNotRestore`, a write failure `.couldNotSave`; neither is a successful save. The store
+  also refuses an unknown/corrupt version rather than overwriting it.
+- The chat draft is not parked in request state. While a request docks, the answer bar has its own text and the
+  chat composer’s value is untouched.
+- A successful send clears only the snapshot it sent. A later edit has a higher revision and survives that
+  send’s result.
+
+### D-66 A failed prompt is reconciled before a new message id
+The prompt is admitted under a client-made message ID. A definite rejection can be retried. An ambiguous
+transport/gateway result is first reconciled with `GET /api/session/{id}/message/{messageID}` and the inbox.
+
+- Found → settle as success; do not post again.
+- Confirmed absent → Retry may mint a new ID, satisfying the recorded P9 gate without blind duplication.
+- Read-back unreadable → keep the optimistic row, report **Couldn’t verify** and do not send again until an
+  authoritative read settles it.
+- A session create uses its own client ID, so a retried create cannot make a second session. If create succeeds
+  and the prompt fails, the created session is adopted and the text remains recoverable (composer or Retry/Edit).
+- One operation ID fences late results; App creates a new session child on a destination change, cancelling the
+  old effects.
+
+### D-67 The request dock is a presentation of the P7 request model
+There is no second request model. `RequestDockState` owns only the answer-bar text, question page, fold and the
+sheet flag. `SessionRequests` keeps requests, defaults, visibility, validation, responding/completed IDs and
+settlement.
+
+- A permission, a question, or a one-field non-external form docks. Anything larger keeps the P7 sheet through
+  the dock’s Review action.
+- While any request is pending, keyboard Send runs the request workflow; it cannot send the answer as a chat
+  message. The chat draft stays in `ComposerFeature` and is never posted as an answer.
+- Allow Once/Always/Deny, hidden-answer pruning, defaults, global-form directory routing and read-back
+  settlement remain the P7 implementations.
+
+### D-68 The experimental wait has one retry owner
+`POST /api/experimental/session/{id}/wait` is a 25 s long poll. `SessionWaitLoop` sends each poll and active
+probe once: a timed-out live run re-arms immediately, a fast failure probes the run and then waits the shared
+session-wait backoff, up to 12 fast failures; a caller-owned `.once` policy gets the failure back after the
+probe. Cancellation propagates and no generic transport retry wraps it.
+
+- Completion means the run settled. The send path then asks the existing `RefreshReason.settlement` read; it
+  does not add a stream, a poller or a second transcript queue.
+- A failed wait is not a failed send. The stream and subsequent authoritative reads remain the source of truth.
+
+### D-69 Quotes are one block’s native selection plus the audited metadata
+The reply-end Quote action opens a selectable `UITextView` sheet; its selected substring, or a user-adjusted
+selection, becomes `ComposerQuote(text, comment)`. Sending appends the audited quoted block to the model text and
+writes `{"type":"quote","text","comment"}` to `metadata.comments` with `metadata.displayText` for the typed text.
+
+- The chat draft is never replaced or cleared by inserting/removing a quote.
+- Cross-block selection as one document remains the P8/P14 limitation; P9 does not claim it.
+- Selected text is never logged.
+
+### D-70 A send owns a persisted outbound record until it settles
+The composer writes `ComposerOutbound` (target, message ID, text, quotes, delivery) into the draft record before
+clearing the editor or dispatching. A save failure keeps the editor and does not send. A blocked delegate
+restores the payload (or keeps it as a definite failed send when newer text exists). A definite failure restores
+it or records it for Retry/Edit; an unreadable reconciliation becomes a persisted ambiguous failed send with the
+original message ID and target. On load, an unresolved outbound record is converted to the same ambiguous failed
+send and is never restored as editable text. This closes the offline, request-race, unverified and termination
+gaps. `FailedComposerSend` and `ComposerOutbound` are part of the versioned draft JSON.
+
+### D-71 The composer follows the active session page
+A subagent page is editable. `SessionFeature.openSubagent`/`popPage`/`popToRoot` send `.composer(.switchTarget)`;
+the outgoing draft (including failed/outbound records) is saved, the destination record is loaded, and the new
+target is the page’s session ID. A send captures its target in the outbound record. A result arriving while a
+different page is visible resolves the operation’s own target record instead of calling the visible composer’s
+accept/fail actions. A create that returns after the session child was replaced checks cancellation before the
+prompt mutation.
+
+### D-72 Project-to-session migration is destination-first
+`ComposerDraftStore.migrate` writes the session key first (skipping it when a newer save already exists), then
+removes the New Session key. Cleanup failure leaves both records and is reported as `.couldNotCleanUpDraft`;
+destination failure leaves the source and is reported as `.couldNotSave`. The source gains `createdSessionID`
+before migration; `recoverCreated` can find it after a restart and retry the destination-first migration. The
+composer target moves to the created session only after its record is safe or recoverable.
+
+### D-73 Dismissal is an identity-bound persistence handoff
+Done creates a `PendingSessionDismissal(requestID, serverID, sessionID)` and asks the session to flush its
+composer. `SessionFeature` forwards the composer’s explicit `ComposerDraftSave`; App closes the session only when
+the request ID and session identity still match. A failed/too-large save keeps the session open and shows a
+notice. Replacement, server switch, disconnect and interactive dismissal save the departing draft through an
+App-owned effect before removing the child. No arbitrary sleep participates in dismissal.
+
+### D-74 Long input grows then scrolls
+`ComposerTextInput` grows to 168 pt; beyond that it enables internal scrolling and scrolls the caret/selection
+into view. Shrinking below the cap disables scrolling and resets the offset. Marked text, selection, Dynamic Type
+and the keyboard inset are unchanged. A physical IME/hardware-keyboard check remains unverified.
+
+### D-75 A retry records its actual message ID before the prompt
+`ComposerFeature` owns message-ID allocation for retries. A definite failure retries under a new ID that is
+written into `ComposerOutbound` before the delegate runs. An ambiguous failure keeps its recorded ID and is
+reconciled first; a confirmed absence produces `retryMessageIDConfirmedAbsent`, after which the composer replaces
+the outbound record with a new ID and saves it before issuing the prompt. A failed save restores the previous
+identity and sends nothing. Accept/fail/unverify actions match the dispatched ID and never fall back to another
+outbound record. This keeps the stored record, optimistic row, restart recovery and client request ID identical.
+
+### D-76 A failed departing-draft transfer stays app-owned
+`AppFeature` tracks each departing draft as a `DraftTransfer(id, key, draft)`. The save effect reports an
+explicit result; a failure retains the draft under its original server/key in `retainedDraftTransfers`, shows a
+`draftKept` notice, and leaves the in-memory copy available. Retries run on launch, foreground and navigation,
+and a completion is fenced by transfer ID, key and the exact draft. `ComposerDraftStore.saveIfNewer` compares
+`updatedAt` first and `revision` as a tie-breaker, so a transfer from a session whose revision restarted cannot
+replace newer content. A successful save clears a retained copy it supersedes; a newer retained copy wins.
+
+### D-77 Dismissal waits for the content, not just a request
+`flushForDismiss` captures the complete draft snapshot (text, quotes, failed sends, outbound) and a flush token.
+When the save completes, the composer compares the current snapshot with the saved one; if newer content exists,
+it saves that content and only then reports a saved completion. A failure or over-limit result keeps the session
+open. `AppFeature` still fences the completion by request ID and session identity. The debounced save is
+cancelled while a flush is active, and a later flush token invalidates an earlier completion.

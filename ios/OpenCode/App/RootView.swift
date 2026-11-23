@@ -1004,6 +1004,10 @@ private func noticeText(_ notice: AppNotice) -> String {
     return AppCopy.text("notice.cache_unreadable")
   case .couldNotReplaceSavedData:
     return AppCopy.text("notice.replace_failed")
+  case .couldNotSaveDraft:
+    return AppCopy.text("notice.draft_save_failed")
+  case .draftKept:
+    return AppCopy.text("notice.draft_kept")
   }
 }
 

@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Foundation
+import OpenCodeComposer
 import OpenCodeCore
 import OpenCodeServer
 import OpenCodeTranscript
@@ -29,6 +30,8 @@ public struct SessionFeature: Sendable {
     public var transcripts: [String: TranscriptState]
     public var pendingLink: URL?
     public var inspectedFile: TranscriptFile?
+    public var composer: ComposerFeature.State
+    public var requestDock: RequestDockState
 
     public var refresh: SessionRefresh?
     /// Set when a raced-event overflow made the projection incomplete. Survives failed reads.
@@ -37,6 +40,8 @@ public struct SessionFeature: Sendable {
     var nextPageID: Int
     var selectionByPage: [Int: String?]
     var didStart: Bool
+    var composerSend: ComposerSendOperation?
+    var nextComposerOperation: Int
 
     public init(
       id: Int,
@@ -64,12 +69,31 @@ public struct SessionFeature: Sendable {
       self.transcripts = [:]
       self.pendingLink = nil
       self.inspectedFile = nil
+      self.requestDock = RequestDockState()
       self.refresh = nil
       self.recovery = nil
       self.nextRefreshID = 0
       self.nextPageID = 1
       self.selectionByPage = [0: nil]
       self.didStart = false
+      self.composerSend = nil
+      self.nextComposerOperation = 0
+
+      let target: ComposerTarget
+      if session == nil, case .newSession(let directory) = selection.intent {
+        target = .newSession(id: selection.sessionID, directory: directory)
+      } else {
+        target = .session(id: session?.id ?? selection.sessionID)
+      }
+      self.composer = ComposerFeature.State(serverID: server.persistenceID, target: target)
+      if session == nil, case .newSession = selection.intent {
+        self.isLoading = false
+      }
+    }
+
+    /// A new-session composer before its first send created the session.
+    public var isNewSessionDraft: Bool {
+      root == nil && composer.target.isNewSession
     }
 
     /// Effect bookkeeping (read ids, page ids, run generation) stays outside equality; every value
@@ -96,6 +120,8 @@ public struct SessionFeature: Sendable {
         && lhs.pendingLink == rhs.pendingLink
         && lhs.inspectedFile == rhs.inspectedFile
         && lhs.recovery == rhs.recovery
+        && lhs.composer == rhs.composer
+        && lhs.requestDock == rhs.requestDock
     }
 
     // MARK: Derived
@@ -155,6 +181,38 @@ public struct SessionFeature: Sendable {
     case connectionResynchronized
     case serverEvent(ServerEvent)
     case pendingInputsLoaded(sessionID: String, result: Result<[PendingInput], OpenCodeClientError>)
+
+    case composer(ComposerFeature.Action)
+    case flushForDismiss(UUID)
+    case composerSendResult(
+      operationID: Int,
+      messageID: String,
+      result: ComposerSendResult
+    )
+    case composerWaitFinished(operationID: Int, sessionID: String, messageID: String)
+    case composerSessionLoaded(sessionID: String, result: Result<OpenCodeSession, OpenCodeClientError>)
+
+    case pendingInputSendNowTapped(String)
+    case pendingInputQueueTapped(String)
+    case pendingInputCancelTapped(String)
+    case pendingInputDeliveryFinished(
+      sessionID: String,
+      inputID: String,
+      previous: PendingInput.Delivery?,
+      result: Result<Bool, OpenCodeClientError>
+    )
+    case pendingInputCancelFinished(
+      sessionID: String,
+      inputID: String,
+      result: Result<Bool, OpenCodeClientError>
+    )
+
+    case requestAnswerChanged(String)
+    case requestPageChanged(Int)
+    case requestDockToggled(String)
+    case requestReviewTapped
+    case requestSheetDismissed
+    case requestBarSendTapped
 
     case openSubagent(String)
     case popPage
@@ -220,6 +278,7 @@ public struct SessionFeature: Sendable {
     case transcriptFollowChanged(sessionID: String, isFollowing: Bool, anchorID: String?)
     case transcriptJumpTapped
     case transcriptCopyTapped(String)
+    case transcriptQuoteTapped(String)
     case transcriptLinkTapped(String)
     case transcriptLinkConfirmed
     case transcriptLinkCopyTapped
@@ -234,6 +293,12 @@ public struct SessionFeature: Sendable {
 
   public enum Delegate: Equatable, Sendable {
     case dismiss
+    case dismissReady(
+      requestID: UUID,
+      serverID: String,
+      sessionID: String,
+      result: ComposerDraftSave
+    )
   }
 
   enum CancelID: Hashable {
@@ -252,6 +317,9 @@ public struct SessionFeature: Sendable {
     case recoveryRetry
     case transcriptEarlier
     case notice
+    case composerSend(Int)
+    case composerWait(Int)
+    case pendingInput(String)
   }
 
   @Dependency(\.openCodeClient) private var client
@@ -260,6 +328,7 @@ public struct SessionFeature: Sendable {
   @Dependency(\.haptics) private var haptics
   @Dependency(\.pasteboard) private var pasteboard
   @Dependency(\.linkOpener) private var linkOpener
+  @Dependency(\.uuidClient) private var uuid
 
   public init() {}
 
@@ -270,7 +339,16 @@ public struct SessionFeature: Sendable {
         guard !state.didStart else { return .none }
         state.didStart = true
         guard !state.isPinned else { return .none }
-        return requestRefresh(.open, state: &state)
+        if state.isNewSessionDraft {
+          return .merge(
+            .send(.composer(.task)),
+            .send(.composer(.focusRequested))
+          )
+        }
+        return .merge(
+          requestRefresh(.open, state: &state),
+          .send(.composer(.task))
+        )
 
       case .refreshRequested(let reason):
         guard !state.isPinned else { return .none }
@@ -351,6 +429,147 @@ public struct SessionFeature: Sendable {
         }
         return .none
 
+      case .composer(let action):
+        guard case .delegate(let delegate) = action else { return .none }
+        switch delegate {
+        case .send(let send):
+          return startComposerSend(send, isRetry: false, state: &state)
+        case .retry(let failed):
+          return startComposerSend(failed.send, isRetry: true, state: &state)
+        case .restoredCreatedSession(let sessionID):
+          return adoptRestoredSession(sessionID, state: &state)
+        case .flushForDismissFinished(let requestID, let result):
+          return .send(
+            .delegate(
+              .dismissReady(
+                requestID: requestID,
+                serverID: state.server.persistenceID,
+                sessionID: state.selection.sessionID,
+                result: result
+              )
+            )
+          )
+        }
+
+      case .flushForDismiss(let requestID):
+        return .send(.composer(.flushForDismiss(requestID)))
+
+      case .composerSendResult(let operationID, let messageID, let result):
+        return composerSendResult(
+          operationID: operationID,
+          messageID: messageID,
+          result: result,
+          state: &state
+        )
+
+      case .composerWaitFinished(let operationID, let sessionID, let messageID):
+        guard state.composerSend == nil,
+          state.activeSessionID == sessionID || state.selection.sessionID == sessionID
+        else { return .none }
+        AppLog(category: .send).event(
+          .composerWaitFinished,
+          [LogField("operation", .count(operationID)), LogField("session", .flag(true))]
+        )
+        return .send(.refreshRequested(.settlement(messageID: messageID)))
+
+      case .composerSessionLoaded(let sessionID, let result):
+        guard state.composer.target.sessionID == sessionID
+          || state.selection.sessionID == sessionID
+        else { return .none }
+        switch result {
+        case .success(let session):
+          adopt(session, state: &state)
+          return .merge(
+            .send(.composer(.sessionCreated(session.id))),
+            requestRefresh(.open, state: &state)
+          )
+        case .failure:
+          return .send(.composer(.sendBlocked(.couldNotRestore)))
+        }
+
+      case .pendingInputSendNowTapped(let inputID):
+        return pendingInputSendNow(inputID, state: &state)
+
+      case .pendingInputQueueTapped(let inputID):
+        return pendingInputQueue(inputID, state: &state)
+
+      case .pendingInputCancelTapped(let inputID):
+        return pendingInputCancel(inputID, state: &state)
+
+      case .pendingInputDeliveryFinished(let sessionID, let inputID, let previous, let result):
+        guard sessionID == state.activeSessionID else { return .none }
+        switch result {
+        case .success:
+          return fetchPendingInputs(server: state.server, sessionID: sessionID)
+        case .failure:
+          if let previous, let index = state.pendingInputs.firstIndex(where: { $0.id == inputID }) {
+            state.pendingInputs[index].delivery = previous
+          }
+          haptics.play(.error)
+          state.notice = .couldNotUpdateInput
+          return .merge(
+            fetchPendingInputs(server: state.server, sessionID: sessionID),
+            noticeExpiry()
+          )
+        }
+
+      case .pendingInputCancelFinished(let sessionID, let inputID, let result):
+        guard sessionID == state.activeSessionID else { return .none }
+        switch result {
+        case .success:
+          state.pendingInputs.removeAll { $0.id == inputID }
+          return fetchPendingInputs(server: state.server, sessionID: sessionID)
+        case .failure:
+          haptics.play(.error)
+          state.notice = .couldNotCancelInput
+          return .merge(
+            fetchPendingInputs(server: state.server, sessionID: sessionID),
+            noticeExpiry()
+          )
+        }
+
+      case .requestAnswerChanged(let text):
+        guard state.requests.hasPending else { return .none }
+        var dock = state.requestDock
+        let requests = state.requests
+        dock.answerChanged(text, request: requests, answers: &state.requests.answers)
+        state.requestDock = dock
+        if let id = state.requests.selectedRequestID,
+          case .validation = state.requests.failures[id]
+        {
+          state.requests.failures[id] = nil
+        }
+        return .none
+
+      case .requestPageChanged(let delta):
+        guard let id = state.requests.selectedRequestID,
+          let form = state.requests.form(id),
+          !state.requests.respondingIDs.contains(id)
+        else { return .none }
+        let answers = state.requests.answers[id] ?? form.defaultAnswers
+        _ = state.requestDock.movePage(delta, form: form, answers: answers)
+        return .none
+
+      case .requestDockToggled(let id):
+        if state.requestDock.collapsedIDs.contains(id) {
+          state.requestDock.collapsedIDs.remove(id)
+        } else {
+          state.requestDock.collapsedIDs.insert(id)
+        }
+        return .none
+
+      case .requestReviewTapped:
+        guard state.requests.hasPending else { return .none }
+        state.requestDock.showsSheet = true
+        return .none
+
+      case .requestSheetDismissed:
+        state.requestDock.showsSheet = false
+        return .none
+
+      case .requestBarSendTapped:
+        return sendRequestBar(state: &state)
+
       case .openSubagent(let sessionID):
         return openSubagent(sessionID, state: &state)
 
@@ -363,7 +582,11 @@ public struct SessionFeature: Sendable {
         restoreSelection(pageID: 0, state: &state)
         state.isLoading = true
         let abandon = abandonRefresh(&state)
-        return .merge(abandon, requestRefresh(.resume, state: &state))
+        return .merge(
+          abandon,
+          requestRefresh(.resume, state: &state),
+          .send(.composer(.switchTarget(.session(id: state.root?.id ?? state.selection.sessionID))))
+        )
 
       case .interruptTapped:
         return interruptTapped(&state)
@@ -793,6 +1016,10 @@ public struct SessionFeature: Sendable {
         )
         return .none
 
+      case .transcriptQuoteTapped(let text):
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .none }
+        return .send(.composer(.quoteInserted(text: text)))
+
       case .transcriptLinkTapped(let text):
         guard let url = URL(string: text), let scheme = url.scheme?.lowercased(),
           ["http", "https", "mailto"].contains(scheme)
@@ -838,6 +1065,9 @@ public struct SessionFeature: Sendable {
       case .delegate:
         return .none
       }
+    }
+    Scope(state: \.composer, action: \.composer) {
+      ComposerFeature()
     }
   }
 }
@@ -1481,6 +1711,650 @@ extension SessionFeature {
   }
 }
 
+extension SessionFeature {
+  // MARK: Composer
+
+  private func startComposerSend(
+    _ send: ComposerSend,
+    isRetry: Bool,
+    state: inout State
+  ) -> Effect<Action> {
+    guard send.hasContent else { return .send(.composer(.sendBlocked(.couldNotSend))) }
+    guard state.composerSend == nil else { return .send(.composer(.sendBlocked(.busy))) }
+    guard !state.requests.hasPending else {
+      return .send(.composer(.sendBlocked(.requestPending)))
+    }
+    guard state.isLive else {
+      return .send(.composer(.sendBlocked(.notConnected)))
+    }
+    let target = send.target
+    let directory = target.directory
+    let existingSessionID = target.sessionID
+    let newSessionID = target.newSessionID
+    guard existingSessionID != nil || (directory != nil && newSessionID != nil) else {
+      return .send(.composer(.sendBlocked(.couldNotSend)))
+    }
+    state.nextComposerOperation += 1
+    let operationID = state.nextComposerOperation
+    state.composerSend = ComposerSendOperation(
+      id: operationID,
+      send: send,
+      isRetry: isRetry,
+      createdSession: nil
+    )
+    if let existingSessionID {
+      showOptimistic(send, messageID: send.messageID, sessionID: existingSessionID, state: &state)
+    }
+
+    let client = client
+    let server = state.server
+    AppLog(category: .send).event(
+      .composerSent,
+      [
+        LogField("retry", .flag(isRetry)),
+        LogField("newSession", .flag(existingSessionID == nil)),
+        LogField("characters", .count(send.text.count)),
+        LogField("quotes", .count(send.quotes.count)),
+      ]
+    )
+    return .run { emit in
+      let actual = send
+      var created: OpenCodeSession?
+      var sessionID = existingSessionID
+      var reconciledRetry = !isRetry
+
+      if isRetry, let sessionID {
+        let found = await reconcileMessage(
+          messageID: actual.messageID,
+          sessionID: sessionID,
+          server: server,
+          client: client
+        )
+        switch found {
+        case .found:
+          await emit(
+            .composerSendResult(
+              operationID: operationID,
+              messageID: actual.messageID,
+              result: .accepted(sessionID: sessionID, created: nil)
+            )
+          )
+          return
+        case .unreadable:
+          await emit(
+            .composerSendResult(
+              operationID: operationID,
+              messageID: actual.messageID,
+              result: .unverified(created: nil)
+            )
+          )
+          return
+        case .absent:
+          await emit(
+            .composerSendResult(
+              operationID: operationID,
+              messageID: actual.messageID,
+              result: .retryAbsent(created: nil)
+            )
+          )
+          return
+        }
+      }
+
+      if sessionID == nil {
+        guard !Task.isCancelled else { return }
+        do {
+          created = try await client.createSession(server, directory ?? "", newSessionID ?? "")
+          sessionID = created?.id
+        } catch is CancellationError {
+          return
+        } catch {
+          let failure = ComposerSendFailure.classify(
+            error as? OpenCodeClientError ?? OpenCodeClientError(.unreachable)
+          )
+          await emit(
+            .composerSendResult(
+              operationID: operationID,
+              messageID: actual.messageID,
+              result: .failed(created: nil, failure: failure)
+            )
+          )
+          return
+        }
+      }
+      guard let sessionID else {
+        await emit(
+          .composerSendResult(
+            operationID: operationID,
+            messageID: actual.messageID,
+            result: .failed(created: created, failure: .definite)
+          )
+        )
+        return
+      }
+      if isRetry, !reconciledRetry {
+        let found = await reconcileMessage(
+          messageID: send.messageID,
+          sessionID: sessionID,
+          server: server,
+          client: client
+        )
+        switch found {
+        case .found:
+          await emit(
+            .composerSendResult(
+              operationID: operationID,
+              messageID: send.messageID,
+              result: .accepted(sessionID: sessionID, created: created)
+            )
+          )
+          return
+        case .unreadable:
+          await emit(
+            .composerSendResult(
+              operationID: operationID,
+              messageID: send.messageID,
+              result: .unverified(created: created)
+            )
+          )
+          return
+        case .absent:
+          await emit(
+            .composerSendResult(
+              operationID: operationID,
+              messageID: send.messageID,
+              result: .retryAbsent(created: created)
+            )
+          )
+          return
+        }
+      }
+
+      // A create or reconciliation may finish after the screen abandoned this operation. Never issue
+      // the prompt mutation in that case.
+      guard !Task.isCancelled else { return }
+      do {
+        try await client.sendPrompt(server, sessionID, actual.prompt)
+        await emit(
+          .composerSendResult(
+            operationID: operationID,
+            messageID: actual.messageID,
+            result: .accepted(sessionID: sessionID, created: created)
+          )
+        )
+      } catch is CancellationError {
+        return
+      } catch {
+        let clientError = error as? OpenCodeClientError ?? OpenCodeClientError(.unreachable)
+        let failure = ComposerSendFailure.classify(clientError)
+        if failure == .definite {
+          await emit(
+            .composerSendResult(
+              operationID: operationID,
+              messageID: actual.messageID,
+              result: .failed(created: created, failure: failure)
+            )
+          )
+          return
+        }
+        let found = await reconcileMessage(
+          messageID: actual.messageID,
+          sessionID: sessionID,
+          server: server,
+          client: client
+        )
+        let result: ComposerSendResult
+        switch found {
+        case .found:
+          result = .accepted(sessionID: sessionID, created: created)
+        case .absent:
+          result = .failed(created: created, failure: failure)
+        case .unreadable:
+          result = .unverified(created: created)
+        }
+        await emit(
+          .composerSendResult(
+            operationID: operationID,
+            messageID: actual.messageID,
+            result: result
+          )
+        )
+      }
+    }
+    .cancellable(id: CancelID.composerSend(operationID), cancelInFlight: false)
+  }
+
+  private func composerSendResult(
+    operationID: Int,
+    messageID: String,
+    result: ComposerSendResult,
+    state: inout State
+  ) -> Effect<Action> {
+    guard let operation = state.composerSend, operation.id == operationID else { return .none }
+    var effects: [Effect<Action>] = []
+    if let created = operation.createdSession ?? createdSession(in: result) {
+      adopt(created, state: &state)
+      effects.append(.send(.composer(.sessionCreated(created.id))))
+    }
+    state.composerSend = nil
+    let createdSession = operation.createdSession ?? createdSession(in: result)
+    let outcomeTarget = createdSession.map { ComposerTarget.session(id: $0.id) }
+      ?? operation.send.target
+    let currentTarget = state.composer.target
+    let matchesCurrent = currentTarget == operation.send.target
+      || (createdSession.map { currentTarget == .session(id: $0.id) } == true)
+
+    switch result {
+    case .retryAbsent:
+      removeOptimistic(operation.send, messageID: operation.send.messageID, state: &state)
+      effects.append(
+        .send(
+          .composer(
+            .retryMessageIDConfirmedAbsent(
+              messageID: operation.send.messageID,
+              createdSessionID: createdSession?.id
+            )
+          )
+        )
+      )
+      AppLog(category: .send).event(
+        .composerSent,
+        [LogField("retryAbsent", .flag(true)), LogField("operation", .count(operationID))]
+      )
+      return .merge(effects)
+
+    case .accepted(let sessionID, _):
+      var accepted = operation.send
+      accepted.messageID = messageID
+      showOptimistic(accepted, messageID: messageID, sessionID: sessionID, state: &state)
+      if matchesCurrent {
+        effects.append(.send(.composer(.sendAccepted(messageID: messageID))))
+      } else {
+        effects.append(
+          .send(
+            .composer(
+              .resolveOutbound(
+                target: outcomeTarget,
+                messageID: operation.send.messageID,
+                resolution: .accepted
+              )
+            )
+          )
+        )
+      }
+      effects.append(
+        waitForIdle(
+          operationID: operationID,
+          sessionID: sessionID,
+          messageID: messageID,
+          server: state.server
+        )
+      )
+      AppLog(category: .send).event(
+        .composerSent,
+        [LogField("accepted", .flag(true)), LogField("operation", .count(operationID))]
+      )
+      return .merge(effects)
+
+    case .failed(_, let failure):
+      removeOptimistic(operation.send, messageID: messageID, state: &state)
+      if matchesCurrent {
+        effects.append(.send(.composer(.sendFailed(messageID: messageID, failure: failure))))
+      } else {
+        effects.append(
+          .send(
+            .composer(
+              .resolveOutbound(
+                target: outcomeTarget,
+                messageID: operation.send.messageID,
+                resolution: .failed(failure)
+              )
+            )
+          )
+        )
+      }
+      AppLog(category: .send).event(
+        .composerSendFailed,
+        [
+          LogField("ambiguous", .flag(failure == .ambiguous)),
+          LogField("operation", .count(operationID)),
+        ]
+      )
+      return .merge(effects)
+
+    case .unverified:
+      if matchesCurrent {
+        effects.append(.send(.composer(.sendUnverified(messageID: messageID))))
+      } else {
+        effects.append(
+          .send(
+            .composer(
+              .resolveOutbound(
+                target: outcomeTarget,
+                messageID: operation.send.messageID,
+                resolution: .unverified(.ambiguous)
+              )
+            )
+          )
+        )
+      }
+      effects.append(.send(.refreshRequested(.settlement(messageID: messageID))))
+      AppLog(category: .send).event(
+        .composerSendFailed,
+        [
+          LogField("ambiguous", .flag(true)),
+          LogField("verified", .flag(false)),
+        ]
+      )
+      return .merge(effects)
+    }
+  }
+
+  private func createdSession(in result: ComposerSendResult) -> OpenCodeSession? {
+    switch result {
+    case .accepted(_, let created), .failed(let created, _), .unverified(let created),
+      .retryAbsent(let created):
+      return created
+    }
+  }
+
+  private func waitForIdle(
+    operationID: Int,
+    sessionID: String,
+    messageID: String,
+    server: OpenCodeServer
+  ) -> Effect<Action> {
+    let client = client
+    return .run { send in
+      do {
+        try await client.waitForIdle(server, sessionID)
+        await send(
+          .composerWaitFinished(operationID: operationID, sessionID: sessionID, messageID: messageID)
+        )
+      } catch is CancellationError {
+        return
+      } catch {
+        // The stream and the next authoritative read still deliver the reply. A failed wait is not
+        // a failed send.
+        return
+      }
+    }
+    .cancellable(id: CancelID.composerWait(operationID), cancelInFlight: false)
+  }
+
+  private func adoptRestoredSession(_ sessionID: String, state: inout State) -> Effect<Action> {
+    guard state.composer.target.sessionID == sessionID || state.selection.sessionID == sessionID
+    else { return .none }
+    let client = client
+    let server = state.server
+    return .run { send in
+      do {
+        let session = try await client.getSession(server, sessionID)
+        await send(.composerSessionLoaded(sessionID: sessionID, result: .success(session)))
+      } catch is CancellationError {
+        return
+      } catch {
+        await send(
+          .composerSessionLoaded(
+            sessionID: sessionID,
+            result: .failure(error as? OpenCodeClientError ?? OpenCodeClientError(.unreachable))
+          )
+        )
+      }
+    }
+    .cancellable(id: CancelID.composerSend(0), cancelInFlight: true)
+  }
+
+  private func adopt(_ session: OpenCodeSession, state: inout State) {
+    guard state.isNewSessionDraft || state.selection.sessionID == session.id else { return }
+    state.root = session
+    state.selection = SessionSelection(
+      serverID: state.server.persistenceID,
+      sessionID: session.id,
+      intent: .browse
+    )
+    state.family = SessionFamily(root: session, sessions: [session])
+    state.pages = []
+    state.isLoading = false
+    state.loadProblem = nil
+  }
+
+  private func showOptimistic(
+    _ send: ComposerSend,
+    messageID: String,
+    sessionID: String,
+    state: inout State
+  ) {
+    guard !send.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !send.quotes.isEmpty
+    else { return }
+    var transcript = state.transcripts[sessionID] ?? TranscriptState(sessionID: sessionID)
+    guard !transcript.items.contains(where: { $0.id == messageID }) else { return }
+    transcript.items.append(
+      .userText(
+        id: messageID,
+        text: send.text,
+        source: nil,
+        quotes: send.quotes.map(\.wire)
+      )
+    )
+    state.transcripts[sessionID] = transcript
+  }
+
+  private func removeOptimistic(
+    _ send: ComposerSend,
+    messageID: String,
+    state: inout State
+  ) {
+    for (sessionID, var transcript) in state.transcripts {
+      if transcript.items.contains(where: { $0.id == messageID }) {
+        transcript.items.removeAll { $0.id == messageID }
+        state.transcripts[sessionID] = transcript
+      }
+    }
+  }
+
+  private enum MessageReconciliation {
+    case found
+    case absent
+    case unreadable
+  }
+
+  private func reconcileMessage(
+    messageID: String,
+    sessionID: String,
+    server: OpenCodeServer,
+    client: OpenCodeClient
+  ) async -> MessageReconciliation {
+    do {
+      let rows = try await client.message(server, sessionID, messageID)
+      if !rows.isEmpty { return .found }
+    } catch is CancellationError {
+      return .unreadable
+    } catch let error as OpenCodeClientError {
+      if error.statusCode != 404 { return .unreadable }
+    } catch {
+      return .unreadable
+    }
+    do {
+      let inbox = try await client.pendingInputs(server, sessionID)
+      return inbox.contains(where: { $0.id == messageID }) ? .found : .absent
+    } catch {
+      return .unreadable
+    }
+  }
+
+  // MARK: Pending inputs
+
+  private func pendingInputSendNow(_ inputID: String, state: inout State) -> Effect<Action> {
+    guard let input = state.pendingInputs.first(where: { $0.id == inputID }),
+      !input.isCompaction
+    else { return .none }
+    if !state.isRunning {
+      return strandedSteer(inputID: inputID, state: &state)
+    }
+    guard input.delivery == .queue, let sessionID = state.activeSessionID else { return .none }
+    return changePendingInputDelivery(
+      inputID,
+      to: .steer,
+      sessionID: sessionID,
+      state: &state
+    )
+  }
+
+  private func pendingInputQueue(_ inputID: String, state: inout State) -> Effect<Action> {
+    guard let input = state.pendingInputs.first(where: { $0.id == inputID }),
+      !input.isCompaction,
+      let sessionID = state.activeSessionID
+    else { return .none }
+    if !state.isRunning, input.delivery == .steer {
+      // Queueing a stranded message leaves it parked for the reader's next run.
+      return changePendingInputDelivery(inputID, to: .queue, sessionID: sessionID, state: &state)
+    }
+    guard input.delivery == .steer else { return .none }
+    return changePendingInputDelivery(inputID, to: .queue, sessionID: sessionID, state: &state)
+  }
+
+  private func changePendingInputDelivery(
+    _ inputID: String,
+    to delivery: PendingInput.Delivery,
+    sessionID: String,
+    state: inout State
+  ) -> Effect<Action> {
+    guard let index = state.pendingInputs.firstIndex(where: { $0.id == inputID }) else {
+      return .none
+    }
+    let previous = state.pendingInputs[index].delivery
+    state.pendingInputs[index].delivery = delivery
+    haptics.play(.tap)
+    let client = client
+    let server = state.server
+    return .run { send in
+      do {
+        try await client.setPendingInputDelivery(server, sessionID, inputID, delivery)
+        await send(
+          .pendingInputDeliveryFinished(
+            sessionID: sessionID,
+            inputID: inputID,
+            previous: previous,
+            result: .success(true)
+          )
+        )
+      } catch is CancellationError {
+        return
+      } catch {
+        await send(
+          .pendingInputDeliveryFinished(
+            sessionID: sessionID,
+            inputID: inputID,
+            previous: previous,
+            result: .failure(
+              error as? OpenCodeClientError ?? OpenCodeClientError(.unreachable)
+            )
+          )
+        )
+      }
+    }
+    .cancellable(id: CancelID.pendingInput(inputID), cancelInFlight: true)
+  }
+
+  private func pendingInputCancel(_ inputID: String, state: inout State) -> Effect<Action> {
+    guard state.pendingInputs.contains(where: { $0.id == inputID }),
+      let sessionID = state.activeSessionID
+    else { return .none }
+    haptics.play(.tap)
+    let client = client
+    let server = state.server
+    return .run { send in
+      do {
+        try await client.cancelPendingInput(server, sessionID, inputID)
+        await send(
+          .pendingInputCancelFinished(sessionID: sessionID, inputID: inputID, result: .success(true))
+        )
+      } catch is CancellationError {
+        return
+      } catch {
+        await send(
+          .pendingInputCancelFinished(
+            sessionID: sessionID,
+            inputID: inputID,
+            result: .failure(
+              error as? OpenCodeClientError ?? OpenCodeClientError(.unreachable)
+            )
+          )
+        )
+      }
+    }
+    .cancellable(id: CancelID.pendingInput(inputID), cancelInFlight: true)
+  }
+
+  // MARK: Request dock
+
+  private func sendRequestBar(state: inout State) -> Effect<Action> {
+    guard let id = state.requests.selectedRequestID,
+      !state.requests.respondingIDs.contains(id)
+    else { return .none }
+    if let permission = state.requests.permission(id) {
+      let reason = state.requestDock.answerText(for: state.requests)
+      return replyPermission(
+        id: id,
+        decision: .reject,
+        message: reason.isEmpty ? nil : reason,
+        state: &state
+      )
+    }
+    guard let form = state.requests.form(id) else { return .none }
+    guard form.fitsDock else {
+      state.requestDock.showsSheet = true
+      return .none
+    }
+    var dock = state.requestDock
+    let requests = state.requests
+    dock.answerChanged(
+      dock.answerText(for: requests),
+      request: requests,
+      answers: &state.requests.answers
+    )
+    state.requestDock = dock
+    let answers = state.requests.answers[id] ?? form.defaultAnswers
+    guard let selected = state.requestDock.field(for: form, answers: answers) else {
+      return submitForm(id, state: &state)
+    }
+    let ready = hasAnswer(answers[selected.field.key])
+    if !ready, selected.page >= selected.count - 1 {
+      return submitForm(id, state: &state)
+    }
+    if !ready { return .none }
+    if selected.page < selected.count - 1 {
+      state.requestDock.questionPages[id] = selected.page + 1
+      return .none
+    }
+    return submitForm(id, state: &state)
+  }
+
+  private func hasAnswer(_ value: FormValue?) -> Bool {
+    switch value {
+    case .string(let text): !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    case .strings(let values): !values.isEmpty
+    case .number, .boolean: true
+    case nil: false
+    }
+  }
+
+  private func syncRequestDock(_ state: inout State) {
+    guard state.requests.hasPending else {
+      state.requestDock.clearAnswers()
+      state.requestDock.showsSheet = false
+      return
+    }
+    if let id = state.requests.selectedRequestID, let form = state.requests.form(id) {
+      let answers = state.requests.answers[id] ?? form.defaultAnswers
+      if let selected = state.requestDock.field(for: form, answers: answers) {
+        state.requestDock.questionPages[id] = selected.page
+      }
+    }
+  }
+}
+
 extension RefreshReason {
   /// Metadata, family, requests, shells and jobs. The lighter reasons read only what a run or request
   /// change can affect.
@@ -1515,7 +2389,11 @@ extension SessionFeature {
     state.requests.selectedID = nil
     state.isLoading = true
     let abandon = abandonRefresh(&state)
-    return .merge(abandon, requestRefresh(.resume, state: &state))
+    return .merge(
+      abandon,
+      requestRefresh(.resume, state: &state),
+      .send(.composer(.switchTarget(.session(id: session.id))))
+    )
   }
 
   private func popPage(state: inout State) -> Effect<Action> {
@@ -1524,7 +2402,12 @@ extension SessionFeature {
     restoreSelection(pageID: state.activePage?.id ?? 0, state: &state)
     state.isLoading = true
     let abandon = abandonRefresh(&state)
-    return .merge(abandon, requestRefresh(.resume, state: &state))
+    let target = activeTarget(state: state)
+    return .merge(
+      abandon,
+      requestRefresh(.resume, state: &state),
+      target.map { .send(.composer(.switchTarget($0))) } ?? .none
+    )
   }
 
   /// A page change invalidates the read started for the old page rather than letting it finish
@@ -1546,6 +2429,12 @@ extension SessionFeature {
 
   private func restoreSelection(pageID: Int, state: inout State) {
     state.requests.selectedID = state.selectionByPage[pageID] ?? nil
+  }
+
+  private func activeTarget(state: State) -> ComposerTarget? {
+    if let id = state.activeSessionID { return .session(id: id) }
+    if state.composer.target.isNewSession { return state.composer.target }
+    return nil
   }
 
   // MARK: Requests
@@ -1577,6 +2466,7 @@ extension SessionFeature {
     if let selected = state.requests.selectedID, !state.requests.reviewIDs.contains(selected) {
       state.requests.selectedID = state.requests.reviewIDs.first
     }
+    syncRequestDock(&state)
   }
 
   private func pruneRequest(_ id: String, state: inout State) {
@@ -1587,6 +2477,7 @@ extension SessionFeature {
       state.requests.selectedID = state.requests.reviewIDs.first
       state.selectionByPage[state.activePage?.id ?? 0] = state.requests.selectedID
     }
+    syncRequestDock(&state)
   }
 
   private func replyPermission(
