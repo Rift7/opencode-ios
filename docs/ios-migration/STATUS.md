@@ -391,6 +391,8 @@ The 421 package tests are the sum of the six target runs the package runner prin
   Every positive send, retry, queue and dock journey used the deterministic fixture; live session mutation
   was not authorized and did not run.
 - **P9 model/agent/mentions/commands**: not built (see the P11 row below).
+- **Pre-existing Home deletion timing failure**: the intermittent Home deletion test remains a known
+  unrelated issue from earlier phases. It was not reproduced or changed in P9 and is not claimed fixed.
 
 ## Deferred P8 items — later phase and acceptance check
 
