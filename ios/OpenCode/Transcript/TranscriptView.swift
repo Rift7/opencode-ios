@@ -18,6 +18,7 @@ struct TranscriptView: View {
   @State private var pendingEarlierAnchor: String?
   @State private var restoreTask: Task<Void, Never>?
   @State private var readerIsScrolling = false
+  @State private var quoteSelection: QuoteSelection?
   @State private var frameProbe = ScrollFrameProbe()
 
   init(store: StoreOf<SessionFeature>, transcript: TranscriptState, isRunning: Bool) {
@@ -45,7 +46,8 @@ struct TranscriptView: View {
               entry: entry,
               isRunning: isRunning,
               expanded: transcript.expandedIDs.contains(entry.id),
-              store: store
+              store: store,
+              onQuote: { quoteSelection = QuoteSelection(text: $0) }
             )
             .id(entry.id)
           }
@@ -66,6 +68,7 @@ struct TranscriptView: View {
       }
       .scrollPosition(id: $position)
       .accessibilityIdentifier("transcript-list")
+      .scrollDismissesKeyboard(.interactively)
       .defaultScrollAnchor(.bottom)
       .onScrollGeometryChange(for: TranscriptScrollMetrics.self) { geometry in
         TranscriptScrollMetrics(geometry)
@@ -139,7 +142,26 @@ struct TranscriptView: View {
           .frame(width: 1, height: 1)
           .accessibilityIdentifier("transcript-follow-state")
       }
+      .overlay(alignment: .topLeading) {
+        Text("\(MarkdownDebugCounters.parseRequests)")
+          .font(.caption2)
+          .foregroundStyle(.clear)
+          .frame(width: 1, height: 1)
+          .accessibilityIdentifier("markdown-parse-count")
+      }
+      .overlay(alignment: .topLeading) {
+        Text("\(entries.count)")
+          .font(.caption2)
+          .foregroundStyle(.clear)
+          .frame(width: 1, height: 1)
+          .accessibilityIdentifier("transcript-entry-count")
+      }
       #endif
+    }
+    .sheet(item: $quoteSelection) { selection in
+      QuoteSelectionSheet(text: selection.text) { text in
+        store.send(.transcriptQuoteTapped(text))
+      }
     }
   }
 

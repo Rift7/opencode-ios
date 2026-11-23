@@ -1,0 +1,261 @@
+import Foundation
+import OpenCodeCore
+import OpenCodeServer
+
+/// Where a composer's draft belongs. A new-session draft is scoped by its project so leaving and
+/// returning to the same project restores it; once the first send creates the session it moves to
+/// that session's key.
+public enum ComposerScope: Codable, Hashable, Sendable {
+  case session(String)
+  case newSession(directory: String)
+
+  public var storageToken: String {
+    switch self {
+    case .session(let id): "session:\(id)"
+    case .newSession(let directory): "new:\(directory)"
+    }
+  }
+}
+
+public struct ComposerDraftKey: Codable, Hashable, Sendable {
+  public var serverID: String
+  public var scope: ComposerScope
+
+  public init(serverID: String, scope: ComposerScope) {
+    self.serverID = serverID
+    self.scope = scope
+  }
+
+  public var storageKey: String { "\(serverID)|\(scope.storageToken)" }
+}
+
+/// One transcript quote waiting to be sent. The wire form is a `metadata.comments` entry plus a
+/// quoted block in the model text; the transcript itself renders the same pair.
+public struct ComposerQuote: Codable, Identifiable, Equatable, Sendable {
+  public var id: String
+  public var text: String
+  public var comment: String?
+
+  public init(id: String = UUID().uuidString.lowercased(), text: String, comment: String? = nil) {
+    self.id = id
+    self.text = text
+    self.comment = comment
+  }
+
+  /// Selection text with surrounding whitespace removed; nil when nothing is left.
+  public static func cleaned(_ text: String) -> String? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  public var wire: TranscriptQuote {
+    TranscriptQuote(text: text, comment: comment?.trimmingCharacters(in: .whitespacesAndNewlines))
+  }
+}
+
+/// The composer's destination. `newSession.id` is the client-made session ID used for the first
+/// create, so a retry cannot create a second session.
+public enum ComposerTarget: Equatable, Sendable {
+  case session(id: String)
+  case newSession(id: String, directory: String)
+
+  public var sessionID: String? {
+    if case .session(let id) = self { return id }
+    return nil
+  }
+
+  public var directory: String? {
+    if case .newSession(_, let directory) = self { return directory }
+    return nil
+  }
+
+  public var isNewSession: Bool {
+    if case .newSession = self { return true }
+    return false
+  }
+
+  public var newSessionID: String? {
+    if case .newSession(let id, _) = self { return id }
+    return nil
+  }
+
+  public var scope: ComposerScope {
+    switch self {
+    case .session(let id): .session(id)
+    case .newSession(_, let directory): .newSession(directory: directory)
+    }
+  }
+}
+
+/// The persisted part of a composer. Selection and focus are view state and deliberately absent.
+public struct ComposerDraft: Codable, Equatable, Sendable {
+  public var text: String
+  public var quotes: [ComposerQuote]
+  public var projectDirectory: String?
+  /// A first send created this session, but the send or the app stopped before the screen learned.
+  public var createdSessionID: String?
+  public var updatedAt: Date
+
+  public init(
+    text: String = "",
+    quotes: [ComposerQuote] = [],
+    projectDirectory: String? = nil,
+    createdSessionID: String? = nil,
+    updatedAt: Date = Date(timeIntervalSince1970: 0)
+  ) {
+    self.text = text
+    self.quotes = quotes
+    self.projectDirectory = projectDirectory
+    self.createdSessionID = createdSessionID
+    self.updatedAt = updatedAt
+  }
+
+  public var isEmpty: Bool { text.isEmpty && quotes.isEmpty && createdSessionID == nil }
+
+  public func boundedProblem() -> ComposerDraftSave? {
+    let textBytes = text.utf8.count
+    let quoteBytes = quotes.reduce(0) { $0 + $1.text.utf8.count + ($1.comment?.utf8.count ?? 0) }
+    if textBytes > ComposerDraftBounds.maximumTextBytes {
+      return .tooLarge
+    }
+    if quoteBytes > ComposerDraftBounds.maximumQuoteBytes || quotes.count > ComposerDraftBounds.maximumQuotes {
+      return .tooLarge
+    }
+    return nil
+  }
+}
+
+public enum ComposerDraftBounds {
+  /// A draft larger than this is kept in memory and reported, never silently truncated.
+  public static let maximumTextBytes = 128 * 1024
+  public static let maximumQuoteBytes = 64 * 1024
+  public static let maximumQuotes = 200
+}
+
+public enum ComposerDraftLoad: Equatable, Sendable {
+  case found(ComposerDraft)
+  case missing
+  case failure(StorageFailure)
+}
+
+public enum ComposerDraftSave: Equatable, Sendable {
+  case saved
+  case tooLarge
+  case failure(StorageFailure)
+}
+
+/// Typed facts for the composer's error line. Copy is chosen at the view edge.
+public enum ComposerProblem: Equatable, Sendable {
+  case couldNotRestore
+  case couldNotSave
+  case draftTooLarge
+  case couldNotSend
+  case couldNotVerifySend
+  case notConnected
+}
+
+/// How a failed POST is treated. A definite rejection never reached the session's history; an
+/// ambiguous outcome may have been accepted, so it must be read back before a retry.
+public enum ComposerSendFailure: Equatable, Sendable {
+  case definite
+  case ambiguous
+
+  public static func classify(_ error: OpenCodeClientError) -> ComposerSendFailure {
+    if error.mayHaveReachedServer { return .ambiguous }
+    if let status = error.statusCode {
+      if status == 408 || status == 429 || status == 503 { return .ambiguous }
+      if OpenCodeClientError.isGatewayFailure(status) { return .ambiguous }
+      return .definite
+    }
+    return .ambiguous
+  }
+}
+
+public struct FailedComposerSend: Identifiable, Equatable, Sendable {
+  public var id: String { messageID }
+  public var messageID: String
+  public var text: String
+  public var quotes: [ComposerQuote]
+  public var delivery: Delivery
+  public var reason: ComposerProblem
+  public var failure: ComposerSendFailure
+
+  public init(
+    messageID: String,
+    text: String,
+    quotes: [ComposerQuote],
+    delivery: Delivery,
+    reason: ComposerProblem,
+    failure: ComposerSendFailure
+  ) {
+    self.messageID = messageID
+    self.text = text
+    self.quotes = quotes
+    self.delivery = delivery
+    self.reason = reason
+    self.failure = failure
+  }
+}
+
+/// The immutable request one tap of Send produced. Its message ID identifies the optimistic
+/// transcript row and the idempotent prompt admission across retries and reconciliation.
+public struct ComposerSend: Equatable, Sendable {
+  public var target: ComposerTarget
+  public var messageID: String
+  public var text: String
+  public var quotes: [ComposerQuote]
+  public var delivery: Delivery
+  public var revision: Int
+
+  public init(
+    target: ComposerTarget,
+    messageID: String,
+    text: String,
+    quotes: [ComposerQuote],
+    delivery: Delivery,
+    revision: Int
+  ) {
+    self.target = target
+    self.messageID = messageID
+    self.text = text
+    self.quotes = quotes
+    self.delivery = delivery
+    self.revision = revision
+  }
+
+  public var hasContent: Bool {
+    !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !quotes.isEmpty
+  }
+
+  /// The model-visible text and its metadata, using the audited quote contract: quoted lines in
+  /// the prompt and `{"type":"quote"}` entries in `metadata.comments`.
+  public var prompt: PromptBody {
+    let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    var parts: [String] = []
+    if !typed.isEmpty { parts.append(typed) }
+    for quote in quotes { parts.append(Self.quoteBlock(quote)) }
+    let modelText = parts.joined(separator: "\n")
+    let comments = quotes.compactMap { quote -> PromptBody.Metadata.Comment? in
+      let comment = quote.comment?.trimmingCharacters(in: .whitespacesAndNewlines)
+      return PromptBody.Metadata.Comment(
+        type: "quote",
+        text: quote.text,
+        comment: (comment?.isEmpty ?? true) ? nil : comment
+      )
+    }
+    let metadata = comments.isEmpty
+      ? nil
+      : PromptBody.Metadata(displayText: typed, comments: comments)
+    return PromptBody(id: messageID, text: modelText, delivery: delivery, metadata: metadata)
+  }
+
+  public static func quoteBlock(_ quote: ComposerQuote) -> String {
+    let lines = quote.text.split(separator: "\n", omittingEmptySubsequences: false)
+      .map { "> \($0)" }
+      .joined(separator: "\n")
+    let block = "The user quoted the following from earlier in the conversation:\n\(lines)"
+    let comment = quote.comment?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let comment, !comment.isEmpty else { return block }
+    return "\(block)\n\nThe user made the following comment regarding this quote: \(comment)"
+  }
+}

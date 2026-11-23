@@ -17,7 +17,8 @@ Baselines:
 - Behaviour: `dev = 7358160e808fb1870eeb20f5da8df832667019d1`.
 - iOS evidence: parity corpus synced at iOS `01eef583`; screenshots at `d809b1e` and `16b40f7` (October).
 - New code: `ios` branch from the same `dev` SHA. P5 merged as `3b34932c` (PR #4); P6 as `7966dcfe`
-  (PR #5); P7 as `92a7c677` (PR #6). P8 branched from `92a7c677` as `ios-transcript`.
+  (PR #5); P7 as `92a7c677` (PR #6); P8 as `2823c06e` (PR #7, tree `1147dca8`). P9 branched from
+  `2823c06e` as `ios-composer`.
 
 ## App shell
 
@@ -84,7 +85,7 @@ cancellation identities → error states. The full extraction is in `docs/ios-mi
 | Home, drawer, projects, Catch Up | `feature/drawer/.../{HomeFeature,HomeFeatureDrawerState,HomeFeatureSessionPages,HomeFeatureSessions}.kt`, `catchup/CatchUpFeature.kt` | `HomeFeature.swift`, `HomeView.swift`, `CatchUpStack.swift` | `OpenCodeKit/Sources/OpenCodeDrawer`, `ios/OpenCode/Drawer/HomeView.swift` | **done for P6 scope** — see the Home section below |
 | Session, subagents, background work | `feature/session/.../SessionFeature.kt` | `SessionFeature.swift`, `SessionView.swift` | `.../OpenCodeSession`, `ios/OpenCode/Session/SessionView.swift` | **done for P7 scope** — see the Session section below; transcript and composer remain P8/P9 |
 | Transcript | `feature/transcript/.../TranscriptEntry.kt`, `list/`, `markdown/` | `TranscriptEntry.swift`, `TranscriptListViewController.swift` (historical) | `.../OpenCodeTranscript`, `ios/OpenCode/Transcript` | **done for P8 scope** — see the Transcript section below |
-| Composer, pending inputs | `feature/composer/.../ComposerTextInput.kt`, `RequestDockFeature.kt` | `ComposerTextInput.swift`, `RequestReviewView.swift` | `.../OpenCodeComposer` | not started |
+| Composer, pending inputs | `feature/composer/.../ComposerTextInput.kt`, `ComposerPersistence*.kt`, `RequestDockFeature.kt`, `QueuedMessagesSheet.kt` | `ComposerTextInput.swift`, `RequestReviewView.swift`, `QueuedMessagesSheet.swift` | `.../OpenCodeComposer`, `ios/OpenCode/Composer` | **done for P9 scope** — see the Composer section below; model/agent/mentions and attachments deferred to P11/P10 |
 | Media, agent files, browser | `feature/media/.../` | `Media/`, `Browser/` | `.../OpenCodeMedia` | not started |
 | Settings, experiments, diagnostics | `feature/settings/.../SettingsFeature.kt` | `SettingsView.swift`, `DiagnosticsView.swift` | `.../OpenCodeSettings` | not started |
 | Notifications, share, Live Activities | `feature/system/.../` | `System/`, `OpenCodeShare/`, `OpenCodeWidgets/` | `.../OpenCodeSystem` | not started |
@@ -155,6 +156,21 @@ cancellation identities → error states. The full extraction is in `docs/ios-mi
 - Historical iOS file names and October screenshots are evidence only. The October capture harness names
   `transcript-list` and `tool-image-mosaic` are reused as identifiers where they still describe the UI.
 
+## Composer (P9)
+
+| Behaviour | Android source (`dev = 7358160e`) | Recovered iOS evidence | New path | Status |
+| --- | --- | --- | --- | --- |
+| Text, selection, IME and hardware Return | `ComposerTextInput.kt` (`ImagePasteTextView`, `syncText`, `finishCompositionIfNeeded`, `ComposerSavedSelection`, keyboard preview handling) | `ComposerTextInput.swift` (description only) | `ios/OpenCode/Composer/ComposerTextInput.swift` | done for the bridge — `UITextView` preserves marked text against external sync, clamps selection, grows to 168 pt, sends on Return and inserts a newline on Shift+Return; marked text/hardware keyboard device checks remain |
+| Draft scope, debounce, flush and bounds | `ComposerPersistence*.kt` (`composer-state.json`, 500 ms, server+session keys, New Session project, 30-day staleness) | `ComposerPersistence.swift` (description only) | `OpenCodeComposer/ComposerDraftStore.swift`, `ComposerFeature` | done — server+session / server+project keys; 500 ms reducer debounce; Done and background flush; 128 KiB text, 64 KiB quotes, 200 quotes; failure and too-large are typed, no truncation |
+| Send eligibility, first-send creation, duplicate protection | `SessionFeatureSend.kt` (`sendComposer`, `submit`, `SendTapped`), `HomeFeatureDrawer.kt` (`NewSessionTapped`) | `SessionFeature.swift` (description only) | `ComposerFeature`, `SessionFeature.startComposerSend`, Home `newSessionTapped` | done — one in-flight send; `POST /api/session` with a client id before the prompt; created session retained on prompt failure |
+| Message IDs, failure recovery, retry | `SessionFeatureDelivery.kt` (`serverHas`, send backoff), `LivePrompts.kt` (idempotent prompt ID) | `SessionFeature.swift` (description only) | `ComposerFeature.failedSends`, `SessionFeature.composerSendResult`, `reconcileMessage` | done with the recorded P9 gate — definite rejection can retry; ambiguous read-back settles or reports unverified; a retry mints a new ID only after a successful read-back confirms the old ID absent |
+| Experimental wait loop | `LiveSessions.kt` (`requestWaitForIdle`, 25 s poll, 12 fast failures, active probe, `.once` caller escape) | not recoverable | `OpenCodeServer/Retry/SessionWaitLoop.swift`, `PromptOperations.waitForIdle` | done — one retry owner, cancellable, re-arms a timed-out live run immediately; completion schedules the existing settlement read |
+| Queued inputs and steer | `SessionFeaturePendingInputs.kt` (inbox, delivery override, cancel, stranded steer), `QueuedMessagesSheet.kt` | `OpenCodeClient+Payloads.swift` (description only) | `SessionFeature` inbox actions, `QueuedInputsSheet` | done — P7 inbox remains the only model; Send Now/move/cancel; idle messages reuse queue-then-steer; late inbox results are session-fenced |
+| Request dock | `RequestDockView.kt`, `RequestAnswer.kt`, `RequestCollapse.kt` | `RequestReviewView.swift` (description only) | `RequestDockState`, `RequestDockPanel`, `RequestAnswerBar`; P7 sheet retained | done for the audited fold/question/answer-bar scope — permissions and simple forms dock, larger forms keep the sheet; keyboard Send routes to the request, never chat; the chat draft is untouched |
+| Quote handoff | `ComposerQuote.kt`, `ComposerQuoteViews.kt`, `PromptBody.Metadata.comments` | quote cards only | `ComposerQuote`, `ComposerSend.prompt`, `QuoteSelectionSheet` | done for one block — native selection text and optional comment become the model block plus `metadata.comments`; cross-block selection remains P8/P14 |
+| Model/agent/mode, autocomplete, mentions and commands | `ModelPicker*`, `AgentPicker`, `AutocompleteFeature.kt`, `ComposerAutocomplete*` | not recoverable | — | deferred to P11 (pickers/mentions) and P10 (files); the composer deliberately has no inert controls for them |
+| Attachments, photos, files and camera | `ComposerAttachmentsFeature.kt`, `AttachmentPicker.kt`, `ComposerPhotoViewer.kt` | `Media/` (description only) | — | deferred to P10; no + control is shown before the attachment boundary exists |
+
 ## Deliberate divergences
 
 Recorded here so they are not mistaken for missing work.
@@ -167,7 +183,7 @@ Recorded here so they are not mistaken for missing work.
 | Transcript motion | bottom-anchored `LazyColumn`, no follower | SwiftUI `ScrollView` + `LazyVStack`: follow at the end, Jump to Latest when browsing, no UIKit follower, row growth or send flight (D-59) |
 | Photo picking | system picker | system picker proposed; no in-app photo sheet |
 | Autocomplete | list, next-frame filtering | SwiftUI-native list |
-| Quotes | quote cards above the bubble | adopted as display-only quote cards; quote-to-composer is P9 (D-60) |
+| Quotes | quote cards above the bubble | quote cards plus a one-block native selection handoff into the composer (P9, D-60/D-69); cross-block selection remains deferred |
 | Notifications | FCM, relay absent | Experimental, off until a relay exists |
 | Redirect tests | OkHttp interceptor + MockWebServer | pure `HTTPRedirectRule` plus a loopback HTTP server that exercises the real URLSession delegate (D-22, D-28) |
 | Cleartext | manifest cleartext plus an interceptor | ATS exceptions plus `TransportSecurity`, both narrower than "cleartext everywhere" (D-22) |
@@ -209,6 +225,9 @@ Recorded here so they are not mistaken for missing work.
 | Server: transcript decoding and routes | `.../TranscriptDecodingTests.swift` | done — 11 tests: user references/quotes/images, assistant ordinals/tools, shell rows, newest-first ordering, run errors, notices, malformed payloads, bounds, all three routes |
 | Transcript grouping and projection | `OpenCodeTranscriptTests/TranscriptTests.swift` | done — 26 tests: grouping, pending questions, start model, entry start, 1,000 stable identities, newest/older merges, streaming tail, tool lifecycle, Markdown blocks, copy text and cache bounds |
 | Transcript in the session | `OpenCodeSessionTests/TranscriptFeatureTests.swift` | done — 19 tests: read plan, empty/failure, live + settlement, event race, invalidation, earlier history/retry, stale generation, reconnect, page restoration, copy/link safety, 600-token tail and 1,000 rows |
+| Composer state and drafts | `OpenCodeComposerTests/ComposerFeatureTests.swift` | done — 10 tests: scoped restore, delayed race, failed save, size bound, duplicate tap, newer typing, unverified, failure recovery, quote metadata |
+| Composer sends, inbox, dock, quote in the session | `OpenCodeSessionTests/ComposerSessionTests.swift` | done — 14 tests: first-send creation, duplicate protection, create-then-fail, ambiguous found/unreadable, new-ID retry, typing, queue/steer/cancel, question/permission dock, quote handoff |
+| Composer routes and wait loop | `OpenCodeServerTests/{ComposerClientTests,SessionWaitLoopTests}.swift` | done — 4 route/body tests and 5 bounded wait tests (immediate re-arm, backoff, inactive run, caller-owned retry, 12-failure bound) |
 | Server: client requests | `.../OpenCodeClientTests.swift` | done |
 | Bounded channel | `OpenCodeCoreTests/BoundedChannelTests.swift` | done; one pre-existing timing-sensitive expectation flaked once and passed on rerun |
-| UI (XCUITest) | `OpenCodeUITests/{LaunchSmokeTests,ConnectionLifecycleUITests,KeychainProbeTests,SavedServerProbeTests,HomeUITests,HomeScreenshotUITests,HomeScrollTraceUITests,SessionUITests,SessionScreenshotUITests,TranscriptUITests,TranscriptScreenshotUITests,TranscriptScrollTraceUITests}.swift` | done — 46 tests; P8 adds nine transcript journeys, light/dark/tool screenshots and two simulator scroll traces |
+| UI (XCUITest) | `OpenCodeUITests/{LaunchSmokeTests,ConnectionLifecycleUITests,KeychainProbeTests,SavedServerProbeTests,HomeUITests,HomeScreenshotUITests,HomeScrollTraceUITests,SessionUITests,SessionScreenshotUITests,TranscriptUITests,TranscriptScreenshotUITests,TranscriptScrollTraceUITests,ComposerUITests,ComposerScreenshotUITests}.swift` | done — 57 tests; P9 adds ten composer journeys (new session, relaunch, failed send, session isolation, running/queue, dock, quote, Dynamic Type/dark/keyboard, two typing traces) and ten light/dark screenshots |

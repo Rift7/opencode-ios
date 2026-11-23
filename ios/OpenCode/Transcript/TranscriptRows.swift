@@ -10,23 +10,33 @@ struct TranscriptEntryRow: View {
   let isRunning: Bool
   let expanded: Bool
   let store: StoreOf<SessionFeature>
+  let onQuote: (String) -> Void
 
   var body: some View {
     switch entry {
     case .single(let item):
-      TranscriptItemRow(item: item, expanded: expanded, store: store)
+      TranscriptItemRow(item: item, expanded: expanded, store: store, onQuote: onQuote)
     case .userGroup(_, let items, let startsTurn):
       VStack(alignment: .trailing, spacing: OpenCodeSpacing.s8) {
         ForEach(items) { item in
-          TranscriptItemRow(item: item, expanded: expanded, store: store)
+          TranscriptItemRow(item: item, expanded: expanded, store: store, onQuote: onQuote)
         }
       }
       .padding(.top, startsTurn ? OpenCodeSpacing.s12 : 0)
       .frame(maxWidth: .infinity, alignment: .trailing)
     case .toolGroup(_, let tools):
-      ToolGroupRow(id: entry.id, tools: tools, expanded: expanded, store: store)
+      ToolGroupRow(id: entry.id, tools: tools, expanded: expanded, store: store, onQuote: onQuote)
     case .replyEnd(let id, let texts):
       HStack {
+        Button {
+          onQuote(texts.joined(separator: "\n\n"))
+        } label: {
+          Label(AppCopy.text("transcript.quote_action"), systemImage: "quote.opening")
+            .font(OpenCodeFonts.font(.caption))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(OpenCodeColors.color(.textWeak))
+        .accessibilityIdentifier("transcript-quote-\(id)")
         Button {
           store.send(.transcriptCopyTapped(texts.joined(separator: "\n\n")))
         } label: {
@@ -52,6 +62,7 @@ private struct TranscriptItemRow: View {
   let item: TranscriptItem
   let expanded: Bool
   let store: StoreOf<SessionFeature>
+  let onQuote: (String) -> Void
 
   var body: some View {
     switch item {
@@ -317,6 +328,7 @@ private struct ToolGroupRow: View {
   let tools: [TranscriptItem]
   let expanded: Bool
   let store: StoreOf<SessionFeature>
+  let onQuote: (String) -> Void
 
   private var calls: [TranscriptToolCall] {
     tools.compactMap {
@@ -356,7 +368,7 @@ private struct ToolGroupRow: View {
       if expanded {
         VStack(alignment: .leading, spacing: OpenCodeSpacing.s8) {
           ForEach(Array(tools.enumerated()), id: \.offset) { _, item in
-            TranscriptItemRow(item: item, expanded: true, store: store)
+            TranscriptItemRow(item: item, expanded: true, store: store, onQuote: onQuote)
           }
         }
         .padding(.leading, OpenCodeSpacing.s12)

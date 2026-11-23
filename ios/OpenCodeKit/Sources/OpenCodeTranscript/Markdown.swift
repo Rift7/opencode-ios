@@ -313,6 +313,15 @@ public struct MarkdownParserClient: Sendable {
   }
 }
 
+#if DEBUG
+  /// Process-wide counters for the typing trace. They are read by a DEBUG accessibility label and
+  /// never part of app behaviour.
+  @MainActor
+  public enum MarkdownDebugCounters {
+    public static var parseRequests = 0
+  }
+#endif
+
 /// Owns one Markdown row's publication. A request carries a revision; only the current revision can
 /// publish, so an older parse that finishes late cannot replace newer text. Changing content clears
 /// the stale blocks and falls back to the view's plain text until the current parse lands.
@@ -350,6 +359,9 @@ public final class MarkdownBlockPresenter {
         self.publish(cached, key: key, revision: revision)
         return
       }
+      #if DEBUG
+        MarkdownDebugCounters.parseRequests += 1
+      #endif
       let parsed = await Task.detached(priority: .userInitiated) {
         await parser.parse(text)
       }.value

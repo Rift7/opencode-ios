@@ -124,6 +124,14 @@ public struct OpenCodeClient: Sendable {
     @Sendable (OpenCodeServer, String, String?) async throws -> TranscriptPage
   /// One message's rows, ordered oldest first.
   public var message: @Sendable (OpenCodeServer, String, String) async throws -> [TranscriptItem]
+  /// Admits one prompt under a client-made message ID, so a retry cannot create a second copy.
+  public var sendPrompt: @Sendable (OpenCodeServer, String, PromptBody) async throws -> Void
+  /// Creates a session in `directory`; `id` makes the create idempotent.
+  public var createSession: @Sendable (OpenCodeServer, String, String) async throws -> OpenCodeSession
+  /// Withdraws one undelivered inbox input. Already delivered is a no-op.
+  public var cancelPendingInput: @Sendable (OpenCodeServer, String, String) async throws -> Void
+  /// The audited experimental wait loop. It owns its single retry layer.
+  public var waitForIdle: @Sendable (OpenCodeServer, String) async throws -> Void
   /// The long-lived event subscription. The flow throws on disconnect; the owner reconnects.
   /// `onPhase` is awaited before the reconnect loop acts, so a consumer can show the state and
   /// re-read REST before the next socket opens.
@@ -197,6 +205,18 @@ public struct OpenCodeClient: Sendable {
     message: @escaping @Sendable (OpenCodeServer, String, String) async throws -> [TranscriptItem] = {
       _, _, _ in []
     },
+    sendPrompt: @escaping @Sendable (OpenCodeServer, String, PromptBody) async throws -> Void = {
+      _, _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    createSession: @escaping @Sendable (OpenCodeServer, String, String) async throws -> OpenCodeSession = {
+      _, _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    cancelPendingInput: @escaping @Sendable (OpenCodeServer, String, String) async throws -> Void = {
+      _, _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    waitForIdle: @escaping @Sendable (OpenCodeServer, String) async throws -> Void = { _, _ in
+      throw OpenCodeClientError(.unsupported)
+    },
     events: @escaping @Sendable (OpenCodeServer, @escaping @Sendable (EventStreamPhase) async -> Void) ->
       AsyncThrowingStream<ServerEvent, any Error>
   ) {
@@ -228,6 +248,10 @@ public struct OpenCodeClient: Sendable {
     self.transcript = transcript
     self.transcriptHistory = transcriptHistory
     self.message = message
+    self.sendPrompt = sendPrompt
+    self.createSession = createSession
+    self.cancelPendingInput = cancelPendingInput
+    self.waitForIdle = waitForIdle
     self.events = events
   }
 }
@@ -541,6 +565,40 @@ private struct Runtime: Sendable {
           messageID: messageID,
           environment: environment,
           policy: policy
+        )
+      },
+      sendPrompt: { server, sessionID, body in
+        try await Operations.sendPrompt(
+          server,
+          sessionID: sessionID,
+          body: body,
+          environment: environment,
+          policy: policy
+        )
+      },
+      createSession: { server, directory, id in
+        try await Operations.createSession(
+          server,
+          directory: directory,
+          id: id,
+          environment: environment,
+          policy: policy
+        )
+      },
+      cancelPendingInput: { server, sessionID, inputID in
+        try await Operations.cancelPendingInput(
+          server,
+          sessionID: sessionID,
+          inputID: inputID,
+          environment: environment,
+          policy: policy
+        )
+      },
+      waitForIdle: { server, sessionID in
+        try await Operations.waitForIdle(
+          server,
+          sessionID: sessionID,
+          environment: environment
         )
       },
       events: { server, onPhase in

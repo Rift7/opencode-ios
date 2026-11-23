@@ -17,7 +17,7 @@ apart:
 | --- | --- | --- | --- |
 | `P-1` | Typography and colour system | D-1 (typography), D-2 (colour) | — |
 | `P-2` | Transcript motion | — | **open** |
-| `P-3` | Composer text input | — | **open** |
+| `P-3` | Composer text input | D-64 (`UITextView` bridge) | — |
 | `P-4` | Photo picking | — | **open** |
 | `P-5` | Glass | — | **open** |
 | `P-6` | Branch location | D-3 | — |
@@ -849,3 +849,75 @@ surface. This keeps P9's composer and P10's media above the transcript rather th
   `ios/OpenCode/Transcript/*`.
 - P10 owns image decoding, viewers, file opening, the browser and richer math/Mermaid. P8's placeholders and
   link cards are the routing boundary, not a claim that media is complete.
+
+### D-64 The composer's text input is a focused UITextView bridge
+`P-3` is resolved with `ios/OpenCode/Composer/ComposerTextInput.swift`, a small `UIViewRepresentable` around
+`UITextView`. It follows iOS model evidence (the historical app bridged `UITextView`) and the audited Kotlin
+input's behaviour: selection survives external drafts, an IME's marked text is never overwritten by a draft
+sync, Return sends, Shift+Return inserts a newline, and the field grows to 168 pt before scrolling.
+
+- Rejected: a SwiftUI `TextField` that writes the whole value on every keystroke; it cannot preserve marked
+  text against an external clear and loses selection.
+- Concurrency: the bridge is main-actor by the app target's default; the binding sends a semantic action, not
+  a whole-store update inside `textViewDidChange`.
+- Device-only checks (marked text, hardware keyboard, VoiceOver) are recorded unverified rather than inferred
+  from simulator typing.
+
+### D-65 Drafts are explicit, scoped and bounded
+`ComposerDraftStore` is one actor over an atomically written JSON record set. Keys are
+`server persistence ID | session:<sessionID>` or `server persistence ID | new:<project directory>`; the latter
+keeps a New Session draft stable across relaunch without letting one project overwrite another. The reducer
+debounces writes 500 ms, flushes on Done/background, and discards a delayed load when a newer edit or key exists.
+
+- Limits: 128 KiB text, 64 KiB quote text, 200 quotes. Exceeding them is `.tooLarge`: the reducer keeps the full
+  text and shows a recoverable line; it never saves or displays a prefix.
+- A read failure is `.couldNotRestore`, a write failure `.couldNotSave`; neither is a successful save. The store
+  also refuses an unknown/corrupt version rather than overwriting it.
+- The chat draft is not parked in request state. While a request docks, the answer bar has its own text and the
+  chat composer’s value is untouched.
+- A successful send clears only the snapshot it sent. A later edit has a higher revision and survives that
+  send’s result.
+
+### D-66 A failed prompt is reconciled before a new message id
+The prompt is admitted under a client-made message ID. A definite rejection can be retried. An ambiguous
+transport/gateway result is first reconciled with `GET /api/session/{id}/message/{messageID}` and the inbox.
+
+- Found → settle as success; do not post again.
+- Confirmed absent → Retry may mint a new ID, satisfying the recorded P9 gate without blind duplication.
+- Read-back unreadable → keep the optimistic row, report **Couldn’t verify** and do not send again until an
+  authoritative read settles it.
+- A session create uses its own client ID, so a retried create cannot make a second session. If create succeeds
+  and the prompt fails, the created session is adopted and the text remains recoverable (composer or Retry/Edit).
+- One operation ID fences late results; App creates a new session child on a destination change, cancelling the
+  old effects.
+
+### D-67 The request dock is a presentation of the P7 request model
+There is no second request model. `RequestDockState` owns only the answer-bar text, question page, fold and the
+sheet flag. `SessionRequests` keeps requests, defaults, visibility, validation, responding/completed IDs and
+settlement.
+
+- A permission, a question, or a one-field non-external form docks. Anything larger keeps the P7 sheet through
+  the dock’s Review action.
+- While any request is pending, keyboard Send runs the request workflow; it cannot send the answer as a chat
+  message. The chat draft stays in `ComposerFeature` and is never posted as an answer.
+- Allow Once/Always/Deny, hidden-answer pruning, defaults, global-form directory routing and read-back
+  settlement remain the P7 implementations.
+
+### D-68 The experimental wait has one retry owner
+`POST /api/experimental/session/{id}/wait` is a 25 s long poll. `SessionWaitLoop` sends each poll and active
+probe once: a timed-out live run re-arms immediately, a fast failure probes the run and then waits the shared
+session-wait backoff, up to 12 fast failures; a caller-owned `.once` policy gets the failure back after the
+probe. Cancellation propagates and no generic transport retry wraps it.
+
+- Completion means the run settled. The send path then asks the existing `RefreshReason.settlement` read; it
+  does not add a stream, a poller or a second transcript queue.
+- A failed wait is not a failed send. The stream and subsequent authoritative reads remain the source of truth.
+
+### D-69 Quotes are one block’s native selection plus the audited metadata
+The reply-end Quote action opens a selectable `UITextView` sheet; its selected substring, or a user-adjusted
+selection, becomes `ComposerQuote(text, comment)`. Sending appends the audited quoted block to the model text and
+writes `{"type":"quote","text","comment"}` to `metadata.comments` with `metadata.displayText` for the typed text.
+
+- The chat draft is never replaced or cleared by inserting/removing a quote.
+- Cross-block selection as one document remains the P8/P14 limitation; P9 does not claim it.
+- Selected text is never logged.

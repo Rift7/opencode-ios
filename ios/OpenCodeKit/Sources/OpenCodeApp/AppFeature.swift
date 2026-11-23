@@ -788,6 +788,7 @@ public struct AppFeature {
     case pairingFinished(attempt: Int, result: Result<OpenCodeServer, OpenCodeClientError>)
     case disconnectTapped
     case sessionDestinationDismissed
+    case sessionDismissed
     case noticeDismissed
     case persisted(saved: StorageWrite, list: StorageWrite)
     case replaceSavedDataTapped
@@ -815,6 +816,7 @@ public struct AppFeature {
   @Dependency(\.networkPath) private var networkPath
   @Dependency(\.pasteboard) private var pasteboard
   @Dependency(\.uuidClient) private var uuid
+  @Dependency(\.clock) private var clock
 
   public init() {}
 
@@ -913,7 +915,10 @@ public struct AppFeature {
           .send(.connection(.scenePhaseChanged(isActive: isActive)))
         ]
         if state.home != nil { effects.append(.send(.home(.connectionChanged(isConnected: live)))) }
-        if state.session != nil { effects.append(.send(.session(.connectionChanged(isConnected: live)))) }
+        if state.session != nil {
+          effects.append(.send(.session(.connectionChanged(isConnected: live))))
+          if !isActive { effects.append(.send(.session(.composer(.flush)))) }
+        }
         return .merge(effects)
 
       case .networkPathChanged(let path):
@@ -1212,6 +1217,32 @@ public struct AppFeature {
         )
         return .send(.session(.task))
 
+      case .home(.delegate(.newSession(let directory))):
+        guard let home = state.home else { return .none }
+        let sessionID = uuid.uuid().uuidString.lowercased()
+        let selection = SessionSelection(
+          serverID: home.serverID,
+          sessionID: sessionID,
+          intent: .newSession(directory: directory)
+        )
+        state.sessionDestination = selection
+        if state.session?.selection.id == selection.id,
+          state.session?.server.persistenceID == selection.serverID
+        {
+          return .none
+        }
+        let id = state.nextSessionID
+        state.nextSessionID += 1
+        state.session = SessionFeature.State(
+          id: id,
+          server: home.server,
+          selection: selection,
+          session: nil,
+          isLive: homeIsLive(state),
+          isPinned: state.isPinnedForUITest
+        )
+        return .send(.session(.task))
+
       case .home(.delegate(.switchServer(let server))):
         state.session = nil
         state.sessionDestination = nil
@@ -1228,6 +1259,15 @@ public struct AppFeature {
         return .none
 
       case .session(.delegate(.dismiss)):
+        guard state.session != nil else { return .none }
+        let clock = clock
+        return .run { send in
+          // Give the composer's flush effect one actor turn before its child state goes away.
+          try? await clock.sleep(.milliseconds(200))
+          await send(.sessionDismissed)
+        }
+
+      case .sessionDismissed:
         state.session = nil
         state.sessionDestination = nil
         return .none

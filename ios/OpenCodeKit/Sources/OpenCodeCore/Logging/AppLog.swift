@@ -46,6 +46,11 @@ public enum LogEvent: String, Sendable, CaseIterable {
   case transcriptLoaded = "transcript.loaded"
   case transcriptEarlierLoaded = "transcript.earlier.loaded"
   case transcriptCopied = "transcript.copied"
+  case composerSent = "composer.sent"
+  case composerSendFailed = "composer.send.failed"
+  case composerReconciled = "composer.reconciled"
+  case composerWaitFinished = "composer.wait.finished"
+  case composerDraftSaveFailed = "composer.draft.save.failed"
 }
 
 /// The only values that may be published with public visibility: numbers and booleans. There is no

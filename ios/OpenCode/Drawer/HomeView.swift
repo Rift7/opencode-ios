@@ -38,7 +38,14 @@ struct HomeView: View {
           .accessibilityLabel(AppCopy.text("home.open_sessions"))
           .accessibilityIdentifier("home-drawer-button")
         }
-        ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+          Button {
+            store.send(.newSessionTapped(directory: nil))
+          } label: {
+            Image(systemName: "square.and.pencil")
+          }
+          .accessibilityLabel(AppCopy.text("composer.new_session"))
+          .accessibilityIdentifier("home-new-session")
           Button {
             store.send(.serverSwitcherTapped)
           } label: {
@@ -107,7 +114,9 @@ struct HomeView: View {
           .foregroundStyle(OpenCodeColors.color(.textWeak))
       } else {
         ForEach(store.projects, id: \.id) { project in
-          ProjectRow(project: project)
+          ProjectRow(project: project) {
+            store.send(.newSessionTapped(directory: project.directory))
+          }
         }
       }
     }
@@ -567,8 +576,10 @@ struct HomeSessionRow: View {
 
 private struct ProjectRow: View {
   let project: ServerProject
+  let newSession: () -> Void
 
   var body: some View {
+    Button(action: newSession) {
     HStack(spacing: OpenCodeSpacing.s12) {
       Text(project.initial)
         .font(OpenCodeFonts.font(.headline))
@@ -585,10 +596,18 @@ private struct ProjectRow: View {
           .lineLimit(1)
       }
       Spacer(minLength: 0)
+      Image(systemName: "square.and.pencil")
+        .font(.footnote)
+        .foregroundStyle(OpenCodeColors.color(.textWeak))
     }
+    .contentShape(Rectangle())
     .padding(.vertical, OpenCodeSpacing.s4)
     .accessibilityElement(children: .combine)
+    .accessibilityLabel(project.name)
+    .accessibilityHint(AppCopy.text("composer.new_session_hint"))
     .accessibilityIdentifier("home-project-\(project.id)")
+    }
+    .buttonStyle(.plain)
   }
 }
 

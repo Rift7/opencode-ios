@@ -54,9 +54,9 @@ uses: unknown keys ignored, absent optionals nil, a present wrong type rejects t
 | GET | `/api/session/{id}/message?order=desc&limit=N` | `live/LiveTranscript.kt` (`requestTranscript`) | `Operations.transcript`, `TranscriptDecoder.page` | implemented + tested: newest window (30), oldest-first rows, cursor, all audited message types |
 | GET | `/api/session/{id}/message?limit=N&cursor=…` | same (`requestHistoryPage`) | `Operations.transcriptHistory` | implemented + tested: 80 per page, 20 s, `order=desc` when the edge is unknown, same-cursor loop rejected |
 | GET | `/api/session/{id}/message/{messageID}` | same (`requestMessage`) | `Operations.message` | implemented + tested: ordered rows, strict decode |
-| POST | `/api/session/{id}/prompt` (30 s, idempotent by message id) | `live/LivePrompts.kt` | `PromptBody` (core fields only) | modelled + encoded in tests; call site deferred to P9 (composer) |
+| POST | `/api/session/{id}/prompt` (30 s, idempotent by message id) | `live/LivePrompts.kt` (`postPrompt`, `promptBody`) | `PromptBody`, `Operations.sendPrompt`, `SessionFeature.startComposerSend` | implemented + tested: id, text, delivery, file references and `metadata.comments` quotes; 30 s; one transport retry layer; body shape in `ComposerClientTests` |
 | POST | `/api/session/{id}/interrupt?resume=true` | `live/LiveSessions.kt` `requestInterrupt` | `Operations.interruptSession` | implemented + tested: `{interrupted}`, unsafe, one attempt per caller-owned retry; ambiguity reads active/inbox before another try |
-| POST | `/api/session` (create; idempotent only with a client id) | `live/LiveSessions.kt` `requestCreateSession` | — | deferred to P11 (What's New Try It) |
+| POST | `/api/session` (create; idempotent only with a client id) | `live/LiveSessions.kt` `requestCreateSession` | `Operations.createSession`, `ComposerTarget.newSession` | implemented + tested: `{id, location:{directory}}`, `{data: …}` decode, client-made id; first send creates before the prompt |
 | PATCH | `/api/session/{id}` (rename; empty title is unsafe, 60 s) | same `requestRenameSession` | — | deferred to P9 (session menu) |
 | PATCH | `/api/session/{id}` (archive/unarchive, idempotent) | same `requestSetArchived` | — | deferred to P11 (the Android archived page is not inherited) |
 | DELETE | `/api/session/{id}` | same `requestDeleteSession` | `Operations.deleteSession` | implemented + tested (P6 Home delete; unsafe by default, one call) |
@@ -67,11 +67,11 @@ uses: unknown keys ignored, absent optionals nil, a present wrong type rejects t
 | POST | `/api/session/{id}/revert/stage`, `DELETE …/revert` | same | — | deferred (not in P7 scope) |
 | POST | `/api/session/{id}/background` | same | — | deferred (not in P7 scope) |
 | GET | `/api/experimental/session/{id}/export` (60 s) | same `requestExportSession` | — | deferred (not in P7 scope) |
-| POST | `/api/experimental/session/{id}/wait` (25 s poll, idempotent) | same `requestWaitForIdle` | — | deferred to P9: the send path owns the wait loop; P8 settlement reads do not poll |
+| POST | `/api/experimental/session/{id}/wait` (25 s poll, idempotent) | same `requestWaitForIdle` (`WAIT_POLL_TIMEOUT = 25 s`, 20 s fast threshold, 12 fast failures, active probe) | `Operations.waitForIdle`, `SessionWaitLoop`, `SessionFeature.waitForIdle` | implemented + tested: exact path/method, one retry owner, immediate re-arm for a timed-out live run, session-wait backoff after a fast failure, inactive run completion, caller-owned `.once`, 12-failure bound; completion schedules the existing settlement read |
 | GET | `/api/session?parentID={id}&order=desc&limit=100` | `live/LiveFamily.kt` `requestSessionFamily` | `Operations.sessionFamily` | implemented + tested: BFS, six pages in flight, 100-session cap, cycle/dedupe, bounded running ancestry |
 | GET | `/api/session/{id}/inbox` | `live/LivePrompts.kt` | `Operations.pendingInputs` | implemented + tested: user/synthetic/compaction rows, delivery steer/queue. The composer sheet is P9 |
 | PATCH | `/api/session/{id}/inbox/{inputID}` (unsafe; 409 or read-back settles) | same | `Operations.setPendingInputDelivery` | implemented + tested: reads the inbox back after ambiguity or 409; stranded steer queues then steers |
-| DELETE | `/api/session/{id}/inbox/{inputID}` (idempotent) | same | — | deferred to P9 (the composer owns cancel) |
+| DELETE | `/api/session/{id}/inbox/{inputID}` (idempotent) | same | `Operations.cancelPendingInput`, `SessionFeature.pendingInputCancel` | implemented + tested: route shape, optimistic row removal only after success, failure keeps the row and reports |
 | GET | `/api/permission/request`, `/api/form` (60 s, location-scoped) | `live/LiveRequests.kt` | `Operations.attentionSessionIDs`, `Operations.pendingRequests` | implemented + tested: Home keeps the loose root read; P7 decodes full models, filters by family, keeps `global` forms, and treats a failed read as a failed snapshot |
 | POST | `/api/session/{id}/permission/{requestID}/reply` | same | `Operations.replyPermission` | implemented + tested: `{decision, message?}`, only a denial carries a reason, Always requires save patterns |
 | POST | `/api/session/{id}/form/{formID}/reply` | same | `Operations.replyForm` | implemented + tested: validates only active answers, read-back after ambiguous/409, one resend while pending, typed conflict |
@@ -83,10 +83,10 @@ uses: unknown keys ignored, absent optionals nil, a present wrong type rejects t
 | DELETE | `/api/shell/{id}` | same | `Operations.stopShell` | implemented + tested: drains output first, unsafe |
 | GET | `/api/experimental/job?sessionID&descendants=true&status=running` | same | `Operations.runningJobs` | implemented + tested: running jobs only |
 | POST | `/api/experimental/job/{jobID}/cancel` | same | `Operations.cancelJob` | implemented + tested: idempotent |
-| GET | `/api/model`, `/api/model/default` | `live/LiveCatalog.kt` | `ModelRef` only | deferred to P9/P11 |
-| GET | `/api/agent`, `/api/skill`, `/api/command`, `/api/plugin`, `/api/mcp`, `/api/integration` | `live/LiveCatalog.kt` | — | deferred to P9/P11 |
-| GET | `/api/fs/list`, `/api/fs/find`, `/api/fs/read/{rel}` | `live/LiveFiles.kt` | — | deferred to P9/P10 |
-| POST | `/api/experimental/fs/write` | `live/LiveFiles.kt` | — | deferred to P9 |
+| GET | `/api/model`, `/api/model/default` | `live/LiveCatalog.kt` | `ModelRef` only | deferred to P11 (composer model picker) |
+| GET | `/api/agent`, `/api/skill`, `/api/command`, `/api/plugin`, `/api/mcp`, `/api/integration` | `live/LiveCatalog.kt` | — | deferred to P11 (agent/mode and autocomplete) |
+| GET | `/api/fs/list`, `/api/fs/find`, `/api/fs/read/{rel}` | `live/LiveFiles.kt` | — | deferred to P11/P10 (autocomplete and file opening) |
+| POST | `/api/experimental/fs/write` | `live/LiveFiles.kt` | — | deferred to P10 (attachments) |
 | GET | `/api/experimental/media/{hash}` | `live/MediaReferenceFetch.kt` | — | deferred to P10 |
 | POST | `/api/rpc/mobile-notifications/pair` | `live/LiveConnection.kt` | — | deferred to P12 (Experimental, off) |
 | — | `X-OpenCode-Capabilities: experimental-media-uri` | `live/LiveTransport.kt` | event stream only | implemented on the event stream; other calls advertise it when their phase adds media |
@@ -176,6 +176,12 @@ The app expects an OpenCode V2 server that serves the audited JSON routes. Check
 Do not silently remap `/api/project` to `/project` or treat the web shell as data: neither matches the
 audited contract. A connection attempt that lands on an HTML page now fails as
 `.incompatibleAPI` (D-31), which is distinct from a rejected password and from an unreachable host.
+
+P9 adds the prompt admission (`POST /api/session/{id}/prompt`), the client-id session create
+(`POST /api/session`), the inbox delivery PATCH/DELETE read-back and the experimental wait
+(`POST /api/experimental/session/{id}/wait`). The wait loop is the only retry owner for that route; prompt and
+create calls use the normal client layer because both are idempotent by a client-made ID. Model/agent catalog
+and autocomplete routes remain P11.
 
 P5 uses `health` (`/api/info`), `projects` (`/api/project`) and `events` (`/api/event`). P6 adds
 `/api/session`, `/api/session/active`, `/api/session/{id}/view`, `DELETE /api/session/{id}` and the two

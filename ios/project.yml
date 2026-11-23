@@ -40,6 +40,8 @@ targets:
         product: OpenCodeDrawer
       - package: OpenCodeKit
         product: OpenCodeTranscript
+      - package: OpenCodeKit
+        product: OpenCodeComposer
       - package: ComposableArchitecture
         product: ComposableArchitecture
     settings:

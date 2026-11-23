@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Foundation
+import OpenCodeComposer
 import OpenCodeCore
 import OpenCodeServer
 
@@ -154,6 +155,7 @@ import OpenCodeServer
 
     static func make(mode: String = "connected") -> Fixture {
       let requestState = RequestState()
+      let composer = ComposerFixture(mode: mode)
       let storage = SharedStore(
         defaults: InMemoryStorage(),
         keychain: InMemoryStorage()
@@ -176,22 +178,50 @@ import OpenCodeServer
           SessionPage(sessions: sessions(for: requested, mode: mode), next: nil)
         },
         getSession: { requested, id in
+          if let created = await composer.session(id) { return created }
           if let member = familyMember(id, in: sessions(for: requested)) {
             return member
           }
           throw OpenCodeClientError(.status(404))
         },
-        activeSessionIDs: { _ in [] },
+        activeSessionIDs: { _ in
+          mode == "connected-composer-running" ? ["alpha"] : []
+        },
         attentionSessionIDs: { _, _, _ in [] },
         viewSession: { _, _, _ in },
         deleteSession: { _, _ in },
         interruptSession: { _, _ in true },
-        sessionIsActive: { _, _ in false },
+        sessionIsActive: { _, sessionID in
+          mode == "connected-composer-running" && sessionID == "alpha"
+        },
         sessionFamily: { requested, root in
           family(for: requested, root: root)
         },
         pendingRequests: { _, session, _ in
           guard session.id == "alpha" else { return PendingRequests() }
+          if mode == "connected-composer-question", await !requestState.isSettled("question-alpha") {
+            return PendingRequests(
+              forms: [
+                FormRequest(
+                  id: "question-alpha",
+                  sessionID: "alpha",
+                  title: "Which environment?",
+                  fields: [
+                    FormField(
+                      key: "environment",
+                      type: .string,
+                      title: "Which environment?",
+                      description: "Choose where the next run should look."
+                    )
+                  ],
+                  metadata: ["kind": .string("question")]
+                )
+              ]
+            )
+          }
+          if mode.hasPrefix("connected-composer") {
+            return PendingRequests()
+          }
           let wantsForm = mode == "connected-form"
           var result = PendingRequests()
           if wantsForm {
@@ -252,9 +282,14 @@ import OpenCodeServer
         formState: { _, _, _, _ in FormState(status: .pending) },
         pendingInputs: { _, sessionID in
           guard sessionID == "alpha" else { return [] }
+          if mode.hasPrefix("connected-composer") {
+            return await composer.pendingInputs()
+          }
           return [PendingInput(id: "input-alpha", text: "Also check the logs.", delivery: .steer)]
         },
-        setPendingInputDelivery: { _, _, _, _ in },
+        setPendingInputDelivery: { _, _, id, delivery in
+          await composer.setDelivery(id: id, delivery: delivery)
+        },
         runningShells: { _, directory in
           directory == "/work/opencode"
             ? [ServerShell(id: "shell-alpha", command: "swift test", sessionID: "alpha", isListed: true)]
@@ -283,18 +318,37 @@ import OpenCodeServer
         },
         cancelJob: { _, _ in },
         transcript: { _, sessionID, limit in
-          transcriptPage(for: sessionID, mode: mode, limit: limit)
+          let base = transcriptPage(for: sessionID, mode: mode, limit: limit)
+          let sent = await composer.items(sessionID: sessionID)
+          return TranscriptPage(items: base.items + sent, next: base.next)
         },
         transcriptHistory: { _, sessionID, cursor in
           transcriptHistory(for: sessionID, mode: mode, cursor: cursor)
+        },
+        message: { _, sessionID, messageID in
+          await composer.message(sessionID: sessionID, messageID: messageID)
+        },
+        sendPrompt: { _, sessionID, body in
+          try await composer.send(sessionID: sessionID, body: body)
+        },
+        createSession: { _, directory, id in
+          await composer.create(directory: directory, id: id)
+        },
+        cancelPendingInput: { _, _, id in
+          await composer.cancel(id: id)
+        },
+        waitForIdle: { _, _ in
+          try? await Task.sleep(for: .milliseconds(40))
         },
         events: { _, onPhase in
           AsyncThrowingStream { continuation in
             let task = Task {
               await onPhase(.connected)
               continuation.yield(.connected)
-              if mode == "connected-transcript-stream" || mode == "connected-transcript-growth" {
-                if mode == "connected-transcript-stream" {
+              if mode == "connected-transcript-stream" || mode == "connected-transcript-growth"
+                || mode == "connected-composer-stream"
+              {
+                if mode == "connected-transcript-stream" || mode == "connected-composer-stream" {
                   continuation.yield(.executionStarted(sessionID: "alpha"))
                 }
                 let messageID = mode == "connected-transcript-growth" ? "growth-live" : "stream-live"
@@ -395,6 +449,12 @@ import OpenCodeServer
         )
       }
       switch mode {
+      case "connected-composer-long":
+        return TranscriptPage(items: longTranscriptItems(count: 600))
+      case "connected-composer-stream":
+        return TranscriptPage(
+          items: [.userText(id: "composer-stream-user", text: "Type while tokens stream.", source: nil, quotes: [])]
+        )
       case "connected-transcript-long":
         return TranscriptPage(items: longTranscriptItems(count: 1_000))
       case "connected-transcript-older":
@@ -563,12 +623,97 @@ import OpenCodeServer
       ]
     }
 
+    /// A draft suite the UI tests can keep across relaunches. `-uiTestResetDrafts` clears it for
+    /// the first launch of a journey.
+    static func draftClient() -> ComposerDraftClient {
+      let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        ?? FileManager.default.temporaryDirectory
+      let directory = base.appendingPathComponent("OpenCode-UITests", isDirectory: true)
+      try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let url = directory.appendingPathComponent("composer-drafts.json")
+      if ProcessInfo.processInfo.arguments.contains("-uiTestResetDrafts") {
+        try? FileManager.default.removeItem(at: url)
+      }
+      let store = ComposerDraftStore(
+        storage: AtomicFileStorage(url: url),
+        storageKey: "drafts"
+      )
+      return .live(store: store)
+    }
+
     static var path: NetworkPathClient {
       NetworkPathClient(
         current: { .online },
         updates: { AsyncStream { $0.finish() } },
         waitUntilAvailable: {}
       )
+    }
+  }
+
+  /// Composer fixture state: created sessions, admitted prompts and the inbox the screen reads back.
+  actor ComposerFixture {
+    private let mode: String
+    private var created: [String: OpenCodeSession] = [:]
+    private var messages: [String: [TranscriptItem]] = [:]
+    private var pending: [PendingInput]
+    private var failedSend = false
+
+    init(mode: String) {
+      self.mode = mode
+      self.pending =
+        mode == "connected-composer-queue"
+        ? [PendingInput(id: "input-alpha", text: "Also check the logs.", delivery: .queue)]
+        : []
+    }
+
+    func session(_ id: String) -> OpenCodeSession? { created[id] }
+
+    func create(directory: String, id: String) -> OpenCodeSession {
+      let session = OpenCodeSession(
+        id: id,
+        serverTitle: "New session",
+        projectID: "project",
+        directory: directory,
+        updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+      )
+      created[id] = session
+      return session
+    }
+
+    func send(sessionID: String, body: PromptBody) throws {
+      if mode == "connected-composer-fail", !failedSend {
+        failedSend = true
+        throw OpenCodeClientError(.status(400))
+      }
+      let item = TranscriptItem.userText(
+        id: body.id,
+        text: body.text,
+        source: nil,
+        quotes: (body.metadata?.comments ?? []).map {
+          TranscriptQuote(text: $0.text, comment: $0.comment)
+        }
+      )
+      messages[sessionID, default: []].append(item)
+      if mode == "connected-composer-running" {
+        pending.append(PendingInput(id: body.id, text: body.text, delivery: .steer))
+      }
+    }
+
+    func message(sessionID: String, messageID: String) -> [TranscriptItem] {
+      (messages[sessionID] ?? []).filter { $0.id == messageID }
+    }
+
+    func items(sessionID: String) -> [TranscriptItem] { messages[sessionID] ?? [] }
+
+    func pendingInputs() -> [PendingInput] { pending }
+
+    func setDelivery(id: String, delivery: PendingInput.Delivery) {
+      guard let index = pending.firstIndex(where: { $0.id == id }) else { return }
+      pending[index].delivery = delivery
+    }
+
+    func cancel(id: String) {
+      pending.removeAll { $0.id == id }
     }
   }
 #endif

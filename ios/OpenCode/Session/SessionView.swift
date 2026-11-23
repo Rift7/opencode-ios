@@ -12,6 +12,7 @@ struct SessionView: View {
   @State private var showsSubagents = false
   @State private var showsRequests = false
   @State private var showsBackground = false
+  @State private var showsQueued = false
   @State private var denyReason = ""
 
   var body: some View {
@@ -29,25 +30,21 @@ struct SessionView: View {
           NoticeRow(text: noticeText(notice)) { store.send(.noticeDismissed) }
             .padding(.horizontal, OpenCodeSpacing.screenHorizontal)
         }
-        if store.requests.hasPending {
-          requestBar
-            .padding(.horizontal, OpenCodeSpacing.screenHorizontal)
-            .padding(.bottom, OpenCodeSpacing.s6)
-        }
-        if !store.pendingInputs.isEmpty {
-          pendingInputs
-            .padding(.horizontal, OpenCodeSpacing.screenHorizontal)
-            .padding(.bottom, OpenCodeSpacing.s6)
-        }
         transcriptBody
           .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .safeAreaInset(edge: .bottom, spacing: 0) {
+            composerArea
+          }
       }
       .navigationTitle(store.title)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
-          Button(AppCopy.text("common.done")) { store.send(.delegate(.dismiss)) }
-            .accessibilityIdentifier("session-done")
+          Button(AppCopy.text("common.done")) {
+            store.send(.composer(.flush))
+            store.send(.delegate(.dismiss))
+          }
+          .accessibilityIdentifier("session-done")
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
           if !store.subagents.isEmpty {
@@ -74,8 +71,11 @@ struct SessionView: View {
     .sheet(isPresented: $showsSubagents) {
       SubagentList(store: store) { showsSubagents = false }
     }
-    .sheet(isPresented: $showsRequests) {
+    .sheet(isPresented: requestSheetPresented) {
       RequestReviewSheet(store: store, denyReason: $denyReason)
+    }
+    .sheet(isPresented: $showsQueued) {
+      QueuedInputsSheet(store: store)
     }
     .sheet(isPresented: $showsBackground) {
       BackgroundWorkSheet(store: store) { showsBackground = false }
@@ -104,6 +104,54 @@ struct SessionView: View {
         ShellOutputSheet(store: store, output: output)
       }
     }
+  }
+
+  @ViewBuilder private var composerArea: some View {
+    VStack(spacing: 0) {
+      if !store.pendingInputs.isEmpty {
+        queuedPill
+      }
+      if store.requests.hasPending {
+        RequestDockPanel(store: store)
+        RequestAnswerBar(store: store)
+      } else {
+        ComposerPanel(store: store)
+      }
+    }
+  }
+
+  private var queuedPill: some View {
+    Button {
+      showsQueued = true
+    } label: {
+      HStack(spacing: OpenCodeSpacing.s8) {
+        Image(systemName: "text.line.last.and.arrowtriangle.forward")
+        Text(AppCopy.count("composer.queued.count", store.pendingInputs.count))
+          .font(OpenCodeFonts.font(.caption))
+        Spacer()
+        Text(AppCopy.text("composer.queued.open"))
+          .font(OpenCodeFonts.font(.caption2))
+          .foregroundStyle(OpenCodeColors.color(.textWeak))
+      }
+      .padding(.horizontal, OpenCodeSpacing.s12)
+      .padding(.vertical, OpenCodeSpacing.s8)
+      .background(OpenCodeColors.color(.surfaceStrong))
+      .overlay(alignment: .top) {
+        Rectangle().fill(OpenCodeColors.color(.border)).frame(height: 0.5)
+      }
+    }
+    .buttonStyle(.plain)
+    .accessibilityIdentifier("composer-queued-pill")
+  }
+
+  private var requestSheetPresented: Binding<Bool> {
+    Binding(
+      get: { showsRequests || store.requestDock.showsSheet },
+      set: { presented in
+        showsRequests = false
+        if !presented { store.send(.requestSheetDismissed) }
+      }
+    )
   }
 
   @ViewBuilder private var transcriptBody: some View {
@@ -246,68 +294,6 @@ struct SessionView: View {
     }
   }
 
-  private var requestBar: some View {
-    Button {
-      showsRequests = true
-    } label: {
-      HStack(spacing: OpenCodeSpacing.s12) {
-        Image(systemName: "hand.raised")
-        VStack(alignment: .leading, spacing: OpenCodeSpacing.s2) {
-          Text(AppCopy.text("session.requests.pending"))
-            .font(OpenCodeFonts.font(.headline))
-          Text(AppCopy.count("session.requests.count", store.requests.reviewIDs.count))
-            .font(OpenCodeFonts.font(.caption))
-            .foregroundStyle(OpenCodeColors.color(.textWeak))
-        }
-        Spacer()
-        Text(AppCopy.text("session.requests.review"))
-          .font(OpenCodeFonts.font(.footnote))
-      }
-      .foregroundStyle(OpenCodeColors.color(.textStrong))
-      .padding(OpenCodeSpacing.s12)
-      .background(OpenCodeColors.color(.surfaceStrong), in: .rect(cornerRadius: OpenCodeRadius.control))
-      .overlay {
-        RoundedRectangle(cornerRadius: OpenCodeRadius.control)
-          .strokeBorder(OpenCodeColors.color(.border), lineWidth: 0.5)
-      }
-    }
-    .buttonStyle(.plain)
-    .accessibilityIdentifier("session-review-requests")
-  }
-
-  private var pendingInputs: some View {
-    VStack(alignment: .leading, spacing: OpenCodeSpacing.s8) {
-      Text(AppCopy.text("session.inputs.title"))
-        .font(OpenCodeFonts.font(.footnote))
-        .foregroundStyle(OpenCodeColors.color(.textWeak))
-      ForEach(store.pendingInputs) { input in
-        HStack(alignment: .firstTextBaseline, spacing: OpenCodeSpacing.s8) {
-          Text(
-            input.delivery == .steer
-              ? AppCopy.text("session.inputs.steering")
-              : AppCopy.text("session.inputs.queued")
-          )
-          .font(OpenCodeFonts.font(.caption))
-          .foregroundStyle(OpenCodeColors.color(.textWeak))
-          Text(input.text.isEmpty ? input.id : input.text)
-            .font(OpenCodeFonts.font(.body))
-            .lineLimit(2)
-          Spacer()
-          if !store.isRunning, !input.isCompaction {
-            Button(AppCopy.text("session.inputs.send_now")) {
-              store.send(.strandedSteerTapped(inputID: input.id))
-            }
-            .font(OpenCodeFonts.font(.footnote))
-            .accessibilityIdentifier("session-send-now-\(input.id)")
-          }
-        }
-        .padding(OpenCodeSpacing.s10)
-        .background(OpenCodeColors.color(.canvasWeak), in: .rect(cornerRadius: OpenCodeRadius.control))
-      }
-    }
-    .accessibilityIdentifier("session-pending-inputs")
-  }
-
   private var backgroundButton: some View {
     let summary = store.backgroundSummary
     return Button {
@@ -354,6 +340,9 @@ struct SessionView: View {
     case .couldNotLoadOutput: AppCopy.text("session.notice.output")
     case .couldNotCancelJob: AppCopy.text("session.notice.job")
     case .couldNotWakeInput: AppCopy.text("session.notice.wake")
+    case .couldNotUpdateInput: AppCopy.text("session.notice.input_update")
+    case .couldNotCancelInput: AppCopy.text("session.notice.input_cancel")
+    case .couldNotCreateSession: AppCopy.text("session.notice.create")
     case .sessionGone: AppCopy.text("session.notice.gone")
     }
   }

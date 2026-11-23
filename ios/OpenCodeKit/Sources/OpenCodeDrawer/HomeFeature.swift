@@ -445,6 +445,7 @@ public struct HomeFeature {
 
     case drawerToggled
     case drawerDismissed
+    case newSessionTapped(directory: String?)
     case sessionTapped(String)
     case serverSwitcherTapped
     case serverSwitcherDismissed
@@ -484,6 +485,7 @@ public struct HomeFeature {
 
   public enum Delegate: Equatable, Sendable {
     case openSession(SessionSelection)
+    case newSession(directory: String)
     case switchServer(OpenCodeServer)
     case disconnect
   }
@@ -777,6 +779,11 @@ public struct HomeFeature {
       case .drawerDismissed:
         state.isDrawerOpen = false
         return .none
+
+      case .newSessionTapped(let directory):
+        state.isDrawerOpen = false
+        guard let directory = directory ?? state.projects.first?.directory else { return .none }
+        return .send(.delegate(.newSession(directory: directory)))
 
       case .sessionTapped(let sessionID):
         guard let session = state.session(sessionID) else { return .none }

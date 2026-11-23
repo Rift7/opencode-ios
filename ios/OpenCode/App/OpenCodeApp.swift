@@ -1,5 +1,6 @@
 import OpenCodeApp
 import ComposableArchitecture
+import OpenCodeComposer
 import OpenCodeCore
 import OpenCodeTranscript
 import SwiftUI
@@ -30,6 +31,7 @@ struct OpenCodeApp: App {
           $0.uuidClient = UuidClient.incrementing()
           $0.dateClient = DateClient { Date(timeIntervalSince1970: 1_700_000_000) }
           $0.pasteboard = PasteboardClient(string: { nil })
+          $0.composerDrafts = UITestFixture.draftClient()
         } operation: {
           Store(initialState: configuration.initialState) { AppFeature() }
         }
