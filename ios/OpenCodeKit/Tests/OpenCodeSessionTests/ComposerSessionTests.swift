@@ -672,6 +672,11 @@ struct ComposerSessionTests {
     #expect(store.state.composer.target == .session(id: "root"))
     #expect(store.state.composer.draft == "Root draft")
     #expect(store.state.composer.quotes.first?.text == "root quote")
+
+    await store.send(.composer(.sendTapped))
+    await settle(store)
+    #expect(calls.prompts.all.last?.0 == "root")
+    #expect(calls.prompts.all.last?.1.text.contains("Root draft") == true)
   }
 
 
