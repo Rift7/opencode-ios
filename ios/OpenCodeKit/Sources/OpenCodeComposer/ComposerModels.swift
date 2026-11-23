@@ -55,7 +55,7 @@ public struct ComposerQuote: Codable, Identifiable, Equatable, Sendable {
 
 /// The composer's destination. `newSession.id` is the client-made session ID used for the first
 /// create, so a retry cannot create a second session.
-public enum ComposerTarget: Equatable, Sendable {
+public enum ComposerTarget: Codable, Equatable, Hashable, Sendable {
   case session(id: String)
   case newSession(id: String, directory: String)
 
@@ -94,6 +94,10 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
   public var projectDirectory: String?
   /// A first send created this session, but the send or the app stopped before the screen learned.
   public var createdSessionID: String?
+  /// Failed sends remain owned by this composer until Retry, Edit or Delete.
+  public var failedSends: [FailedComposerSend]
+  /// An admitted or possibly admitted send whose outcome is not settled. At most one is in flight.
+  public var outbound: [ComposerOutbound]
   public var updatedAt: Date
 
   public init(
@@ -101,24 +105,39 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
     quotes: [ComposerQuote] = [],
     projectDirectory: String? = nil,
     createdSessionID: String? = nil,
+    failedSends: [FailedComposerSend] = [],
+    outbound: [ComposerOutbound] = [],
     updatedAt: Date = Date(timeIntervalSince1970: 0)
   ) {
     self.text = text
     self.quotes = quotes
     self.projectDirectory = projectDirectory
     self.createdSessionID = createdSessionID
+    self.failedSends = failedSends
+    self.outbound = outbound
     self.updatedAt = updatedAt
   }
 
-  public var isEmpty: Bool { text.isEmpty && quotes.isEmpty && createdSessionID == nil }
+  public var isEmpty: Bool {
+    text.isEmpty && quotes.isEmpty && createdSessionID == nil && failedSends.isEmpty
+      && outbound.isEmpty
+  }
 
   public func boundedProblem() -> ComposerDraftSave? {
+    let outboundAndFailed = failedSends.map { ($0.text, $0.quotes) }
+      + outbound.map { ($0.text, $0.quotes) }
     let textBytes = text.utf8.count
-    let quoteBytes = quotes.reduce(0) { $0 + $1.text.utf8.count + ($1.comment?.utf8.count ?? 0) }
+      + outboundAndFailed.reduce(0) { $0 + $1.0.utf8.count }
+    let allQuotes = quotes + outboundAndFailed.flatMap { $0.1 }
+    let quoteBytes = allQuotes.reduce(0) {
+      $0 + $1.text.utf8.count + ($1.comment?.utf8.count ?? 0)
+    }
     if textBytes > ComposerDraftBounds.maximumTextBytes {
       return .tooLarge
     }
-    if quoteBytes > ComposerDraftBounds.maximumQuoteBytes || quotes.count > ComposerDraftBounds.maximumQuotes {
+    if quoteBytes > ComposerDraftBounds.maximumQuoteBytes
+      || allQuotes.count > ComposerDraftBounds.maximumQuotes
+    {
       return .tooLarge
     }
     return nil
@@ -136,6 +155,15 @@ public enum ComposerDraftLoad: Equatable, Sendable {
   case found(ComposerDraft)
   case missing
   case failure(StorageFailure)
+  /// A draft was found under the New Session key after its created session key was lost or the
+  /// destination save failed. The migration outcome says whether cleanup is still pending.
+  case foundFromSource(ComposerDraft, ComposerDraftMigration)
+}
+
+public enum ComposerDraftMigration: Equatable, Sendable {
+  case migrated
+  case destinationFailed(StorageFailure)
+  case sourceRetained(StorageFailure)
 }
 
 public enum ComposerDraftSave: Equatable, Sendable {
@@ -145,18 +173,21 @@ public enum ComposerDraftSave: Equatable, Sendable {
 }
 
 /// Typed facts for the composer's error line. Copy is chosen at the view edge.
-public enum ComposerProblem: Equatable, Sendable {
+public enum ComposerProblem: String, Codable, Equatable, Sendable {
   case couldNotRestore
   case couldNotSave
+  case couldNotCleanUpDraft
   case draftTooLarge
   case couldNotSend
   case couldNotVerifySend
   case notConnected
+  case busy
+  case requestPending
 }
 
 /// How a failed POST is treated. A definite rejection never reached the session's history; an
 /// ambiguous outcome may have been accepted, so it must be read back before a retry.
-public enum ComposerSendFailure: Equatable, Sendable {
+public enum ComposerSendFailure: String, Codable, Equatable, Sendable {
   case definite
   case ambiguous
 
@@ -171,12 +202,13 @@ public enum ComposerSendFailure: Equatable, Sendable {
   }
 }
 
-public struct FailedComposerSend: Identifiable, Equatable, Sendable {
+public struct FailedComposerSend: Codable, Identifiable, Equatable, Sendable {
   public var id: String { messageID }
   public var messageID: String
   public var text: String
   public var quotes: [ComposerQuote]
   public var delivery: Delivery
+  public var target: ComposerTarget
   public var reason: ComposerProblem
   public var failure: ComposerSendFailure
 
@@ -185,6 +217,7 @@ public struct FailedComposerSend: Identifiable, Equatable, Sendable {
     text: String,
     quotes: [ComposerQuote],
     delivery: Delivery,
+    target: ComposerTarget,
     reason: ComposerProblem,
     failure: ComposerSendFailure
   ) {
@@ -192,8 +225,62 @@ public struct FailedComposerSend: Identifiable, Equatable, Sendable {
     self.text = text
     self.quotes = quotes
     self.delivery = delivery
+    self.target = target
     self.reason = reason
     self.failure = failure
+  }
+
+  public var send: ComposerSend {
+    ComposerSend(
+      target: target,
+      messageID: messageID,
+      text: text,
+      quotes: quotes,
+      delivery: delivery,
+      revision: 0
+    )
+  }
+}
+
+/// A send owned by the composer from the tap until acceptance, confirmed failure or explicit
+/// reconciliation. Persisted before dispatch so termination cannot strand the payload.
+public struct ComposerOutbound: Codable, Identifiable, Equatable, Sendable {
+  public var id: String { messageID }
+  public var target: ComposerTarget
+  public var messageID: String
+  public var text: String
+  public var quotes: [ComposerQuote]
+  public var delivery: Delivery
+  public var revision: Int
+  public var createdAt: Date
+
+  public init(
+    target: ComposerTarget,
+    messageID: String,
+    text: String,
+    quotes: [ComposerQuote],
+    delivery: Delivery,
+    revision: Int,
+    createdAt: Date = Date(timeIntervalSince1970: 0)
+  ) {
+    self.target = target
+    self.messageID = messageID
+    self.text = text
+    self.quotes = quotes
+    self.delivery = delivery
+    self.revision = revision
+    self.createdAt = createdAt
+  }
+
+  public var send: ComposerSend {
+    ComposerSend(
+      target: target,
+      messageID: messageID,
+      text: text,
+      quotes: quotes,
+      delivery: delivery,
+      revision: revision
+    )
   }
 }
 

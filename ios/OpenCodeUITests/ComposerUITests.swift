@@ -11,7 +11,8 @@ final class ComposerUITests: XCTestCase {
     mode: String = "connected-composer",
     resetDrafts: Bool = true,
     appearance: String = "light",
-    contentSize: String? = nil
+    contentSize: String? = nil,
+    longDraft: Bool = false
   ) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchArguments = ["-uiTesting", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
@@ -23,6 +24,7 @@ final class ComposerUITests: XCTestCase {
       "OPENCODE_UI_TEST_FIXTURE": mode,
       "OPENCODE_UI_TEST_APPEARANCE": appearance,
     ]
+    if longDraft { app.launchEnvironment["OPENCODE_UI_TEST_LONG_DRAFT"] = "1" }
     app.launch()
     XCTAssertTrue(app.descendants(matching: .any)["root-phase-connected"].waitForExistence(timeout: 30))
     return app
@@ -199,6 +201,36 @@ final class ComposerUITests: XCTestCase {
     app.swipeDown()
     XCTAssertTrue(field.exists)
     XCTAssertTrue(app.descendants(matching: .any)["root-phase-session"].exists)
+  }
+
+  func testLongMultilineDraftScrollsInsideTheCap() {
+    let app = launch(
+      contentSize: "UICTContentSizeCategoryAccessibilityL",
+      longDraft: true
+    )
+    openSession(app)
+    let field = app.textViews["composer-field"]
+    let value = field.value as? String ?? ""
+    XCTAssertTrue(value.contains("BEGIN-LONG"))
+    XCTAssertTrue(value.contains("END-LONG"))
+    XCTAssertGreaterThan(field.frame.height, 36)
+    XCTAssertLessThanOrEqual(field.frame.height, 200)
+
+    field.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.15)).tap()
+    field.typeText("TOP-EDIT ")
+    field.swipeUp()
+    field.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.9)).tap()
+    field.typeText("BOTTOM-EDIT")
+    let edited = field.value as? String ?? ""
+    XCTAssertTrue(edited.contains("TOP-EDIT"))
+    XCTAssertTrue(edited.contains("BOTTOM-EDIT"))
+    XCTAssertTrue(edited.contains("Line 40"))
+    XCTAssertTrue(edited.contains("Line 79"))
+    XCTAssertTrue(edited.contains("END-LONG"))
+    field.swipeDown()
+    let restored = field.value as? String ?? ""
+    XCTAssertTrue(restored.contains("Line 0"))
+    XCTAssertTrue(restored.contains("END-LONG"))
   }
 
   func testTypingDoesNotReparseTheWholeTranscript() {

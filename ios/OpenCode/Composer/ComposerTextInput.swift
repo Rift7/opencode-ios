@@ -89,6 +89,7 @@ struct ComposerTextInput: UIViewRepresentable {
         }
       }
       updatePlaceholder(placeholder, isEmpty: view.text.isEmpty)
+      scrollCaretIfNeeded(view)
     }
 
     func applyFocusRequest(_ request: Int, to view: UIView) {
@@ -105,11 +106,25 @@ struct ComposerTextInput: UIViewRepresentable {
       let width = max(view.bounds.width, 1)
       let fitting = view.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
       let next = min(max(fitting.height, 36), 168)
+      let scrolls = fitting.height > 168
+      if view.isScrollEnabled != scrolls {
+        view.isScrollEnabled = scrolls
+        view.showsVerticalScrollIndicator = scrolls
+        if !scrolls { view.setContentOffset(.zero, animated: false) }
+      }
+      if scrolls { scrollCaretIfNeeded(view) }
       guard abs(next - lastHeight) > 0.5 else { return }
       lastHeight = next
       DispatchQueue.main.async {
         if abs(binding.wrappedValue - next) > 0.5 { binding.wrappedValue = next }
       }
+    }
+
+    func scrollCaretIfNeeded(_ view: UITextView) {
+      guard view.isScrollEnabled, let range = view.selectedTextRange else { return }
+      let location = view.offset(from: view.beginningOfDocument, to: range.start)
+      let length = view.offset(from: range.start, to: range.end)
+      view.scrollRangeToVisible(NSRange(location: location, length: length))
     }
 
     func updatePlaceholder(_ text: String, isEmpty: Bool) {
@@ -133,7 +148,12 @@ struct ComposerTextInput: UIViewRepresentable {
       updatePlaceholder(placeholder, isEmpty: textView.text.isEmpty)
       if let view = textView as? ComposerTextView {
         updateHeight(view, binding: parent.$height)
+        scrollCaretIfNeeded(view)
       }
+    }
+
+    func textViewDidChangeSelection(_ textView: UITextView) {
+      scrollCaretIfNeeded(textView)
     }
 
     func textView(

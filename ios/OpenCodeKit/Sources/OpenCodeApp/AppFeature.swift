@@ -174,6 +174,20 @@ public enum AppNotice: Equatable, Sendable {
   case couldNotReadSavedServers
   case couldNotReadCache
   case couldNotReplaceSavedData(StorageFailure)
+  case couldNotSaveDraft
+}
+
+/// The session a Done tap is trying to close. Late completion is accepted only for this identity.
+public struct PendingSessionDismissal: Equatable, Sendable {
+  public var requestID: UUID
+  public var serverID: String
+  public var sessionID: String
+
+  public init(requestID: UUID, serverID: String, sessionID: String) {
+    self.requestID = requestID
+    self.serverID = serverID
+    self.sessionID = sessionID
+  }
 }
 
 public enum AppRestore: Equatable, Sendable {
@@ -696,6 +710,7 @@ public struct AppFeature {
     public var isPinnedForUITest: Bool
     public var savedData: SavedDataState
     public var showsReplaceSavedDataConfirmation: Bool
+    public var pendingDismissal: PendingSessionDismissal?
 
     var didStart = false
     var pendingSave: OpenCodeServer?
@@ -721,7 +736,8 @@ public struct AppFeature {
       networkPath: NetworkPath = .online,
       isPinnedForUITest: Bool = false,
       savedData: SavedDataState = .notLoaded,
-      showsReplaceSavedDataConfirmation: Bool = false
+      showsReplaceSavedDataConfirmation: Bool = false,
+      pendingDismissal: PendingSessionDismissal? = nil
     ) {
       self.restore = restore
       self.connection = connection
@@ -741,6 +757,7 @@ public struct AppFeature {
       self.isPinnedForUITest = isPinnedForUITest
       self.savedData = savedData
       self.showsReplaceSavedDataConfirmation = showsReplaceSavedDataConfirmation
+      self.pendingDismissal = pendingDismissal
     }
 
     public static func == (lhs: State, rhs: State) -> Bool {
@@ -762,6 +779,7 @@ public struct AppFeature {
         && lhs.isPinnedForUITest == rhs.isPinnedForUITest
         && lhs.savedData == rhs.savedData
         && lhs.showsReplaceSavedDataConfirmation == rhs.showsReplaceSavedDataConfirmation
+        && lhs.pendingDismissal == rhs.pendingDismissal
     }
   }
 
@@ -788,7 +806,6 @@ public struct AppFeature {
     case pairingFinished(attempt: Int, result: Result<OpenCodeServer, OpenCodeClientError>)
     case disconnectTapped
     case sessionDestinationDismissed
-    case sessionDismissed
     case noticeDismissed
     case persisted(saved: StorageWrite, list: StorageWrite)
     case replaceSavedDataTapped
@@ -816,7 +833,7 @@ public struct AppFeature {
   @Dependency(\.networkPath) private var networkPath
   @Dependency(\.pasteboard) private var pasteboard
   @Dependency(\.uuidClient) private var uuid
-  @Dependency(\.clock) private var clock
+  @Dependency(\.composerDrafts) private var composerDrafts
 
   public init() {}
 
@@ -1119,9 +1136,11 @@ public struct AppFeature {
         return .cancel(id: CancelID.pairing)
 
       case .sessionDestinationDismissed:
+        let transfer = transferDraft(from: state.session)
+        state.pendingDismissal = nil
         state.session = nil
         state.sessionDestination = nil
-        return .none
+        return transfer
 
       case .noticeDismissed:
         state.notice = nil
@@ -1205,6 +1224,8 @@ public struct AppFeature {
         {
           return .none
         }
+        let transfer = transferDraft(from: state.session)
+        state.pendingDismissal = nil
         let id = state.nextSessionID
         state.nextSessionID += 1
         state.session = SessionFeature.State(
@@ -1215,7 +1236,7 @@ public struct AppFeature {
           isLive: homeIsLive(state),
           isPinned: state.isPinnedForUITest
         )
-        return .send(.session(.task))
+        return .merge(transfer, .send(.session(.task)))
 
       case .home(.delegate(.newSession(let directory))):
         guard let home = state.home else { return .none }
@@ -1231,6 +1252,8 @@ public struct AppFeature {
         {
           return .none
         }
+        let transfer = transferDraft(from: state.session)
+        state.pendingDismissal = nil
         let id = state.nextSessionID
         state.nextSessionID += 1
         state.session = SessionFeature.State(
@@ -1241,36 +1264,55 @@ public struct AppFeature {
           isLive: homeIsLive(state),
           isPinned: state.isPinnedForUITest
         )
-        return .send(.session(.task))
+        return .merge(transfer, .send(.session(.task)))
 
       case .home(.delegate(.switchServer(let server))):
+        let transfer = transferDraft(from: state.session)
         state.session = nil
         state.sessionDestination = nil
-        return connect(to: server, state: &state)
+        state.pendingDismissal = nil
+        return .merge(transfer, connect(to: server, state: &state))
 
       case .home(.delegate(.disconnect)):
+        let transfer = transferDraft(from: state.session)
         state.connection = nil
         state.home = nil
         state.session = nil
         state.sessionDestination = nil
-        return .none
+        state.pendingDismissal = nil
+        return transfer
 
       case .home:
         return .none
 
       case .session(.delegate(.dismiss)):
-        guard state.session != nil else { return .none }
-        let clock = clock
-        return .run { send in
-          // Give the composer's flush effect one actor turn before its child state goes away.
-          try? await clock.sleep(.milliseconds(200))
-          await send(.sessionDismissed)
-        }
+        guard let session = state.session else { return .none }
+        let requestID = uuid.uuid()
+        state.pendingDismissal = PendingSessionDismissal(
+          requestID: requestID,
+          serverID: session.server.persistenceID,
+          sessionID: session.selection.sessionID
+        )
+        return .send(.session(.flushForDismiss(requestID)))
 
-      case .sessionDismissed:
-        state.session = nil
-        state.sessionDestination = nil
-        return .none
+      case .session(.delegate(.dismissReady(let requestID, let serverID, let sessionID, let result))):
+        guard let pending = state.pendingDismissal,
+          pending.requestID == requestID,
+          pending.serverID == serverID,
+          pending.sessionID == sessionID,
+          state.session?.server.persistenceID == serverID,
+          state.session?.selection.sessionID == sessionID
+        else { return .none }
+        state.pendingDismissal = nil
+        switch result {
+        case .saved:
+          state.session = nil
+          state.sessionDestination = nil
+          return .none
+        case .tooLarge, .failure:
+          state.notice = .couldNotSaveDraft
+          return .none
+        }
 
       case .session:
         return .none
@@ -1288,6 +1330,23 @@ public struct AppFeature {
   }
 
   // MARK: Effects
+
+  /// Saves a departing session's composer outside its child lifetime. The effect owns the captured
+  /// draft, so replacing/disconnecting cannot cancel the last copy of unsent text.
+  private func transferDraft(from session: SessionFeature.State?) -> Effect<Action> {
+    guard let session else { return .none }
+    let composer = session.composer
+    let key = composer.draftKey
+    let draft = composer.persistedDraft
+    let drafts = composerDrafts
+    return .run { _ in
+      if draft.isEmpty {
+        _ = await drafts.remove(key)
+      } else {
+        _ = await drafts.save(draft, key)
+      }
+    }
+  }
 
   private func persistEffect(server: OpenCodeServer, servers: [OpenCodeServer]) -> Effect<Action> {
     let store = store

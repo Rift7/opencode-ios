@@ -197,11 +197,13 @@ struct ComposerPanel: View {
           }
           .font(OpenCodeFonts.font(.caption))
           .accessibilityIdentifier("composer-retry-\(failed.messageID)")
-          Button(AppCopy.text("composer.edit")) {
-            store.send(.composer(.editFailed(messageID: failed.messageID)))
+          if failed.failure == .definite {
+            Button(AppCopy.text("composer.edit")) {
+              store.send(.composer(.editFailed(messageID: failed.messageID)))
+            }
+            .font(OpenCodeFonts.font(.caption))
+            .accessibilityIdentifier("composer-edit-\(failed.messageID)")
           }
-          .font(OpenCodeFonts.font(.caption))
-          .accessibilityIdentifier("composer-edit-\(failed.messageID)")
           Button(role: .destructive) {
             store.send(.composer(.deleteFailed(messageID: failed.messageID)))
           } label: {
@@ -243,7 +245,10 @@ struct ComposerPanel: View {
     case .draftTooLarge: AppCopy.text("composer.problem.too_large")
     case .couldNotSend: AppCopy.text("composer.problem.send")
     case .couldNotVerifySend: AppCopy.text("composer.problem.verify")
+    case .couldNotCleanUpDraft: AppCopy.text("composer.problem.cleanup")
     case .notConnected: AppCopy.text("composer.problem.offline")
+    case .busy: AppCopy.text("composer.problem.busy")
+    case .requestPending: AppCopy.text("composer.problem.request")
     }
   }
 }

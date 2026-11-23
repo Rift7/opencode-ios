@@ -177,6 +177,28 @@
         }
       }
     },
+    "composer.problem.busy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another message is still on its way."
+          }
+        }
+      }
+    },
+    "composer.problem.cleanup": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved, but the older draft copy couldn’t be removed."
+          }
+        }
+      }
+    },
     "composer.problem.offline": {
       "extractionState": "manual",
       "localizations": {
@@ -184,6 +206,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "You’re offline. The message is still here."
+          }
+        }
+      }
+    },
+    "composer.problem.request": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answer the pending request first."
           }
         }
       }
@@ -1856,6 +1889,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "The launch preview couldn’t be read."
+          }
+        }
+      }
+    },
+    "notice.draft_save_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t save the composer draft. The session stayed open so you can try again."
           }
         }
       }

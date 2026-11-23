@@ -169,6 +169,10 @@ message or file content.
 - The native input is `ios/OpenCode/Composer/ComposerTextInput.swift` (`UITextView`). It defers external draft
   sync while marked text exists, clamps selection, grows to 168 pt, sends on Return and inserts a newline on
   Shift+Return. Do not replace it with a `TextField` that writes the whole value per keystroke.
+- A send persists `ComposerOutbound` (target, message ID, text, quotes, delivery) before dispatch. A blocked
+  save does not dispatch; an offline/request-blocked delegate restores the payload; an unresolved record after
+  termination reopens as an unverified (ambiguous) failed send with its original ID and target, never as
+  editable text.
 - A send is admitted under a client message ID. A definite rejection can be retried. An ambiguous result is
   reconciled with `GET /api/session/{id}/message/{id}` and the inbox before any retry; a retry mints a new ID
   only after the old ID is confirmed absent. An unreadable reconciliation is shown as unverified and never
@@ -176,6 +180,9 @@ message or file content.
 - `SessionWaitLoop` is the only retry owner for `POST /api/experimental/session/{id}/wait`: 25 s polls, a 20 s
   fast threshold, 12 fast failures, an active probe, and a caller-owned `.once` escape. A completed wait asks
   the existing settlement read; it never opens another stream or read queue.
+- The composer follows the active page. Opening, pushing, popping or switching a page saves the outgoing
+  draft/outbound record and loads the destination’s; a child send uses the child ID. A send result that arrives
+  after navigation resolves the operation’s own target record and cannot touch the visible draft.
 - The P7 inbox remains the only queued-input model. The composer sheet sends Send Now (PATCH steer), moves to
   queue (PATCH queue) or cancels (DELETE); an idle stranded item reuses queue-then-steer.
 - While any request is pending, the request dock owns the input bar. Permissions and questions/simple fields
@@ -183,6 +190,12 @@ message or file content.
   sent by the answer bar’s Return.
 - Quotes are one block’s selected text plus an optional comment. The send body appends the audited quoted block
   to the model text and writes `{"type":"quote"}` to `metadata.comments`.
+- Project-to-session draft migration writes the destination first, removes the source only after success, and
+  skips a newer destination. A source keeps `createdSessionID` so a restart can recover it.
+- Done uses an explicit flush request/identity; a saved completion closes the matching session, a failure keeps
+  it open with a notice. Replacement, server switch and disconnect transfer the draft through an App-owned
+  effect before the child disappears. There is no dismissal timer.
+- Long input grows to 168 pt, then scrolls internally with the caret/selection visible.
 - Model/agent/mode pickers, autocomplete, mentions and attachments are deliberately absent until P11/P10; do not
   add a control that looks functional before those boundaries exist.
 
@@ -251,14 +264,14 @@ Useful entry points:
 
 ### P9 evidence
 
-- `swift test --package-path ios/OpenCodeKit`: 454 tests (194 server, 67 core, 61 app, 38 drawer, 58
-  session, 26 transcript, 10 composer).
-- Full XCUITest suite: 57 tests pass; `ComposerUITests` adds ten journeys, including relaunch, failed-send
-  retry, separate session drafts, running/queue management, dock vs chat, quote handoff, Dynamic Type/dark and
-  two typing traces.
+- `swift test --package-path ios/OpenCodeKit`: 477 tests (194 server, 67 core, 68 app, 38 drawer, 62
+  session, 26 transcript, 22 composer).
+- Full XCUITest suite: 58 tests pass; `ComposerUITests` adds eleven journeys, including relaunch, failed-send
+  retry, separate session drafts, running/queue management, dock vs chat, quote handoff, Dynamic Type/dark,
+  long multiline scrolling and two typing traces.
 - Screenshots: `docs/ios-migration/screens/p9-{composer,composer-quote,quote,request-dock,queued}[-dark].png`.
-- Simulator typing trace: long static transcript 5.2 ms average / 13.3 ms max across 38 changes with no
-  Markdown reparse; streaming 7.4 ms average / 14.7 ms max across 16 changes.
+- Simulator typing trace: long static transcript 5.7 ms average / 11.4 ms max across 38 changes with no
+  Markdown reparse; streaming 9.3 ms average / 15.3 ms max across 13 changes.
 - Deferred: model/agent/mode pickers and autocomplete (P11), attachments and cross-block selection (P10/P14),
   physical IME/hardware-keyboard/VoiceOver checks (P14).
 

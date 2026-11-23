@@ -17,7 +17,7 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | P6 | Home, drawer, projects, Catch Up, What's New | done — merged into `ios` as `7966dcfe` (PR #5, tree `25b6d297`) | `STATUS.md` Phase 6, `PARITY.md` Home, `HomeFeatureTests`, 8 UI tests, screenshots, scroll trace |
 | **P7** | **Session, subagents, background work, request review** | **done on `ios-session`** (draft PR) | `STATUS.md` Phase 7, `PARITY.md` Session, `SessionFeatureTests`, request-model and family tests, 5 UI tests, screenshots |
 | P8 | Transcript | done — merged as `2823c06e` (PR #7); merged tree `1147dca8` equals reviewed head `5ea6ea65` | `STATUS.md` Phase 8, `PARITY.md` Transcript, 26 grouping/Markdown + 19 session + 11 decoding tests, 9 UI journeys, 2 scroll traces, 6 screenshots |
-| **P9** | **Composer, drafts, sends, queue, request dock, quotes** | **done on `ios-composer`** (draft PR, base `ios`) | `STATUS.md` Phase 9, `PARITY.md` Composer, 10 composer + 14 session + 9 server tests, 10 UI journeys, typing traces, 10 screenshots |
+| **P9** | **Composer, drafts, sends, queue, request dock, quotes** | **done on `ios-composer`** (draft PR, base `ios`) | `STATUS.md` Phase 9, `PARITY.md` Composer, 22 composer + 18 session + 9 server tests, 11 UI journeys, typing traces, 10 screenshots |
 | P10 | Media | not started | folders only; P9 attachment and cross-block quote boundaries recorded |
 | P11 | Settings, experiments, diagnostics, onboarding | not started | folders only; P9 model/agent/mentions deferral recorded |
 | P12 | System integrations | not started | folders only |

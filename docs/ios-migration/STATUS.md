@@ -275,7 +275,7 @@ reviewed P8 head `5ea6ea65`; the P8 overflow-recovery corrections survived the m
 | Prompt/create/wait/cancel routes and one wait retry owner | `OpenCodeServer/Client/{PromptOperations,OpenCodeClient}.swift`, `Retry/SessionWaitLoop.swift` | `ComposerClientTests` — 4 route/body cases; `SessionWaitLoopTests` — 5 bounded/cancellation cases |
 | New-session entry from Home and project rows | `OpenCodeDrawer/HomeFeature.swift`, `ios/OpenCode/Drawer/HomeView.swift`, `OpenCodeApp/AppFeature.swift` | UI journey `testNewSessionComposeSendAndSettlement` |
 | P9 fixture modes and deterministic screenshots | `ios/OpenCode/App/UITestFixture.swift`, `OpenCodeUITests/{ComposerUITests,ComposerScreenshotUITests}.swift` | synthetic only; no socket |
-| Copy | `ios/OpenCode/Resources/Localizable.xcstrings` | 52 new English keys |
+| Copy | `ios/OpenCode/Resources/Localizable.xcstrings` | 61 new English keys |
 
 ### P9 acceptance matrix
 
@@ -290,6 +290,9 @@ reviewed P8 head `5ea6ea65`; the P8 overflow-recovery corrections survived the m
 | Queued inputs and steer | `SessionFeaturePendingInputs.kt`, `QueuedMessagesSheet.kt`, `LivePrompts.kt` | P7 inbox remains the only model; a queued item can Send Now (PATCH steer), move to queue (PATCH queue) or be cancelled (DELETE); an idle stranded item reuses the P7 queue-then-steer path; a late event only replaces the matching session’s inbox | `ComposerSessionTests` inbox cases; UI running/queued journey; P7 `strandedSteer` tests remain green |
 | Request dock | `RequestDockView.kt`, `RequestAnswer.kt`, `RequestCollapse.kt` | The dock owns the answer bar while any request is pending. Permissions offer Allow Once/Always/Deny; a question or one simple field pages and submits from the bar; a larger form keeps the sheet. Chat Send is never routed into the answer bar and the chat draft is untouched | `requestDockQuestion`, `requestDockPermission`; UI dock journey; P7 request tests still pass |
 | Quote handoff | `ComposerQuote.kt`, `OpenCodePromptPresentation.quoteBlock`, `metadata.comments` | A reply’s Quote action opens a native selectable view; the selected text becomes a composer quote without touching the draft. Send writes the audited quoted block into the model text and `{"type":"quote"}` into metadata, with an optional comment | `quotePromptAndDraftPreservation`, `quoteHandoff`; UI quote journey and screenshots |
+| Subagent composer ownership | `SessionPageStack.kt`, `SessionFeature.kt` | The composer follows the active page: root, child, sibling and back each load their own draft/outbound record. A child send uses the child session ID. A result completing after navigation resolves the original target’s storage and cannot alter the visible page. | `subagentDraftOwnership`, `sendCompletesOnAnotherPage`; UI child navigation |
+| Dismissal and replacement handoff | `SessionView`, `AppFeature.kt` session removal | Done waits for an explicit persisted flush with a session identity and request ID. A failed save keeps the session open. Replacement, switch and disconnect transfer the draft outside the child lifetime. | Seven `AppDismissalTests`; no timer path remains |
+| Long multiline input | `ComposerTextInput.kt` (grow then scroll) | Grows naturally to 168 pt, then scrolls internally and keeps the caret/selection visible; shrinking restores the non-scrolling layout. | `testLongMultilineDraftScrollsInsideTheCap` at accessibility text size |
 | Keyboard, accessibility, persistence | `ComposerViews.kt`, `ComposerTextInput.kt` | ≥48 pt send targets, 44 pt menu, labels and identifiers; composer follows the keyboard through a bottom safe-area inset; Dynamic Type and dark mode use system tokens; drafts survive navigation, background and relaunch | UI Dynamic Type/dark/keyboard journey; session-switch and relaunch journeys |
 
 ### Draft policy and bounds
@@ -301,10 +304,13 @@ reviewed P8 head `5ea6ea65`; the P8 overflow-recovery corrections survived the m
   writes one `composer-drafts.json` atomically under Application Support (UI tests use an isolated file).
 - Limits are 128 KiB of UTF-8 text, 64 KiB of quote text and 200 quotes per draft. Exceeding a limit returns
   `.tooLarge`, keeps the full text in memory and shows a recoverable error; no prefix is saved or displayed.
+- A draft record also owns failed sends and the one outbound operation in flight. An unresolved outbound record
+  is restored as an unverified failed send with its original message ID and target; it is never replayed as
+  ordinary editable text.
 - A storage read failure is `.couldNotRestore`; a write failure is `.couldNotSave`; neither is shown as a
   successful save. A delayed load is discarded if the person typed or the key changed.
-- A send clears the composer only at admission time; a later edit has a newer revision and is never cleared by
-  the earlier send’s result.
+- Clearing the editor happens only after the outbound record is durably written. A later edit has a newer
+  revision and is never cleared by the earlier send’s result.
 
 ### Message-ID and wait decisions
 
@@ -319,13 +325,28 @@ reviewed P8 head `5ea6ea65`; the P8 overflow-recovery corrections survived the m
   the stream/settlement read remains authoritative.
 - `/api/experimental/session/{id}/wait` is not a generic transport retry: `SessionWaitLoop` is the only owner.
 
+### Reviewed P9 corrections
+
+| Finding | Change | Regression |
+| --- | --- | --- |
+| A send could lose recoverable text | Send now persists `ComposerOutbound` (target, message ID, text, quotes, delivery) before dispatch. A blocked save does not dispatch; an offline/request-blocked delegate restores the payload; an unverified result becomes a persisted ambiguous failed send with the original ID. Failed sends are part of the draft record. | `sendPersistenceFailureKeepsText`, `blockedSendRestores`, `requestBlockedSendRestores`, `restartAfterSendBeforeResponse`, `restartConfirmedAcceptance`, `restartConfirmedAbsence`; ambiguous Edit is disabled |
+| Subagent pages sent to the root | Composer target follows the active page. Opening/pushing/popting saves the outgoing draft and loads the destination draft; a completed send resolves against its original target’s persisted record if another page is visible. | `subagentDraftOwnership` (root → child → sibling → back with distinct text/quotes and child send ID), `sendCompletesOnAnotherPage` |
+| Project-to-session migration deleted before saving | Migration writes the destination first, skips a newer destination, removes the source only after success, and keeps the source if cleanup fails. The source gains `createdSessionID` before migration so a restart can recover it. | `destinationFirst`, `destinationFailure`, `cleanupFailure`, `restartDuringMigration`, `newerDestinationWins`; `migrationFailuresSurface` |
+| Dismissal relied on a 200 ms timer | Done asks `SessionFeature` for an explicit draft flush with a request ID; `AppFeature` closes only on a matching saved completion. A failure keeps the session and shows an actionable notice. Replacement, server switch and disconnect transfer the draft through an App-owned effect before the child disappears. | `dismissalWaitsForSave`, `dismissalSaveFailure`, `lateDismissalIsFenced`, `disconnectTransfersDraft`, `switchServerTransfersDraft`, `replacementTransfersDraft`; `cancelledCreateDoesNotPrompt` |
+| Long input had no scrolling surface | The field grows to 168 pt, then enables internal scrolling and keeps the caret/selection visible; shrinking below the cap restores the non-scrolling layout. | `testLongMultilineDraftScrollsInsideTheCap` at accessibility text size |
+
+The outbound record is also fenced by operation ID and target. A late result from a replaced screen or another
+page resolves storage for the operation’s own target and cannot call `sendAccepted`/`sendFailed` on the visible
+page. A create that returns successfully after the session child was replaced checks cancellation before the
+prompt mutation and does not post.
+
 ### Typing and streaming measurements (simulator)
 
 | Run | Fixture | Method | Result |
 | --- | --- | --- | --- |
-| Typing over a long static transcript | `connected-composer-long`: 600 rows | `ComposerUITests.testTypingDoesNotReparseTheWholeTranscript`; 42 typed characters (38 reported text changes); `TYPING_MAIN_TURN_PROBE` = average/max milliseconds from text change to next main-queue turn | average 5.2 ms, max 13.3 ms over 38 changes; Markdown parse count and entry count unchanged |
-| Typing while streaming | `connected-composer-stream`: 600 deltas at 20 ms | `testTypingDuringStreamingKeepsTheComposerResponsive`; 23 characters (16 reported text changes) | average 7.4 ms, max 14.7 ms; composer change survived; no crash |
-| Driver time (whole `typeText` call) | same runs | `ContinuousClock` around XCUITest `typeText` | 1463 ms / 1100 ms for 42 / 23 characters; this is the test driver’s input time, not keystroke latency |
+| Typing over a long static transcript | `connected-composer-long`: 600 rows | `ComposerUITests.testTypingDoesNotReparseTheWholeTranscript`; 42 typed characters (38 reported text changes); `TYPING_MAIN_TURN_PROBE` = average/max milliseconds from text change to next main-queue turn | average 5.7 ms, max 11.4 ms over 38 changes; Markdown parse count and entry count unchanged |
+| Typing while streaming | `connected-composer-stream`: 600 deltas at 20 ms | `testTypingDuringStreamingKeepsTheComposerResponsive`; 23 characters (16 reported text changes) | average 9.3 ms, max 15.3 ms; composer change survived; no crash |
+| Driver time (whole `typeText` call) | same runs | `ContinuousClock` around XCUITest `typeText` | 1449 ms / 1128 ms for 42 / 23 characters; this is the test driver’s input time, not keystroke latency |
 | Device/runtime | iPhone 18 Pro Max simulator, iOS 27.2 (24B8117), debug build | `-only-testing:OpenCodeUITests/ComposerUITests` | Simulator evidence; not a device claim |
 
 ### P9 screenshot provenance
@@ -356,10 +377,10 @@ dock and queued sheet show fixture-only questions and messages.
 | --- | --- |
 | `swift test --package-path ios/OpenCodeKit` (P8) | **421 tests pass**: 185 server, 67 core, 61 app, 38 drawer, 44 session, 26 transcript; live and loopback opt-outs unchanged |
 | `ios/scripts/verify.sh` (P8) | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **46 UI tests pass**; package suites pass (exit 0) |
-| `swift test --package-path ios/OpenCodeKit` (P9) | **454 tests pass**: 194 server, 67 core, 61 app, 38 drawer, 58 session, 26 transcript, 10 composer; live and loopback opt-outs unchanged |
-| `ios/scripts/verify.sh --skip-ui` (P9 final) | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; `OpenCodeTests` passes; 454 package tests pass (exit 0) |
-| `xcodebuild … test` (P9 UI, two grouped final invocations) | **57 UI tests pass** (46 non-composer + 11 composer/screenshot; exit 0) — composer journeys, P7 session/request/background, P8 transcript, screenshots |
-| `xcodebuild … -only-testing:OpenCodeUITests/ComposerUITests` | 10/10 pass: new session, relaunch, failed send retry, session isolation, running/queued, dock, quote, Dynamic Type/dark/keyboard, two typing traces |
+| `swift test --package-path ios/OpenCodeKit` (P9) | **477 tests pass**: 194 server, 67 core, 68 app, 38 drawer, 62 session, 26 transcript, 22 composer; live and loopback opt-outs unchanged |
+| `ios/scripts/verify.sh --skip-ui` (P9 final) | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; `OpenCodeTests` passes; 477 package tests pass (exit 0) |
+| `xcodebuild … test` (P9 UI, grouped final invocations) | **58 UI tests pass** (46 non-composer + 11 composer + 1 composer screenshot). The P8 jump-to-latest test flaked once inside the 46-test group and the full 9-test `TranscriptUITests` class passed on rerun; `ComposerUITests` (11) and `SessionUITests` (6) passed again on the final code |
+| `xcodebuild … -only-testing:OpenCodeUITests/ComposerUITests` | 11/11 pass: new session, relaunch, failed send retry, session isolation, running/queued, dock, quote, Dynamic Type/dark/keyboard, long multiline draft scrolling, two typing traces |
 | `xcodebuild … -only-testing:OpenCodeUITests/ComposerScreenshotUITests` | light/dark composer, quote, request dock and queued sheet captured |
 | `xcodebuild ... -only-testing:OpenCodeUITests/TranscriptUITests` | 9 journeys: Markdown/tools, disclosure restoration across a subagent page, native text selection, copy, link confirmation, growth-safe following, Jump to Latest, Load Earlier anchor, Dynamic Type + dark + Reduce Motion launch flag |
 | `xcodebuild ... -only-testing:OpenCodeUITests/TranscriptScrollTraceUITests` | 1,000-row scroll and 600-delta streaming traces; results in the performance table above |

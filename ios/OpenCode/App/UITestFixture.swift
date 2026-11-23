@@ -638,7 +638,25 @@ import OpenCodeServer
         storage: AtomicFileStorage(url: url),
         storageKey: "drafts"
       )
-      return .live(store: store)
+      let live = ComposerDraftClient.live(store: store)
+      guard ProcessInfo.processInfo.environment["OPENCODE_UI_TEST_LONG_DRAFT"] == "1" else {
+        return live
+      }
+      let long = (0..<80).map { "Line \($0): a long synthetic draft that grows past the cap." }
+        .joined(separator: "\n")
+      return ComposerDraftClient(
+        load: { key in
+          if key.scope.sessionID == "alpha" {
+            return .found(ComposerDraft(text: "BEGIN-LONG\n" + long + "\nEND-LONG"))
+          }
+          return await live.load(key)
+        },
+        save: live.save,
+        remove: live.remove,
+        recoverCreated: live.recoverCreated,
+        migrate: live.migrate,
+        flush: live.flush
+      )
     }
 
     static var path: NetworkPathClient {

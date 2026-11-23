@@ -72,6 +72,25 @@ struct ComposerFeatureTests {
     return store
   }
 
+
+  private func makeStore(
+    state: ComposerFeature.State,
+    draftClient: ComposerDraftClient,
+    uuid: UuidClient = .incrementing()
+  ) -> TestStoreOf<ComposerFeature> {
+    let store = TestStore(initialState: state) {
+      ComposerFeature()
+    } withDependencies: {
+      $0.composerDrafts = draftClient
+      $0.clock = .testValue
+      $0.uuidClient = uuid
+      $0.dateClient = DateClient { Date(timeIntervalSince1970: 1_700_000_000) }
+      $0.haptics = .testValue
+    }
+    store.exhaustivity = .off
+    return store
+  }
+
   private func state(session: String = "session-1") -> ComposerFeature.State {
     ComposerFeature.State(
       serverID: "server-1",
@@ -236,16 +255,28 @@ struct ComposerFeatureTests {
   @Test("an unverified send keeps its optimistic identity and clears sending")
   func unverifiedSend() async {
     let backend = DraftBackend()
-    let store = makeStore(state: state(), backend: backend)
+    let fixedID = "55555555-5555-4555-8555-555555555555"
+    let store = makeStore(
+      state: state(),
+      backend: backend,
+      uuid: UuidClient { UUID(uuidString: fixedID)! }
+    )
     await store.send(.task)
     await settle(store)
     await store.send(.textChanged("Maybe"))
     await store.send(.sendTapped)
     await store.skipReceivedActions(strict: false)
-    await store.send(.sendUnverified(messageID: "message"))
+    await store.send(.sendUnverified(messageID: fixedID))
     #expect(!store.state.isSending)
     #expect(store.state.draft.isEmpty)
     #expect(store.state.problem == .couldNotVerifySend)
+    #expect(store.state.failedSends.count == 1)
+    #expect(store.state.failedSends.first?.failure == .ambiguous)
+    #expect(store.state.failedSends.first?.text == "Maybe")
+    #expect(store.state.failedSends.first?.messageID == fixedID)
+    await store.send(.editFailed(messageID: fixedID))
+    #expect(store.state.draft.isEmpty)
+    #expect(store.state.failedSends.count == 1)
   }
 
   @Test("a confirmed failure restores the text when nothing newer was typed")
@@ -275,12 +306,181 @@ struct ComposerFeatureTests {
     await store.send(.sendTapped)
     await store.skipReceivedActions(strict: false)
     await store.send(.textChanged("New"))
-    await store.send(.sendFailed(messageID: fixedID, failure: .ambiguous))
+    await store.send(.sendFailed(messageID: fixedID, failure: .definite))
     #expect(store.state.draft == "New")
     #expect(store.state.failedSends.count == 1)
     await store.send(.editFailed(messageID: fixedID))
     #expect(store.state.draft == "Old\n\nNew")
   }
+
+
+  @Test("a save failure at Send does not dispatch and keeps the editor text")
+  func sendPersistenceFailureKeepsText() async {
+    let backend = DraftBackend()
+    let fixedID = "66666666-6666-4666-8666-666666666666"
+    await backend.setSave(.failure(.unavailable))
+    let store = makeStore(
+      state: state(),
+      backend: backend,
+      uuid: UuidClient { UUID(uuidString: fixedID)! }
+    )
+    await store.send(.task)
+    await settle(store)
+    await store.send(.textChanged("Keep offline"))
+    await store.send(.sendTapped)
+    await settle(store)
+    #expect(store.state.draft == "Keep offline")
+    #expect(store.state.outbound.isEmpty)
+    #expect(!store.state.isSending)
+    #expect(store.state.problem == ComposerProblem.couldNotSave)
+  }
+
+  @Test("a blocked send restores the outbound text and settles the composer")
+  func blockedSendRestores() async {
+    let backend = DraftBackend()
+    let fixedID = "77777777-7777-4777-8777-777777777777"
+    let store = makeStore(
+      state: state(),
+      backend: backend,
+      uuid: UuidClient { UUID(uuidString: fixedID)! }
+    )
+    await store.send(.task)
+    await settle(store)
+    await store.send(.textChanged("Offline message"))
+    await store.send(.sendTapped)
+    await settle(store)
+    await store.send(.sendBlocked(.notConnected))
+    await settle(store)
+    #expect(store.state.draft == "Offline message")
+    #expect(store.state.outbound.isEmpty)
+    #expect(!store.state.isSending)
+    #expect(store.state.failedSends.isEmpty)
+    let key = state().draftKey
+    #expect(await backend.stored(key)?.text == "Offline message")
+    #expect(await backend.stored(key)?.outbound.isEmpty == true)
+  }
+
+  @Test("a request arriving before dispatch restores the outbound text")
+  func requestBlockedSendRestores() async {
+    let backend = DraftBackend()
+    let fixedID = "88888888-8888-4888-8888-888888888888"
+    let store = makeStore(
+      state: state(),
+      backend: backend,
+      uuid: UuidClient { UUID(uuidString: fixedID)! }
+    )
+    await store.send(.task)
+    await settle(store)
+    await store.send(.textChanged("Answer later"))
+    await store.send(.sendTapped)
+    await settle(store)
+    await store.send(.sendBlocked(.requestPending))
+    await settle(store)
+    #expect(store.state.draft == "Answer later")
+    #expect(store.state.problem == .requestPending)
+    #expect(store.state.outbound.isEmpty)
+  }
+
+  @Test("an unresolved outbound record survives restart as an unverified send with its id")
+  func restartAfterSendBeforeResponse() async {
+    let storage = OpenCodeCore.InMemoryStorage()
+    let draftStore = ComposerDraftStore(storage: storage, storageKey: "drafts")
+    let client = ComposerDraftClient.live(store: draftStore)
+    let fixedID = "99999999-9999-4999-8999-999999999999"
+    let first = makeStore(
+      state: state(),
+      draftClient: client,
+      uuid: UuidClient { UUID(uuidString: fixedID)! }
+    )
+    await first.send(.task)
+    await settle(first)
+    await first.send(.textChanged("Survive this"))
+    await first.send(.sendTapped)
+    await settle(first)
+    #expect(first.state.outbound.count == 1)
+
+    let reopened = makeStore(state: state(), draftClient: client)
+    await reopened.send(.task)
+    await settle(reopened)
+    #expect(reopened.state.draft.isEmpty)
+    #expect(reopened.state.failedSends.count == 1)
+    #expect(reopened.state.failedSends.first?.messageID == fixedID)
+    #expect(reopened.state.failedSends.first?.text == "Survive this")
+    #expect(reopened.state.failedSends.first?.failure == .ambiguous)
+    let stored = await draftStore.load(state().draftKey)
+    guard case .found(let record) = stored else {
+      Issue.record("expected a stored draft")
+      return
+    }
+    #expect(record.outbound.isEmpty)
+    #expect(record.failedSends.count == 1)
+  }
+
+
+  @Test("migration failures are surfaced without dropping the composer target")
+  func migrationFailuresSurface() async {
+    let backend = DraftBackend()
+    let initial = state(session: "new-session")
+    let store = makeStore(state: initial, backend: backend)
+    await store.send(.task)
+    await settle(store)
+    let oldKey = ComposerDraftKey(
+      serverID: "server-1",
+      scope: .newSession(directory: "/work/box")
+    )
+    let newKey = ComposerDraftKey(serverID: "server-1", scope: .session("new-session"))
+    await store.send(
+      .migrationFinished(
+        result: .destinationFailed(.unavailable),
+        draft: initial.persistedDraft,
+        oldKey: oldKey,
+        newKey: newKey
+      )
+    )
+    #expect(store.state.problem == .couldNotSave)
+    await store.send(
+      .migrationFinished(
+        result: .sourceRetained(.unavailable),
+        draft: initial.persistedDraft,
+        oldKey: oldKey,
+        newKey: newKey
+      )
+    )
+    #expect(store.state.problem == .couldNotCleanUpDraft)
+    #expect(store.state.target == .session(id: "new-session"))
+  }
+
+  @Test("switching targets preserves distinct drafts and quotes")
+  func switchTargetPreservesDrafts() async {
+    let storage = OpenCodeCore.InMemoryStorage()
+    let draftStore = ComposerDraftStore(storage: storage, storageKey: "drafts")
+    let client = ComposerDraftClient.live(store: draftStore)
+    let store = makeStore(state: state(session: "a"), draftClient: client)
+    await store.send(.task)
+    await settle(store)
+    await store.send(.textChanged("A draft"))
+    await store.send(.quoteInserted(text: "A quote"))
+    await store.send(.flush)
+    await settle(store)
+
+    await store.send(.switchTarget(.session(id: "b")))
+    await settle(store)
+    #expect(store.state.target == .session(id: "b"))
+    #expect(store.state.draft.isEmpty)
+    await store.send(.textChanged("B draft"))
+    await store.send(.flush)
+    await settle(store)
+
+    await store.send(.switchTarget(.session(id: "a")))
+    await settle(store)
+    #expect(store.state.draft == "A draft")
+    #expect(store.state.quotes.first?.text == "A quote")
+
+    await store.send(.switchTarget(.session(id: "b")))
+    await settle(store)
+    #expect(store.state.draft == "B draft")
+  }
+
 
   @Test("quotes become a model block and metadata comments without changing the chat draft")
   func quotePromptAndDraftPreservation() async {

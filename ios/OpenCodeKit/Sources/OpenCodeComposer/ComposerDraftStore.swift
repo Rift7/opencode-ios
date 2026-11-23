@@ -56,6 +56,87 @@ public actor ComposerDraftStore {
     }
   }
 
+  /// A New Session draft whose created session key is missing or stale. The destination is written
+  /// before the source is removed, so a failed migration never destroys the only copy.
+  public func recoverCreated(
+    sessionID: String,
+    destination: ComposerDraftKey
+  ) -> ComposerDraftLoad {
+    do {
+      let records = try records()
+      let prefix = "\(destination.serverID)|"
+      guard let source = records.drafts.first(where: { storageKey, draft in
+        storageKey.hasPrefix(prefix)
+          && storageKey != destination.storageKey
+          && draft.createdSessionID == sessionID
+      }) else { return .missing }
+      guard let sourceKey = Self.key(from: source.key, serverID: destination.serverID) else {
+        return .missing
+      }
+      let migration = migrate(source.value, from: sourceKey, to: destination)
+      return .foundFromSource(source.value, migration)
+    } catch let failure as StorageFailure {
+      return .failure(failure)
+    } catch {
+      return .failure(.unavailable)
+    }
+  }
+
+  public func migrate(
+    _ draft: ComposerDraft,
+    from source: ComposerDraftKey,
+    to destination: ComposerDraftKey
+  ) -> ComposerDraftMigration {
+    do {
+      // A newer save may have reached the destination while migration was pending. Never overwrite
+      // it with the older source snapshot; only remove the now-redundant source.
+      let current = try records()
+      if current.drafts[destination.storageKey] == nil {
+        let saved = save(draft, for: destination)
+        switch saved {
+        case .saved:
+          break
+        case .tooLarge:
+          return .destinationFailed(.encoding)
+        case .failure(let failure):
+          return .destinationFailed(failure)
+        }
+      }
+    } catch let failure as StorageFailure {
+      return .destinationFailed(failure)
+    } catch {
+      return .destinationFailed(.unavailable)
+    }
+    let removed = remove(source)
+    switch removed {
+    case .saved:
+      return .migrated
+    case .tooLarge:
+      return .sourceRetained(.encoding)
+    case .failure(let failure):
+      return .sourceRetained(failure)
+    }
+  }
+
+  private static func key(from storageKey: String, serverID: String) -> ComposerDraftKey? {
+    let prefix = "\(serverID)|"
+    guard storageKey.hasPrefix(prefix) else { return nil }
+    let token = storageKey.dropFirst(prefix.count)
+    if token.hasPrefix("session:") {
+      return ComposerDraftKey(
+        serverID: serverID,
+        scope: .session(String(token.dropFirst("session:".count)))
+      )
+    }
+    if token.hasPrefix("new:") {
+      return ComposerDraftKey(
+        serverID: serverID,
+        scope: .newSession(directory: String(token.dropFirst("new:".count)))
+      )
+    }
+    return nil
+  }
+
   public func remove(_ key: ComposerDraftKey) -> ComposerDraftSave {
     do {
       var records = try records()
@@ -177,6 +258,11 @@ public struct ComposerDraftClient: Sendable {
   public var load: @Sendable (ComposerDraftKey) async -> ComposerDraftLoad
   public var save: @Sendable (ComposerDraft, ComposerDraftKey) async -> ComposerDraftSave
   public var remove: @Sendable (ComposerDraftKey) async -> ComposerDraftSave
+  /// Loads a created session's draft from the New Session key when the destination key is missing,
+  /// after trying a destination-first migration.
+  public var recoverCreated: @Sendable (String, ComposerDraftKey) async -> ComposerDraftLoad
+  public var migrate:
+    @Sendable (ComposerDraft, ComposerDraftKey, ComposerDraftKey) async -> ComposerDraftMigration
   public var flush: @Sendable () async -> Void
 
   public init(
@@ -185,11 +271,18 @@ public struct ComposerDraftClient: Sendable {
       .saved
     },
     remove: @escaping @Sendable (ComposerDraftKey) async -> ComposerDraftSave = { _ in .saved },
+    recoverCreated: @escaping @Sendable (String, ComposerDraftKey) async -> ComposerDraftLoad = {
+      _, _ in .missing
+    },
+    migrate: @escaping @Sendable (ComposerDraft, ComposerDraftKey, ComposerDraftKey) async ->
+      ComposerDraftMigration = { _, _, _ in .migrated },
     flush: @escaping @Sendable () async -> Void = {}
   ) {
     self.load = load
     self.save = save
     self.remove = remove
+    self.recoverCreated = recoverCreated
+    self.migrate = migrate
     self.flush = flush
   }
 
@@ -198,6 +291,8 @@ public struct ComposerDraftClient: Sendable {
       load: { await store.load($0) },
       save: { await store.save($0, for: $1) },
       remove: { await store.remove($0) },
+      recoverCreated: { await store.recoverCreated(sessionID: $0, destination: $1) },
+      migrate: { await store.migrate($0, from: $1, to: $2) },
       flush: { await store.flush() }
     )
   }

@@ -180,8 +180,9 @@ audited contract. A connection attempt that lands on an HTML page now fails as
 P9 adds the prompt admission (`POST /api/session/{id}/prompt`), the client-id session create
 (`POST /api/session`), the inbox delivery PATCH/DELETE read-back and the experimental wait
 (`POST /api/experimental/session/{id}/wait`). The wait loop is the only retry owner for that route; prompt and
-create calls use the normal client layer because both are idempotent by a client-made ID. Model/agent catalog
-and autocomplete routes remain P11.
+create calls use the normal client layer because both are idempotent by a client-made ID. The prompt is not
+dispatched until its outbound record is durably written, and a create that returns after its child was cancelled
+is checked before the prompt mutation. Model/agent catalog and autocomplete routes remain P11.
 
 P5 uses `health` (`/api/info`), `projects` (`/api/project`) and `events` (`/api/event`). P6 adds
 `/api/session`, `/api/session/active`, `/api/session/{id}/view`, `DELETE /api/session/{id}` and the two

@@ -921,3 +921,39 @@ writes `{"type":"quote","text","comment"}` to `metadata.comments` with `metadata
 - The chat draft is never replaced or cleared by inserting/removing a quote.
 - Cross-block selection as one document remains the P8/P14 limitation; P9 does not claim it.
 - Selected text is never logged.
+
+### D-70 A send owns a persisted outbound record until it settles
+The composer writes `ComposerOutbound` (target, message ID, text, quotes, delivery) into the draft record before
+clearing the editor or dispatching. A save failure keeps the editor and does not send. A blocked delegate
+restores the payload (or keeps it as a definite failed send when newer text exists). A definite failure restores
+it or records it for Retry/Edit; an unreadable reconciliation becomes a persisted ambiguous failed send with the
+original message ID and target. On load, an unresolved outbound record is converted to the same ambiguous failed
+send and is never restored as editable text. This closes the offline, request-race, unverified and termination
+gaps. `FailedComposerSend` and `ComposerOutbound` are part of the versioned draft JSON.
+
+### D-71 The composer follows the active session page
+A subagent page is editable. `SessionFeature.openSubagent`/`popPage`/`popToRoot` send `.composer(.switchTarget)`;
+the outgoing draft (including failed/outbound records) is saved, the destination record is loaded, and the new
+target is the page’s session ID. A send captures its target in the outbound record. A result arriving while a
+different page is visible resolves the operation’s own target record instead of calling the visible composer’s
+accept/fail actions. A create that returns after the session child was replaced checks cancellation before the
+prompt mutation.
+
+### D-72 Project-to-session migration is destination-first
+`ComposerDraftStore.migrate` writes the session key first (skipping it when a newer save already exists), then
+removes the New Session key. Cleanup failure leaves both records and is reported as `.couldNotCleanUpDraft`;
+destination failure leaves the source and is reported as `.couldNotSave`. The source gains `createdSessionID`
+before migration; `recoverCreated` can find it after a restart and retry the destination-first migration. The
+composer target moves to the created session only after its record is safe or recoverable.
+
+### D-73 Dismissal is an identity-bound persistence handoff
+Done creates a `PendingSessionDismissal(requestID, serverID, sessionID)` and asks the session to flush its
+composer. `SessionFeature` forwards the composer’s explicit `ComposerDraftSave`; App closes the session only when
+the request ID and session identity still match. A failed/too-large save keeps the session open and shows a
+notice. Replacement, server switch, disconnect and interactive dismissal save the departing draft through an
+App-owned effect before removing the child. No arbitrary sleep participates in dismissal.
+
+### D-74 Long input grows then scrolls
+`ComposerTextInput` grows to 168 pt; beyond that it enables internal scrolling and scrolls the caret/selection
+into view. Shrinking below the cap disables scrolling and resets the offset. Marked text, selection, Dynamic Type
+and the keyboard inset are unchanged. A physical IME/hardware-keyboard check remains unverified.

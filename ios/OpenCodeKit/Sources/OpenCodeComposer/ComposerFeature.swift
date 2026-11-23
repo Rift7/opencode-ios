@@ -21,12 +21,23 @@ public struct ComposerFeature: Sendable {
     public var isRestoring: Bool
     public var problem: ComposerProblem?
     public var failedSends: [FailedComposerSend]
+    /// Persisted before dispatch. At most one operation is in flight; an unresolved record restored
+    /// from disk becomes a failed ambiguous send and is never replayed as ordinary text.
+    public var outbound: [ComposerOutbound]
 
     /// Typing and quote edits bump this, so a send that started earlier cannot clear newer text.
     public var revision: Int
     var restoreToken: Int
     var saveGeneration: Int
-    var pendingSend: ComposerSend?
+    var pendingDispatch: PendingDispatch?
+    var dispatchGeneration: Int?
+    var switchToken: Int
+    var parkedDrafts: [ComposerDraftKey: ComposerDraft]
+
+    struct PendingDispatch: Equatable, Sendable {
+      var send: ComposerSend
+      var retryFailure: ComposerSendFailure?
+    }
 
     public init(
       serverID: String,
@@ -45,10 +56,14 @@ public struct ComposerFeature: Sendable {
       self.isRestoring = false
       self.problem = nil
       self.failedSends = []
+      self.outbound = []
       self.revision = 0
       self.restoreToken = 0
       self.saveGeneration = 0
-      self.pendingSend = nil
+      self.pendingDispatch = nil
+      self.dispatchGeneration = nil
+      self.switchToken = 0
+      self.parkedDrafts = [:]
     }
 
     public var draftKey: ComposerDraftKey {
@@ -56,11 +71,25 @@ public struct ComposerFeature: Sendable {
     }
 
     public var canSend: Bool {
-      !isSending && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !quotes.isEmpty)
+      !isSending && outbound.isEmpty
+        && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !quotes.isEmpty)
     }
 
     public var isEmpty: Bool {
-      draft.isEmpty && quotes.isEmpty && failedSends.isEmpty
+      draft.isEmpty && quotes.isEmpty && failedSends.isEmpty && outbound.isEmpty
+    }
+
+    /// The complete durable composer record, including outbound ownership and failed sends.
+    public var persistedDraft: ComposerDraft {
+      ComposerDraft(
+        text: draft,
+        quotes: quotes,
+        projectDirectory: target.directory,
+        createdSessionID: target.isNewSession ? nil : target.sessionID,
+        failedSends: failedSends,
+        outbound: outbound,
+        updatedAt: Date(timeIntervalSince1970: 0)
+      )
     }
   }
 
@@ -75,17 +104,38 @@ public struct ComposerFeature: Sendable {
     case quoteRemoved(id: String)
     case sendTapped
     case queueTapped
+    case outboundPersisted(messageID: String)
     case sendAccepted(messageID: String)
     case sendBlocked(ComposerProblem)
     case sendFailed(messageID: String, failure: ComposerSendFailure)
     /// The POST may have landed and the read-back could not settle it. Keep the optimistic row and
-    /// report honestly; a later authoritative read reconciles it.
+    /// the outbound record; a later Retry or authoritative read reconciles it.
     case sendUnverified(messageID: String)
     case retryFailed(messageID: String)
     case editFailed(messageID: String)
     case deleteFailed(messageID: String)
     case sessionCreated(String)
+    case migrationFinished(
+      result: ComposerDraftMigration,
+      draft: ComposerDraft,
+      oldKey: ComposerDraftKey,
+      newKey: ComposerDraftKey
+    )
+    case resolveOutbound(
+      target: ComposerTarget,
+      messageID: String,
+      resolution: ComposerOutboundResolution
+    )
+    case switchTarget(ComposerTarget)
+    case targetSwitchFinished(
+      token: Int,
+      target: ComposerTarget,
+      oldKey: ComposerDraftKey,
+      oldDraft: ComposerDraft,
+      result: ComposerDraftSave
+    )
     case flush
+    case flushForDismiss(UUID)
     case draftLoaded(token: Int, key: ComposerDraftKey, outcome: ComposerDraftLoad)
     case saveDue(generation: Int, key: ComposerDraftKey, draft: ComposerDraft, remove: Bool)
     case saveFinished(generation: Int, key: ComposerDraftKey, result: ComposerDraftSave)
@@ -96,6 +146,7 @@ public struct ComposerFeature: Sendable {
     case send(ComposerSend)
     case retry(FailedComposerSend)
     case restoredCreatedSession(String)
+    case flushForDismissFinished(requestID: UUID, result: ComposerDraftSave)
   }
 
   enum CancelID: Hashable {
@@ -161,52 +212,82 @@ public struct ComposerFeature: Sendable {
         return scheduleSave(state: &state)
 
       case .sendTapped:
-        return send(delivery: .steer, state: &state)
+        guard state.canSend, let send = makeSend(delivery: .steer, state: state) else {
+          return .none
+        }
+        haptics.play(.tap)
+        return begin(send, retryFailure: nil, state: &state)
 
       case .queueTapped:
-        return send(delivery: .queue, state: &state)
+        guard state.canSend, let send = makeSend(delivery: .queue, state: state) else {
+          return .none
+        }
+        haptics.play(.tap)
+        return begin(send, retryFailure: nil, state: &state)
+
+      case .outboundPersisted(let messageID):
+        return dispatchPersisted(messageID: messageID, state: &state)
 
       case .sendAccepted:
         state.isSending = false
-        state.pendingSend = nil
+        state.pendingDispatch = nil
+        state.dispatchGeneration = nil
+        state.outbound = []
         state.problem = nil
-        if state.target.isNewSession { return .none }
         return scheduleSave(state: &state)
 
-      case .sendUnverified:
+      case .sendUnverified(let messageID):
         state.isSending = false
-        state.pendingSend = nil
+        state.pendingDispatch = nil
+        state.dispatchGeneration = nil
         state.problem = .couldNotVerifySend
+        if let outbound = state.outbound.first(where: { $0.messageID == messageID })
+          ?? state.outbound.first
+        {
+          state.failedSends.append(
+            FailedComposerSend(
+              messageID: outbound.messageID,
+              text: outbound.text,
+              quotes: outbound.quotes,
+              delivery: outbound.delivery,
+              target: outbound.target,
+              reason: .couldNotVerifySend,
+              failure: .ambiguous
+            )
+          )
+          state.outbound.removeAll { $0.messageID == outbound.messageID }
+        }
         haptics.play(.warning)
-        return .none
+        return persistNow(state: &state)
 
       case .sendBlocked(let problem):
-        state.isSending = false
-        state.pendingSend = nil
-        state.problem = problem
-        return .none
+        return settleBlocked(problem, state: &state)
 
       case .sendFailed(let messageID, let failure):
         state.isSending = false
+        state.pendingDispatch = nil
+        state.dispatchGeneration = nil
         state.problem = failure == .ambiguous ? .couldNotVerifySend : .couldNotSend
-        guard let sent = state.pendingSend else {
-          state.pendingSend = nil
-          return .none
-        }
-        state.pendingSend = nil
         haptics.play(.error)
+        guard let outbound = state.outbound.first(where: { $0.messageID == messageID })
+          ?? state.outbound.first
+        else {
+          return persistNow(state: &state)
+        }
+        state.outbound.removeAll { $0.messageID == outbound.messageID }
         if state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, state.quotes.isEmpty {
-          state.draft = sent.text
-          state.quotes = sent.quotes
+          state.draft = outbound.text
+          state.quotes = outbound.quotes
           state.revision += 1
           state.focusRequest += 1
         } else {
           state.failedSends.append(
             FailedComposerSend(
               messageID: messageID,
-              text: sent.text,
-              quotes: sent.quotes,
-              delivery: sent.delivery,
+              text: outbound.text,
+              quotes: outbound.quotes,
+              delivery: outbound.delivery,
+              target: outbound.target,
               reason: state.problem ?? .couldNotSend,
               failure: failure
             )
@@ -215,25 +296,16 @@ public struct ComposerFeature: Sendable {
         return persistNow(state: &state)
 
       case .retryFailed(let messageID):
-        guard !state.isSending,
+        guard !state.isSending, state.outbound.isEmpty,
           let failed = state.failedSends.first(where: { $0.messageID == messageID })
         else { return .none }
-        state.isSending = true
-        state.problem = nil
         state.failedSends.removeAll { $0.messageID == messageID }
-        state.pendingSend = ComposerSend(
-          target: state.target,
-          messageID: failed.messageID,
-          text: failed.text,
-          quotes: failed.quotes,
-          delivery: failed.delivery,
-          revision: state.revision
-        )
         haptics.play(.tap)
-        return .send(.delegate(.retry(failed)))
+        return begin(failed.send, retryFailure: failed.failure, state: &state)
 
       case .editFailed(let messageID):
-        guard let failed = state.failedSends.first(where: { $0.messageID == messageID })
+        guard let failed = state.failedSends.first(where: { $0.messageID == messageID }),
+          failed.failure == .definite
         else { return .none }
         state.failedSends.removeAll { $0.messageID == messageID }
         let text = state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -252,47 +324,52 @@ public struct ComposerFeature: Sendable {
         return persistNow(state: &state)
 
       case .sessionCreated(let sessionID):
-        let oldKey = state.draftKey
-        guard oldKey.scope != .session(sessionID) else { return .none }
-        state.target = .session(id: sessionID)
-        state.saveGeneration += 1
-        let generation = state.saveGeneration
-        let newKey = state.draftKey
-        var draft = snapshot(state)
-        draft.createdSessionID = sessionID
-        let savedDraft = draft
-        return .run { [drafts] send in
-          _ = await drafts.remove(oldKey)
-          let result = await drafts.save(savedDraft, newKey)
-          await send(.saveFinished(generation: generation, key: newKey, result: result))
+        return migrateToCreatedSession(sessionID, state: &state)
+
+      case .migrationFinished(let result, _, let oldKey, let newKey):
+        guard state.target.scope == newKey.scope else { return .none }
+        switch result {
+        case .migrated:
+          break
+        case .destinationFailed:
+          state.problem = .couldNotSave
+        case .sourceRetained:
+          state.problem = .couldNotCleanUpDraft
         }
+        _ = oldKey
+        return .none
+
+      case .resolveOutbound(let target, let messageID, let resolution):
+        return resolveOutbound(
+          serverID: state.serverID,
+          target: target,
+          messageID: messageID,
+          resolution: resolution
+        )
+
+      case .switchTarget(let target):
+        return switchTarget(target, state: &state)
+
+      case .targetSwitchFinished(let token, _, _, _, let result):
+        guard token == state.switchToken else { return .none }
+        switch result {
+        case .saved:
+          break
+        case .tooLarge:
+          state.problem = .draftTooLarge
+        case .failure:
+          state.problem = .couldNotSave
+        }
+        return .none
 
       case .flush:
         return persistNow(state: &state)
 
+      case .flushForDismiss(let requestID):
+        return flushForDismiss(requestID: requestID, state: state)
+
       case .draftLoaded(let token, let key, let outcome):
-        guard token == state.restoreToken else { return .none }
-        guard key == state.draftKey else {
-          state.isRestoring = false
-          return .none
-        }
-        state.isRestoring = false
-        guard state.revision == 0 else { return .none }
-        switch outcome {
-        case .missing:
-          return .none
-        case .failure:
-          state.problem = .couldNotRestore
-          return .none
-        case .found(let draft):
-          state.draft = draft.text
-          state.quotes = draft.quotes
-          if let created = draft.createdSessionID, state.target.isNewSession {
-            state.target = .session(id: created)
-            return .send(.delegate(.restoredCreatedSession(created)))
-          }
-          return .none
-        }
+        return draftLoaded(token: token, key: key, outcome: outcome, state: &state)
 
       case .saveDue(let generation, let key, let draft, let remove):
         guard generation == state.saveGeneration, key == state.draftKey else { return .none }
@@ -307,38 +384,12 @@ public struct ComposerFeature: Sendable {
         }
 
       case .saveFinished(let generation, let key, let result):
-        guard generation == state.saveGeneration, key == state.draftKey else { return .none }
-        switch result {
-        case .saved:
-          if state.problem == .couldNotSave || state.problem == .couldNotRestore
-            || state.problem == .draftTooLarge
-          {
-            state.problem = nil
-          }
-        case .tooLarge:
-          state.problem = .draftTooLarge
-        case .failure:
-          state.problem = .couldNotSave
-        }
-        return .none
+        return saveFinished(generation: generation, key: key, result: result, state: &state)
 
       case .delegate:
         return .none
       }
     }
-  }
-
-  private func send(delivery: Delivery, state: inout State) -> Effect<Action> {
-    guard state.canSend, let send = makeSend(delivery: delivery, state: state) else { return .none }
-    state.isSending = true
-    state.pendingSend = send
-    state.problem = nil
-    state.draft = ""
-    state.quotes = []
-    state.revision += 1
-    haptics.play(.tap)
-    let save = persistNow(state: &state)
-    return .merge(.send(.delegate(.send(send))), save)
   }
 
   private func makeSend(delivery: Delivery, state: State) -> ComposerSend? {
@@ -354,17 +405,246 @@ public struct ComposerFeature: Sendable {
     )
   }
 
+  private func begin(
+    _ send: ComposerSend,
+    retryFailure: ComposerSendFailure?,
+    state: inout State
+  ) -> Effect<Action> {
+    guard !state.isSending, state.outbound.isEmpty else { return .none }
+    state.isSending = true
+    state.problem = nil
+    state.pendingDispatch = State.PendingDispatch(send: send, retryFailure: retryFailure)
+    state.outbound = [
+      ComposerOutbound(
+        target: send.target,
+        messageID: send.messageID,
+        text: send.text,
+        quotes: send.quotes,
+        delivery: send.delivery,
+        revision: send.revision,
+        createdAt: date.now()
+      )
+    ]
+    return persistNow(state: &state)
+  }
+
+  private func dispatchPersisted(messageID: String, state: inout State) -> Effect<Action> {
+    guard let pending = state.pendingDispatch, pending.send.messageID == messageID else {
+      return .none
+    }
+    state.pendingDispatch = nil
+    state.dispatchGeneration = nil
+    state.isSending = true
+    if state.revision == pending.send.revision {
+      state.draft = ""
+      state.quotes = []
+      state.revision += 1
+    }
+    let save = scheduleSave(state: &state)
+    if let failure = pending.retryFailure {
+      let failed = FailedComposerSend(
+        messageID: pending.send.messageID,
+        text: pending.send.text,
+        quotes: pending.send.quotes,
+        delivery: pending.send.delivery,
+        target: pending.send.target,
+        reason: failure == .ambiguous ? .couldNotVerifySend : .couldNotSend,
+        failure: failure
+      )
+      return .merge(.send(.delegate(.retry(failed))), save)
+    }
+    return .merge(.send(.delegate(.send(pending.send))), save)
+  }
+
+  private func settleBlocked(_ problem: ComposerProblem, state: inout State) -> Effect<Action> {
+    state.isSending = false
+    state.pendingDispatch = nil
+    state.dispatchGeneration = nil
+    state.problem = problem
+    guard let outbound = state.outbound.first else {
+      return persistNow(state: &state)
+    }
+    state.outbound = []
+    if state.target.scope != outbound.target.scope {
+      return .merge(
+        persistNow(state: &state),
+        .send(
+          .resolveOutbound(
+            target: outbound.target,
+            messageID: outbound.messageID,
+            resolution: .failed(.definite)
+          )
+        )
+      )
+    }
+    if state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      state.quotes.isEmpty
+    {
+      state.draft = outbound.text
+      state.quotes = outbound.quotes
+      state.revision += 1
+      state.focusRequest += 1
+    } else {
+      state.failedSends.append(
+        FailedComposerSend(
+          messageID: outbound.messageID,
+          text: outbound.text,
+          quotes: outbound.quotes,
+          delivery: outbound.delivery,
+          target: outbound.target,
+          reason: problem,
+          failure: .definite
+        )
+      )
+    }
+    return persistNow(state: &state)
+  }
+
+  private func saveFinished(
+    generation: Int,
+    key: ComposerDraftKey,
+    result: ComposerDraftSave,
+    state: inout State
+  ) -> Effect<Action> {
+    if generation == state.dispatchGeneration, let pending = state.pendingDispatch {
+      state.dispatchGeneration = nil
+      switch result {
+      case .saved:
+        return .send(.outboundPersisted(messageID: pending.send.messageID))
+      case .tooLarge:
+        state.isSending = false
+        state.pendingDispatch = nil
+        state.outbound = []
+        state.problem = .draftTooLarge
+        return .none
+      case .failure:
+        state.isSending = false
+        state.pendingDispatch = nil
+        state.outbound = []
+        state.problem = .couldNotSave
+        return .none
+      }
+    }
+    guard generation == state.saveGeneration, key == state.draftKey else { return .none }
+    switch result {
+    case .saved:
+      if state.problem == .couldNotSave || state.problem == .couldNotRestore
+        || state.problem == .draftTooLarge || state.problem == .couldNotCleanUpDraft
+      {
+        state.problem = nil
+      }
+    case .tooLarge:
+      state.problem = .draftTooLarge
+    case .failure:
+      state.problem = .couldNotSave
+    }
+    return .none
+  }
+
   private func loadDraft(state: inout State) -> Effect<Action> {
     state.restoreToken += 1
     state.isRestoring = true
     let token = state.restoreToken
     let key = state.draftKey
+    let parked = state.parkedDrafts[key]
+    let sessionID = key.scope.sessionID
     let drafts = drafts
     return .run { send in
-      let outcome = await drafts.load(key)
+      var outcome = await drafts.load(key)
+      if case .missing = outcome, let sessionID {
+        outcome = await drafts.recoverCreated(sessionID, key)
+      }
+      if case .missing = outcome, let parked {
+        outcome = .found(parked)
+      }
       await send(.draftLoaded(token: token, key: key, outcome: outcome))
     }
     .cancellable(id: CancelID.restore, cancelInFlight: true)
+  }
+
+  private func draftLoaded(
+    token: Int,
+    key: ComposerDraftKey,
+    outcome: ComposerDraftLoad,
+    state: inout State
+  ) -> Effect<Action> {
+    guard token == state.restoreToken else { return .none }
+    guard key == state.draftKey else {
+      state.isRestoring = false
+      return .none
+    }
+    state.isRestoring = false
+    guard state.revision == 0, state.failedSends.isEmpty, state.outbound.isEmpty else {
+      return .none
+    }
+    state.parkedDrafts[key] = nil
+    switch outcome {
+    case .missing:
+      return .none
+    case .failure:
+      state.problem = .couldNotRestore
+      return .none
+    case .foundFromSource(let draft, .destinationFailed),
+      .foundFromSource(let draft, .sourceRetained):
+      state.problem = outcome.migrationProblem
+      return apply(draft, state: &state)
+    case .foundFromSource(let draft, .migrated):
+      return apply(draft, state: &state)
+    case .found(let draft):
+      return apply(draft, state: &state)
+    }
+  }
+
+  private func apply(_ draft: ComposerDraft, state: inout State) -> Effect<Action> {
+    state.draft = draft.text
+    state.quotes = draft.quotes
+    state.failedSends = draft.failedSends
+    state.outbound = []
+    if let first = draft.outbound.first {
+      state.failedSends.append(
+        FailedComposerSend(
+          messageID: first.messageID,
+          text: first.text,
+          quotes: first.quotes,
+          delivery: first.delivery,
+          target: first.target,
+          reason: .couldNotVerifySend,
+          failure: .ambiguous
+        )
+      )
+      if keyMatches(first.target, key: state.draftKey) {
+        state.target = first.target
+      }
+      for extra in draft.outbound.dropFirst() {
+        state.failedSends.append(
+          FailedComposerSend(
+            messageID: extra.messageID,
+            text: extra.text,
+            quotes: extra.quotes,
+            delivery: extra.delivery,
+            target: extra.target,
+            reason: .couldNotVerifySend,
+            failure: .ambiguous
+          )
+        )
+      }
+    }
+    if let created = draft.createdSessionID, state.target.isNewSession {
+      state.target = .session(id: created)
+      return .merge(
+        .send(.delegate(.restoredCreatedSession(created))),
+        persistNow(state: &state)
+      )
+    }
+    if !draft.outbound.isEmpty {
+      state.problem = .couldNotVerifySend
+      return persistNow(state: &state)
+    }
+    return .none
+  }
+
+  private func keyMatches(_ target: ComposerTarget, key: ComposerDraftKey) -> Bool {
+    target.scope == key.scope
   }
 
   private func scheduleSave(state: inout State) -> Effect<Action> {
@@ -377,7 +657,7 @@ public struct ComposerFeature: Sendable {
       state.problem = .draftTooLarge
       return .none
     }
-    let remove = isEffectivelyEmpty(state)
+    let remove = draft.isEmpty
     let clock = clock
     let drafts = drafts
     return .run { send in
@@ -402,7 +682,8 @@ public struct ComposerFeature: Sendable {
       state.problem = .draftTooLarge
       return .none
     }
-    let remove = isEffectivelyEmpty(state)
+    if state.pendingDispatch != nil { state.dispatchGeneration = generation }
+    let remove = draft.isEmpty
     let drafts = drafts
     return .merge(
       .cancel(id: CancelID.save),
@@ -418,17 +699,161 @@ public struct ComposerFeature: Sendable {
     )
   }
 
+  private func migrateToCreatedSession(_ sessionID: String, state: inout State) -> Effect<Action> {
+    let oldKey = state.draftKey
+    guard oldKey.scope != .session(sessionID) else { return .none }
+    state.target = .session(id: sessionID)
+    state.saveGeneration += 1
+    let newKey = state.draftKey
+    var draft = snapshot(state)
+    draft.createdSessionID = sessionID
+    let savedDraft = draft
+    let drafts = drafts
+    return .run { send in
+      // The old record gains the created-session link before migration, so a failed destination is
+      // still discoverable on relaunch.
+      _ = await drafts.save(savedDraft, oldKey)
+      let result = await drafts.migrate(savedDraft, oldKey, newKey)
+      await send(
+        .migrationFinished(
+          result: result,
+          draft: savedDraft,
+          oldKey: oldKey,
+          newKey: newKey
+        )
+      )
+    }
+  }
+
+  private func switchTarget(_ target: ComposerTarget, state: inout State) -> Effect<Action> {
+    guard target != state.target else { return .none }
+    state.switchToken += 1
+    let token = state.switchToken
+    let oldKey = state.draftKey
+    let oldDraft = snapshot(state)
+    state.parkedDrafts[oldKey] = oldDraft
+    state.target = target
+    state.draft = ""
+    state.quotes = []
+    state.failedSends = []
+    state.outbound = []
+    state.revision = 0
+    state.isSending = false
+    state.pendingDispatch = nil
+    state.dispatchGeneration = nil
+    state.problem = nil
+    let drafts = drafts
+    let saveOld = Effect<Action>.run { send in
+      let result: ComposerDraftSave
+      if oldDraft.isEmpty {
+        result = await drafts.remove(oldKey)
+      } else {
+        result = await drafts.save(oldDraft, oldKey)
+      }
+      await send(
+        .targetSwitchFinished(
+          token: token,
+          target: target,
+          oldKey: oldKey,
+          oldDraft: oldDraft,
+          result: result
+        )
+      )
+    }
+    return .merge(saveOld, loadDraft(state: &state))
+  }
+
+  private func resolveOutbound(
+    serverID: String,
+    target: ComposerTarget,
+    messageID: String,
+    resolution: ComposerOutboundResolution
+  ) -> Effect<Action> {
+    let key = ComposerDraftKey(serverID: serverID, scope: target.scope)
+    let drafts = drafts
+    return .run { _ in
+      var outcome = await drafts.load(key)
+      if case .missing = outcome, let sessionID = key.scope.sessionID {
+        outcome = await drafts.recoverCreated(sessionID, key)
+      }
+      let loaded: ComposerDraft?
+      switch outcome {
+      case .found(let draft), .foundFromSource(let draft, _): loaded = draft
+      default: loaded = nil
+      }
+      guard var draft = loaded else { return }
+      guard let outbound = draft.outbound.first(where: { $0.messageID == messageID }) else {
+        return
+      }
+      draft.outbound.removeAll { $0.messageID == messageID }
+      switch resolution {
+      case .accepted:
+        break
+      case .failed(let failure), .unverified(let failure):
+        draft.failedSends.append(
+          FailedComposerSend(
+            messageID: outbound.messageID,
+            text: outbound.text,
+            quotes: outbound.quotes,
+            delivery: outbound.delivery,
+            target: outbound.target,
+            reason: failure == .ambiguous ? .couldNotVerifySend : .couldNotSend,
+            failure: failure
+          )
+        )
+      }
+      _ = await drafts.save(draft, key)
+    }
+  }
+
+  private func flushForDismiss(requestID: UUID, state: State) -> Effect<Action> {
+    let key = state.draftKey
+    let draft = snapshot(state)
+    let drafts = drafts
+    return .run { send in
+      let result: ComposerDraftSave
+      if draft.isEmpty {
+        result = await drafts.remove(key)
+      } else {
+        result = await drafts.save(draft, key)
+      }
+      await send(.delegate(.flushForDismissFinished(requestID: requestID, result: result)))
+    }
+  }
+
   private func snapshot(_ state: State) -> ComposerDraft {
     ComposerDraft(
       text: state.draft,
       quotes: state.quotes,
       projectDirectory: state.target.directory,
       createdSessionID: state.target.isNewSession ? nil : state.target.sessionID,
+      failedSends: state.failedSends,
+      outbound: state.outbound,
       updatedAt: date.now()
     )
   }
+}
 
-  private func isEffectivelyEmpty(_ state: State) -> Bool {
-    state.draft.isEmpty && state.quotes.isEmpty
+public enum ComposerOutboundResolution: Equatable, Sendable {
+  case accepted
+  case failed(ComposerSendFailure)
+  case unverified(ComposerSendFailure)
+}
+
+extension ComposerDraftLoad {
+  var migrationProblem: ComposerProblem? {
+    guard case .foundFromSource(_, let migration) = self else { return nil }
+    switch migration {
+    case .migrated: return nil
+    case .destinationFailed: return .couldNotSave
+    case .sourceRetained: return .couldNotCleanUpDraft
+    }
+  }
+}
+
+extension ComposerScope {
+  public var sessionID: String? {
+    if case .session(let id) = self { return id }
+    return nil
   }
 }

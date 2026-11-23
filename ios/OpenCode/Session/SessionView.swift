@@ -41,7 +41,6 @@ struct SessionView: View {
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
           Button(AppCopy.text("common.done")) {
-            store.send(.composer(.flush))
             store.send(.delegate(.dismiss))
           }
           .accessibilityIdentifier("session-done")

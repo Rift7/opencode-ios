@@ -30,7 +30,8 @@ struct ComposerSessionTests {
     newSession: Bool = false,
     draft: String = "",
     requests: SessionRequests = SessionRequests(),
-    pendingInputs: [PendingInput] = []
+    pendingInputs: [PendingInput] = [],
+    familySessions: [OpenCodeSession] = []
   ) -> SessionFeature.State {
     let selection: SessionSelection
     if newSession {
@@ -54,6 +55,12 @@ struct ComposerSessionTests {
     )
     state.requests = requests
     state.pendingInputs = pendingInputs
+    if !familySessions.isEmpty {
+      state.family = SessionFamily(
+        root: familySessions[0],
+        sessions: familySessions
+      )
+    }
     state.composer.draft = draft
     state.composer.revision = draft.isEmpty ? 0 : 1
     return state
@@ -120,7 +127,8 @@ struct ComposerSessionTests {
   private func makeStore(
     _ state: SessionFeature.State,
     client: OpenCodeClient,
-    uuid: UuidClient
+    uuid: UuidClient,
+    draftClient: ComposerDraftClient = ComposerDraftClient()
   ) -> TestStoreOf<SessionFeature> {
     let store = TestStore(initialState: state) {
       SessionFeature()
@@ -134,7 +142,7 @@ struct ComposerSessionTests {
       )
       $0.haptics = .testValue
       $0.uuidClient = uuid
-      $0.composerDrafts = ComposerDraftClient()
+      $0.composerDrafts = draftClient
     }
     store.exhaustivity = .off
     return store
@@ -143,6 +151,9 @@ struct ComposerSessionTests {
   private func client(
     calls: Calls = Calls(),
     getSession: @escaping @Sendable (OpenCodeServer, String) async throws -> OpenCodeSession,
+    family: @escaping @Sendable (OpenCodeServer, OpenCodeSession) async throws -> SessionFamily = {
+      _, root in SessionFamily(root: root, sessions: [root])
+    },
     create: @escaping @Sendable (OpenCodeServer, String, String) async throws -> OpenCodeSession = {
       _, _, id in
       OpenCodeSession(
@@ -183,7 +194,7 @@ struct ComposerSessionTests {
       activeSessionIDs: { _ in [] },
       interruptSession: { _, _ in true },
       sessionIsActive: { _, _ in false },
-      sessionFamily: { _, root in SessionFamily(root: root, sessions: [root]) },
+      sessionFamily: family,
       pendingRequests: { _, _, _ in PendingRequests() },
       replyPermission: { server, sessionID, id, decision, message in
         calls.replies.append(id, decision, message)
@@ -370,7 +381,10 @@ struct ComposerSessionTests {
     #expect(!store.state.composer.isSending)
     #expect(store.state.composer.problem == .couldNotVerifySend)
     #expect(store.state.composer.draft.isEmpty)
-    #expect(store.state.composer.failedSends.isEmpty)
+    #expect(store.state.composer.failedSends.count == 1)
+    #expect(store.state.composer.failedSends.first?.failure == .ambiguous)
+    #expect(store.state.composer.failedSends.first?.messageID == fixedID)
+    #expect(store.state.composer.failedSends.first?.text == "Maybe")
   }
 
   @Test("a retry after a confirmed absence mints a new message id")
@@ -390,6 +404,7 @@ struct ComposerSessionTests {
         text: "Retry me",
         quotes: [],
         delivery: .steer,
+        target: .session(id: "root"),
         reason: .couldNotSend,
         failure: .definite
       )
@@ -589,6 +604,218 @@ struct ComposerSessionTests {
     #expect(answers.all.first == ["mode": .string("b")])
     #expect(answers.all.first?["detail"] == nil)
   }
+
+
+  @Test("subagent pages own distinct drafts and quotes, and sending targets the child")
+  func subagentDraftOwnership() async {
+    let root = makeRoot()
+    let child1 = OpenCodeSession(
+      id: "child-1", serverTitle: "Child 1", projectID: "p1",
+      directory: "/work/opencode", updatedAt: Date(timeIntervalSince1970: 1_700_000_100),
+      parentID: "root"
+    )
+    let child2 = OpenCodeSession(
+      id: "child-2", serverTitle: "Child 2", projectID: "p1",
+      directory: "/work/opencode", updatedAt: Date(timeIntervalSince1970: 1_700_000_200),
+      parentID: "root"
+    )
+    let family = [root, child1, child2]
+    let calls = Calls()
+    let client = client(
+      calls: calls,
+      getSession: { _, id in family.first { $0.id == id } ?? root },
+      family: { _, _ in SessionFamily(root: root, sessions: family) }
+    )
+    let draftStore = ComposerDraftStore(
+      storage: OpenCodeCore.InMemoryStorage(),
+      storageKey: "drafts"
+    )
+    var initial = state(draft: "Root draft", familySessions: family)
+    initial.composer.quotes = [ComposerQuote(id: "root-q", text: "root quote")]
+    let store = makeStore(
+      initial,
+      client: client,
+      uuid: .incrementing(),
+      draftClient: .live(store: draftStore)
+    )
+
+    await store.send(.openSubagent("child-1"))
+    await settle(store)
+    #expect(store.state.composer.target == .session(id: "child-1"))
+    #expect(store.state.composer.draft.isEmpty)
+    await store.send(.composer(.textChanged("Child one draft")))
+    await store.send(.composer(.quoteInserted(text: "child one quote")))
+    await store.send(.composer(.flush))
+    await settle(store)
+
+    await store.send(.openSubagent("child-2"))
+    await settle(store)
+    #expect(store.state.composer.target == .session(id: "child-2"))
+    #expect(store.state.composer.draft.isEmpty)
+    await store.send(.composer(.textChanged("Child two draft")))
+    await store.send(.composer(.flush))
+    await settle(store)
+
+    await store.send(.popPage)
+    await settle(store)
+    #expect(store.state.composer.target == .session(id: "child-1"))
+    #expect(store.state.composer.draft == "Child one draft")
+    #expect(store.state.composer.quotes.first?.text == "child one quote")
+
+    await store.send(.composer(.sendTapped))
+    await settle(store)
+    #expect(calls.prompts.all.first?.0 == "child-1")
+    #expect(calls.prompts.all.first?.1.text.contains("Child one draft") == true)
+
+    await store.send(.popPage)
+    await settle(store)
+    #expect(store.state.composer.target == .session(id: "root"))
+    #expect(store.state.composer.draft == "Root draft")
+    #expect(store.state.composer.quotes.first?.text == "root quote")
+  }
+
+
+  @Test("a stored outbound found after reopening settles as accepted without a second prompt")
+  func restartConfirmedAcceptance() async {
+    let storage = OpenCodeCore.InMemoryStorage()
+    let draftStore = ComposerDraftStore(storage: storage, storageKey: "drafts")
+    let key = ComposerDraftKey(serverID: server.persistenceID, scope: .session("root"))
+    _ = await draftStore.save(
+      ComposerDraft(
+        outbound: [
+          ComposerOutbound(
+            target: .session(id: "root"),
+            messageID: "old-id",
+            text: "Recovered",
+            quotes: [],
+            delivery: .steer,
+            revision: 1
+          )
+        ],
+        updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+      ),
+      for: key
+    )
+    let calls = Calls()
+    let client = client(
+      calls: calls,
+      getSession: { _, _ in makeRoot() },
+      message: { _, _, id in [.userText(id: id, text: "Recovered", source: nil, quotes: [])] },
+      inputs: { _, _ in [] }
+    )
+    let store = makeStore(
+      state(),
+      client: client,
+      uuid: .incrementing(),
+      draftClient: .live(store: draftStore)
+    )
+    await store.send(.composer(.task))
+    await settle(store)
+    #expect(store.state.composer.failedSends.count == 1)
+    #expect(store.state.composer.failedSends.first?.failure == .ambiguous)
+
+    await store.send(.composer(.retryFailed(messageID: "old-id")))
+    await settle(store)
+    #expect(calls.prompts.all.isEmpty)
+    #expect(store.state.composer.failedSends.isEmpty)
+  }
+
+  @Test("a stored outbound confirmed absent after reopening retries with a new id")
+  func restartConfirmedAbsence() async {
+    let storage = OpenCodeCore.InMemoryStorage()
+    let draftStore = ComposerDraftStore(storage: storage, storageKey: "drafts")
+    let key = ComposerDraftKey(serverID: server.persistenceID, scope: .session("root"))
+    _ = await draftStore.save(
+      ComposerDraft(
+        outbound: [
+          ComposerOutbound(
+            target: .session(id: "root"),
+            messageID: "old-id",
+            text: "Recovered",
+            quotes: [],
+            delivery: .steer,
+            revision: 1
+          )
+        ],
+        updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+      ),
+      for: key
+    )
+    let calls = Calls()
+    let newID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    let client = client(
+      calls: calls,
+      getSession: { _, _ in makeRoot() },
+      message: { _, _, _ in [] },
+      inputs: { _, _ in [] }
+    )
+    let store = makeStore(
+      state(),
+      client: client,
+      uuid: UuidClient { UUID(uuidString: newID)! },
+      draftClient: .live(store: draftStore)
+    )
+    await store.send(.composer(.task))
+    await settle(store)
+    await store.send(.composer(.retryFailed(messageID: "old-id")))
+    await settle(store)
+    #expect(calls.prompts.all.map(\.1.id) == [newID])
+    #expect(store.state.composer.failedSends.isEmpty)
+  }
+
+
+  @Test("a send completing after navigating away cannot alter the visible page draft")
+  func sendCompletesOnAnotherPage() async {
+    let root = makeRoot()
+    let child = OpenCodeSession(
+      id: "child-1", serverTitle: "Child 1", projectID: "p1",
+      directory: "/work/opencode", updatedAt: Date(timeIntervalSince1970: 1_700_000_100),
+      parentID: "root"
+    )
+    let family = [root, child]
+    let gate = Gate()
+    let calls = Calls()
+    let client = client(
+      calls: calls,
+      getSession: { _, id in family.first { $0.id == id } ?? root },
+      family: { _, _ in SessionFamily(root: root, sessions: family) },
+      send: { _, _, _ in await gate.wait() }
+    )
+    let draftStore = ComposerDraftStore(
+      storage: OpenCodeCore.InMemoryStorage(),
+      storageKey: "drafts"
+    )
+    let store = makeStore(
+      state(draft: "Root draft", familySessions: family),
+      client: client,
+      uuid: .incrementing(),
+      draftClient: .live(store: draftStore)
+    )
+
+    await store.send(.openSubagent("child-1"))
+    await settle(store)
+    await store.send(.composer(.textChanged("Child send")))
+    await store.send(.composer(.sendTapped))
+    #expect(await waitUntilPumping(store) { calls.prompts.all.count == 1 })
+
+    await store.send(.popPage)
+    #expect(await waitUntilPumping(store) { store.state.composer.target == .session(id: "root") })
+    #expect(store.state.composer.draft == "Root draft")
+
+    await gate.release()
+    await settle(store)
+    #expect(store.state.composer.draft == "Root draft")
+    #expect(store.state.composer.failedSends.isEmpty)
+    let childKey = ComposerDraftKey(serverID: server.persistenceID, scope: .session("child-1"))
+    let persisted = await draftStore.load(childKey)
+    guard case .found(let record) = persisted else {
+      Issue.record("expected the child draft record")
+      return
+    }
+    #expect(record.outbound.isEmpty)
+    #expect(record.text.isEmpty)
+  }
+
 
   @Test("a transcript quote enters the composer without replacing its draft")
   func quoteHandoff() async {
