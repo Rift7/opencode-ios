@@ -16,6 +16,7 @@
 | P8 merged head | `2823c06e` (PR #7 squash merge); tree `1147dca8` equals `5ea6ea65` |
 | P9 base | `2823c06e` (`origin/ios`, PR #7 merged) |
 | P9 branch | `ios-composer`, created from `origin/ios` |
+| P9 head | `f694adaa` (implementation and evidence commit) |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
 `git fetch origin` moved `origin/ios` from `3b34932c` to `7966dcfe`. PR #5 (`ios: add the native Home,
