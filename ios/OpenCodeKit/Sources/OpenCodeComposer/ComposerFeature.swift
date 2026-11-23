@@ -27,16 +27,28 @@ public struct ComposerFeature: Sendable {
 
     /// Typing and quote edits bump this, so a send that started earlier cannot clear newer text.
     public var revision: Int
+    /// Every durable-content change bumps this; a late transfer may not replace a newer record.
+    public var contentRevision: Int
+    /// Wall-clock content time, used across sessions whose revisions restarted.
+    public var contentUpdatedAt: Date
     var restoreToken: Int
     var saveGeneration: Int
     var pendingDispatch: PendingDispatch?
+    /// An ambiguous retry whose prompt was dispatched under a recorded ID and is waiting for
+    /// reconciliation. It owns the payload until the ID is confirmed present or absent.
+    var retryDispatch: PendingDispatch?
     var dispatchGeneration: Int?
     var switchToken: Int
+    var flushToken: Int
+    var flushRequestID: UUID?
     var parkedDrafts: [ComposerDraftKey: ComposerDraft]
 
     struct PendingDispatch: Equatable, Sendable {
       var send: ComposerSend
       var retryFailure: ComposerSendFailure?
+      /// The identity the last durable record used when this dispatch replaced it.
+      var restoreMessageID: String?
+      var restoreFailure: ComposerSendFailure?
     }
 
     public init(
@@ -58,16 +70,28 @@ public struct ComposerFeature: Sendable {
       self.failedSends = []
       self.outbound = []
       self.revision = 0
+      self.contentRevision = 0
+      self.contentUpdatedAt = Date(timeIntervalSince1970: 0)
       self.restoreToken = 0
       self.saveGeneration = 0
       self.pendingDispatch = nil
+      self.retryDispatch = nil
       self.dispatchGeneration = nil
       self.switchToken = 0
+      self.flushToken = 0
+      self.flushRequestID = nil
       self.parkedDrafts = [:]
     }
 
     public var draftKey: ComposerDraftKey {
       ComposerDraftKey(serverID: serverID, scope: target.scope)
+    }
+
+    /// Starts a new composer above a departing draft's revision/time so later typing in the same
+    /// key always supersedes a transfer that is still in flight.
+    public mutating func raiseContentWatermark(revision: Int, updatedAt: Date) {
+      contentRevision = max(contentRevision, revision)
+      contentUpdatedAt = max(contentUpdatedAt, updatedAt)
     }
 
     public var canSend: Bool {
@@ -88,7 +112,8 @@ public struct ComposerFeature: Sendable {
         createdSessionID: target.isNewSession ? nil : target.sessionID,
         failedSends: failedSends,
         outbound: outbound,
-        updatedAt: Date(timeIntervalSince1970: 0)
+        revision: contentRevision,
+        updatedAt: contentUpdatedAt
       )
     }
   }
@@ -112,6 +137,9 @@ public struct ComposerFeature: Sendable {
     /// the outbound record; a later Retry or authoritative read reconciles it.
     case sendUnverified(messageID: String)
     case retryFailed(messageID: String)
+    /// Reconciliation confirmed the ambiguous retry never landed. Replace the recorded identity
+    /// durably before the prompt is issued again.
+    case retryMessageIDConfirmedAbsent(messageID: String, createdSessionID: String?)
     case editFailed(messageID: String)
     case deleteFailed(messageID: String)
     case sessionCreated(String)
@@ -119,6 +147,11 @@ public struct ComposerFeature: Sendable {
       result: ComposerDraftMigration,
       draft: ComposerDraft,
       oldKey: ComposerDraftKey,
+      newKey: ComposerDraftKey
+    )
+    case retryMigrationFinished(
+      result: ComposerDraftMigration,
+      send: ComposerSend,
       newKey: ComposerDraftKey
     )
     case resolveOutbound(
@@ -136,6 +169,12 @@ public struct ComposerFeature: Sendable {
     )
     case flush
     case flushForDismiss(UUID)
+    case flushSaved(
+      requestID: UUID,
+      token: Int,
+      draft: ComposerDraft,
+      result: ComposerDraftSave
+    )
     case draftLoaded(token: Int, key: ComposerDraftKey, outcome: ComposerDraftLoad)
     case saveDue(generation: Int, key: ComposerDraftKey, draft: ComposerDraft, remove: Bool)
     case saveFinished(generation: Int, key: ComposerDraftKey, result: ComposerDraftSave)
@@ -176,6 +215,8 @@ public struct ComposerFeature: Sendable {
         guard text != state.draft else { return .none }
         state.draft = text
         state.revision += 1
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         state.isRestoring = false
         state.problem = nil
         return scheduleSave(state: &state)
@@ -192,6 +233,8 @@ public struct ComposerFeature: Sendable {
         guard let cleaned = ComposerQuote.cleaned(text) else { return .none }
         state.quotes.append(ComposerQuote(text: cleaned))
         state.revision += 1
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         state.isRestoring = false
         state.problem = nil
         state.focusRequest += 1
@@ -203,12 +246,16 @@ public struct ComposerFeature: Sendable {
         let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         state.quotes[index].comment = trimmed.isEmpty ? nil : trimmed
         state.revision += 1
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         return scheduleSave(state: &state)
 
       case .quoteRemoved(let id):
         guard state.quotes.contains(where: { $0.id == id }) else { return .none }
         state.quotes.removeAll { $0.id == id }
         state.revision += 1
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         return scheduleSave(state: &state)
 
       case .sendTapped:
@@ -228,35 +275,45 @@ public struct ComposerFeature: Sendable {
       case .outboundPersisted(let messageID):
         return dispatchPersisted(messageID: messageID, state: &state)
 
-      case .sendAccepted:
+      case .sendAccepted(let messageID):
+        guard state.outbound.contains(where: { $0.messageID == messageID }) else { return .none }
         state.isSending = false
-        state.pendingDispatch = nil
-        state.dispatchGeneration = nil
-        state.outbound = []
+        if state.pendingDispatch?.send.messageID == messageID {
+          state.pendingDispatch = nil
+          state.dispatchGeneration = nil
+        }
+        if state.retryDispatch?.send.messageID == messageID { state.retryDispatch = nil }
+        state.outbound.removeAll { $0.messageID == messageID }
         state.problem = nil
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         return scheduleSave(state: &state)
 
       case .sendUnverified(let messageID):
-        state.isSending = false
-        state.pendingDispatch = nil
-        state.dispatchGeneration = nil
-        state.problem = .couldNotVerifySend
-        if let outbound = state.outbound.first(where: { $0.messageID == messageID })
-          ?? state.outbound.first
-        {
-          state.failedSends.append(
-            FailedComposerSend(
-              messageID: outbound.messageID,
-              text: outbound.text,
-              quotes: outbound.quotes,
-              delivery: outbound.delivery,
-              target: outbound.target,
-              reason: .couldNotVerifySend,
-              failure: .ambiguous
-            )
-          )
-          state.outbound.removeAll { $0.messageID == outbound.messageID }
+        guard let outbound = state.outbound.first(where: { $0.messageID == messageID }) else {
+          return .none
         }
+        state.isSending = false
+        if state.pendingDispatch?.send.messageID == messageID {
+          state.pendingDispatch = nil
+          state.dispatchGeneration = nil
+        }
+        if state.retryDispatch?.send.messageID == messageID { state.retryDispatch = nil }
+        state.problem = .couldNotVerifySend
+        state.failedSends.append(
+          FailedComposerSend(
+            messageID: outbound.messageID,
+            text: outbound.text,
+            quotes: outbound.quotes,
+            delivery: outbound.delivery,
+            target: outbound.target,
+            reason: .couldNotVerifySend,
+            failure: .ambiguous
+          )
+        )
+        state.outbound.removeAll { $0.messageID == outbound.messageID }
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         haptics.play(.warning)
         return persistNow(state: &state)
 
@@ -264,16 +321,17 @@ public struct ComposerFeature: Sendable {
         return settleBlocked(problem, state: &state)
 
       case .sendFailed(let messageID, let failure):
+        guard let outbound = state.outbound.first(where: { $0.messageID == messageID }) else {
+          return .none
+        }
         state.isSending = false
-        state.pendingDispatch = nil
-        state.dispatchGeneration = nil
+        if state.pendingDispatch?.send.messageID == messageID {
+          state.pendingDispatch = nil
+          state.dispatchGeneration = nil
+        }
+        if state.retryDispatch?.send.messageID == messageID { state.retryDispatch = nil }
         state.problem = failure == .ambiguous ? .couldNotVerifySend : .couldNotSend
         haptics.play(.error)
-        guard let outbound = state.outbound.first(where: { $0.messageID == messageID })
-          ?? state.outbound.first
-        else {
-          return persistNow(state: &state)
-        }
         state.outbound.removeAll { $0.messageID == outbound.messageID }
         if state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, state.quotes.isEmpty {
           state.draft = outbound.text
@@ -293,6 +351,8 @@ public struct ComposerFeature: Sendable {
             )
           )
         }
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         return persistNow(state: &state)
 
       case .retryFailed(let messageID):
@@ -300,8 +360,36 @@ public struct ComposerFeature: Sendable {
           let failed = state.failedSends.first(where: { $0.messageID == messageID })
         else { return .none }
         state.failedSends.removeAll { $0.messageID == messageID }
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         haptics.play(.tap)
-        return begin(failed.send, retryFailure: failed.failure, state: &state)
+        let retryID = failed.failure == .definite
+          ? uuid.uuid().uuidString.lowercased()
+          : failed.messageID
+        let target = failed.target.isNewSession && !state.target.isNewSession
+          ? state.target
+          : failed.target
+        let send = ComposerSend(
+          target: target,
+          messageID: retryID,
+          text: failed.text,
+          quotes: failed.quotes,
+          delivery: failed.delivery,
+          revision: state.revision
+        )
+        return begin(
+          send,
+          retryFailure: failed.failure == .definite ? nil : failed.failure,
+          restoreMessageID: failed.messageID,
+          state: &state
+        )
+
+      case .retryMessageIDConfirmedAbsent(let messageID, let createdSessionID):
+        return reidentifyAndDispatch(
+          messageID: messageID,
+          createdSessionID: createdSessionID,
+          state: &state
+        )
 
       case .editFailed(let messageID):
         guard let failed = state.failedSends.first(where: { $0.messageID == messageID }),
@@ -314,12 +402,19 @@ public struct ComposerFeature: Sendable {
         state.draft = text
         state.quotes = failed.quotes + state.quotes
         state.revision += 1
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         state.problem = nil
         state.focusRequest += 1
         return persistNow(state: &state)
 
       case .deleteFailed(let messageID):
+        guard state.failedSends.contains(where: { $0.messageID == messageID }) else {
+          return .none
+        }
         state.failedSends.removeAll { $0.messageID == messageID }
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         if state.failedSends.isEmpty { state.problem = nil }
         return persistNow(state: &state)
 
@@ -338,6 +433,21 @@ public struct ComposerFeature: Sendable {
         }
         _ = oldKey
         return .none
+
+      case .retryMigrationFinished(let result, let send, let newKey):
+        guard state.target.scope == newKey.scope,
+          state.pendingDispatch?.send.messageID == send.messageID
+        else { return .none }
+        switch result {
+        case .migrated:
+          return .send(.outboundPersisted(messageID: send.messageID))
+        case .sourceRetained:
+          state.problem = .couldNotCleanUpDraft
+          return .send(.outboundPersisted(messageID: send.messageID))
+        case .destinationFailed:
+          restoreDispatchFailure(.couldNotSave, state: &state)
+          return .none
+        }
 
       case .resolveOutbound(let target, let messageID, let resolution):
         return resolveOutbound(
@@ -366,7 +476,16 @@ public struct ComposerFeature: Sendable {
         return persistNow(state: &state)
 
       case .flushForDismiss(let requestID):
-        return flushForDismiss(requestID: requestID, state: state)
+        return beginFlushForDismiss(requestID: requestID, state: &state)
+
+      case .flushSaved(let requestID, let token, let draft, let result):
+        return flushSaved(
+          requestID: requestID,
+          token: token,
+          draft: draft,
+          result: result,
+          state: &state
+        )
 
       case .draftLoaded(let token, let key, let outcome):
         return draftLoaded(token: token, key: key, outcome: outcome, state: &state)
@@ -408,12 +527,19 @@ public struct ComposerFeature: Sendable {
   private func begin(
     _ send: ComposerSend,
     retryFailure: ComposerSendFailure?,
+    restoreMessageID: String? = nil,
     state: inout State
   ) -> Effect<Action> {
     guard !state.isSending, state.outbound.isEmpty else { return .none }
     state.isSending = true
     state.problem = nil
-    state.pendingDispatch = State.PendingDispatch(send: send, retryFailure: retryFailure)
+    state.retryDispatch = nil
+    state.pendingDispatch = State.PendingDispatch(
+      send: send,
+      retryFailure: retryFailure,
+      restoreMessageID: restoreMessageID,
+      restoreFailure: retryFailure
+    )
     state.outbound = [
       ComposerOutbound(
         target: send.target,
@@ -425,6 +551,8 @@ public struct ComposerFeature: Sendable {
         createdAt: date.now()
       )
     ]
+    state.contentRevision += 1
+    state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
     return persistNow(state: &state)
   }
 
@@ -434,13 +562,16 @@ public struct ComposerFeature: Sendable {
     }
     state.pendingDispatch = nil
     state.dispatchGeneration = nil
+    state.retryDispatch = pending.retryFailure == nil ? nil : pending
     state.isSending = true
     if state.revision == pending.send.revision {
       state.draft = ""
       state.quotes = []
       state.revision += 1
+      state.contentRevision += 1
+      state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
     }
-    let save = scheduleSave(state: &state)
+    let save = pending.retryFailure == nil ? scheduleSave(state: &state) : .none
     if let failure = pending.retryFailure {
       let failed = FailedComposerSend(
         messageID: pending.send.messageID,
@@ -457,14 +588,18 @@ public struct ComposerFeature: Sendable {
   }
 
   private func settleBlocked(_ problem: ComposerProblem, state: inout State) -> Effect<Action> {
+    let pending = state.pendingDispatch
     state.isSending = false
     state.pendingDispatch = nil
+    state.retryDispatch = nil
     state.dispatchGeneration = nil
     state.problem = problem
     guard let outbound = state.outbound.first else {
       return persistNow(state: &state)
     }
-    state.outbound = []
+    state.outbound.removeAll { $0.messageID == outbound.messageID }
+    state.contentRevision += 1
+    state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
     if state.target.scope != outbound.target.scope {
       return .merge(
         persistNow(state: &state),
@@ -472,12 +607,14 @@ public struct ComposerFeature: Sendable {
           .resolveOutbound(
             target: outbound.target,
             messageID: outbound.messageID,
-            resolution: .failed(.definite)
+            resolution: .failed(pending?.restoreFailure ?? .definite)
           )
         )
       )
     }
-    if state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+    let failure = pending?.restoreFailure ?? .definite
+    if failure != .ambiguous,
+      state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       state.quotes.isEmpty
     {
       state.draft = outbound.text
@@ -487,17 +624,135 @@ public struct ComposerFeature: Sendable {
     } else {
       state.failedSends.append(
         FailedComposerSend(
-          messageID: outbound.messageID,
+          messageID: pending?.restoreMessageID ?? outbound.messageID,
           text: outbound.text,
           quotes: outbound.quotes,
           delivery: outbound.delivery,
           target: outbound.target,
           reason: problem,
-          failure: .definite
+          failure: failure
         )
       )
     }
     return persistNow(state: &state)
+  }
+
+  private func reidentifyAndDispatch(
+    messageID: String,
+    createdSessionID: String?,
+    state: inout State
+  ) -> Effect<Action> {
+    guard let retry = state.retryDispatch, retry.send.messageID == messageID,
+      state.outbound.contains(where: { $0.messageID == messageID })
+    else { return .none }
+    state.retryDispatch = nil
+    var reidentified = retry.send
+    reidentified.messageID = uuid.uuid().uuidString.lowercased()
+
+    if let created = createdSessionID, state.target.isNewSession {
+      let oldKey = state.draftKey
+      var sourceDraft = snapshot(state)
+      sourceDraft.createdSessionID = created
+      let savedSource = sourceDraft
+      state.target = .session(id: created)
+      reidentified.target = .session(id: created)
+      state.contentRevision += 1
+      state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+      state.outbound = [outbound(for: reidentified)]
+      state.pendingDispatch = State.PendingDispatch(
+        send: reidentified,
+        retryFailure: nil,
+        restoreMessageID: messageID,
+        restoreFailure: .ambiguous
+      )
+      state.contentRevision += 1
+      state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+      state.isSending = true
+      state.saveGeneration += 1
+      state.dispatchGeneration = state.saveGeneration
+      let newKey = state.draftKey
+      var newDraft = snapshot(state)
+      newDraft.createdSessionID = created
+      let savedDestination = newDraft
+      let finalSend = reidentified
+      let drafts = drafts
+      return .run { send in
+        _ = await drafts.save(savedSource, oldKey)
+        let result = await drafts.migrate(savedDestination, oldKey, newKey)
+        await send(
+          .retryMigrationFinished(
+            result: result,
+            send: finalSend,
+            newKey: newKey
+          )
+        )
+      }
+    }
+
+    state.outbound = [outbound(for: reidentified)]
+    state.pendingDispatch = State.PendingDispatch(
+      send: reidentified,
+      retryFailure: nil,
+      restoreMessageID: messageID,
+      restoreFailure: .ambiguous
+    )
+    state.contentRevision += 1
+    state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+    state.isSending = true
+    return persistNow(state: &state)
+  }
+
+  private func outbound(for send: ComposerSend) -> ComposerOutbound {
+    ComposerOutbound(
+      target: send.target,
+      messageID: send.messageID,
+      text: send.text,
+      quotes: send.quotes,
+      delivery: send.delivery,
+      revision: send.revision,
+      createdAt: date.now()
+    )
+  }
+
+  private func restoreDispatchFailure(_ problem: ComposerProblem, state: inout State) {
+    guard let pending = state.pendingDispatch,
+      let outbound = state.outbound.first(where: { $0.messageID == pending.send.messageID })
+    else {
+      state.isSending = false
+      state.pendingDispatch = nil
+      state.dispatchGeneration = nil
+      state.problem = problem
+      return
+    }
+    state.isSending = false
+    state.pendingDispatch = nil
+    state.dispatchGeneration = nil
+    state.problem = problem
+    state.outbound.removeAll { $0.messageID == outbound.messageID }
+    state.contentRevision += 1
+    state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+    let failure = pending.restoreFailure ?? .definite
+    if failure != .ambiguous,
+      state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      state.quotes.isEmpty
+    {
+      state.draft = outbound.text
+      state.quotes = outbound.quotes
+      state.revision += 1
+      state.focusRequest += 1
+    } else {
+      state.failedSends.append(
+        FailedComposerSend(
+          messageID: pending.restoreMessageID ?? outbound.messageID,
+          text: outbound.text,
+          quotes: outbound.quotes,
+          delivery: outbound.delivery,
+          target: outbound.target,
+          reason: problem,
+          failure: failure
+        )
+      )
+    }
   }
 
   private func saveFinished(
@@ -512,16 +767,10 @@ public struct ComposerFeature: Sendable {
       case .saved:
         return .send(.outboundPersisted(messageID: pending.send.messageID))
       case .tooLarge:
-        state.isSending = false
-        state.pendingDispatch = nil
-        state.outbound = []
-        state.problem = .draftTooLarge
+        restoreDispatchFailure(.draftTooLarge, state: &state)
         return .none
       case .failure:
-        state.isSending = false
-        state.pendingDispatch = nil
-        state.outbound = []
-        state.problem = .couldNotSave
+        restoreDispatchFailure(.couldNotSave, state: &state)
         return .none
       }
     }
@@ -600,6 +849,9 @@ public struct ComposerFeature: Sendable {
     state.quotes = draft.quotes
     state.failedSends = draft.failedSends
     state.outbound = []
+    state.retryDispatch = nil
+    state.contentRevision = max(state.contentRevision, draft.revision)
+    state.contentUpdatedAt = max(state.contentUpdatedAt, draft.updatedAt)
     if let first = draft.outbound.first {
       state.failedSends.append(
         FailedComposerSend(
@@ -615,6 +867,8 @@ public struct ComposerFeature: Sendable {
       if keyMatches(first.target, key: state.draftKey) {
         state.target = first.target
       }
+      state.contentRevision += 1
+      state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
       for extra in draft.outbound.dropFirst() {
         state.failedSends.append(
           FailedComposerSend(
@@ -631,6 +885,8 @@ public struct ComposerFeature: Sendable {
     }
     if let created = draft.createdSessionID, state.target.isNewSession {
       state.target = .session(id: created)
+      state.contentRevision += 1
+      state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
       return .merge(
         .send(.delegate(.restoredCreatedSession(created))),
         persistNow(state: &state)
@@ -703,6 +959,8 @@ public struct ComposerFeature: Sendable {
     let oldKey = state.draftKey
     guard oldKey.scope != .session(sessionID) else { return .none }
     state.target = .session(id: sessionID)
+    state.contentRevision += 1
+    state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
     state.saveGeneration += 1
     let newKey = state.draftKey
     var draft = snapshot(state)
@@ -738,8 +996,11 @@ public struct ComposerFeature: Sendable {
     state.failedSends = []
     state.outbound = []
     state.revision = 0
+    state.contentRevision = 0
+    state.contentUpdatedAt = Date(timeIntervalSince1970: 0)
     state.isSending = false
     state.pendingDispatch = nil
+    state.retryDispatch = nil
     state.dispatchGeneration = nil
     state.problem = nil
     let drafts = drafts
@@ -786,6 +1047,7 @@ public struct ComposerFeature: Sendable {
         return
       }
       draft.outbound.removeAll { $0.messageID == messageID }
+      draft.revision += 1
       switch resolution {
       case .accepted:
         break
@@ -806,18 +1068,65 @@ public struct ComposerFeature: Sendable {
     }
   }
 
-  private func flushForDismiss(requestID: UUID, state: State) -> Effect<Action> {
-    let key = state.draftKey
-    let draft = snapshot(state)
+  private func beginFlushForDismiss(requestID: UUID, state: inout State) -> Effect<Action> {
+    state.flushToken += 1
+    state.flushRequestID = requestID
+    state.saveGeneration += 1
+    let token = state.flushToken
+    return .merge(
+      .cancel(id: CancelID.save),
+      flushEffect(requestID: requestID, token: token, key: state.draftKey, draft: snapshot(state))
+    )
+  }
+
+  private func flushEffect(
+    requestID: UUID,
+    token: Int,
+    key: ComposerDraftKey,
+    draft: ComposerDraft
+  ) -> Effect<Action> {
     let drafts = drafts
     return .run { send in
       let result: ComposerDraftSave
       if draft.isEmpty {
-        result = await drafts.remove(key)
+        result = await drafts.removeIfNotNewer(draft, key)
       } else {
-        result = await drafts.save(draft, key)
+        result = await drafts.saveIfNewer(draft, key)
       }
-      await send(.delegate(.flushForDismissFinished(requestID: requestID, result: result)))
+      await send(.flushSaved(requestID: requestID, token: token, draft: draft, result: result))
+    }
+  }
+
+  private func flushSaved(
+    requestID: UUID,
+    token: Int,
+    draft: ComposerDraft,
+    result: ComposerDraftSave,
+    state: inout State
+  ) -> Effect<Action> {
+    guard token == state.flushToken, requestID == state.flushRequestID else { return .none }
+    switch result {
+    case .saved:
+      let current = snapshot(state)
+      guard current.sameContent(as: draft) else {
+        state.flushToken += 1
+        state.saveGeneration += 1
+        let token = state.flushToken
+        return .merge(
+          .cancel(id: CancelID.save),
+          flushEffect(
+            requestID: requestID,
+            token: token,
+            key: state.draftKey,
+            draft: current
+          )
+        )
+      }
+      state.flushRequestID = nil
+      return .send(.delegate(.flushForDismissFinished(requestID: requestID, result: .saved)))
+    case .tooLarge, .failure:
+      state.flushRequestID = nil
+      return .send(.delegate(.flushForDismissFinished(requestID: requestID, result: result)))
     }
   }
 
@@ -829,7 +1138,8 @@ public struct ComposerFeature: Sendable {
       createdSessionID: state.target.isNewSession ? nil : state.target.sessionID,
       failedSends: state.failedSends,
       outbound: state.outbound,
-      updatedAt: date.now()
+      revision: state.contentRevision,
+      updatedAt: state.contentUpdatedAt
     )
   }
 }

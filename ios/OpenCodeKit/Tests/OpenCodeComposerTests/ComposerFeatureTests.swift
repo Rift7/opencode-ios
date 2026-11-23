@@ -247,7 +247,8 @@ struct ComposerFeatureTests {
     await store.send(.sendTapped)
     await store.skipReceivedActions(strict: false)
     await store.send(.textChanged("Second"))
-    await store.send(.sendAccepted(messageID: "message"))
+    let messageID = store.state.outbound.first?.messageID ?? ""
+    await store.send(.sendAccepted(messageID: messageID))
     #expect(store.state.draft == "Second")
     #expect(!store.state.isSending)
   }

@@ -173,10 +173,13 @@ message or file content.
   save does not dispatch; an offline/request-blocked delegate restores the payload; an unresolved record after
   termination reopens as an unverified (ambiguous) failed send with its original ID and target, never as
   editable text.
-- A send is admitted under a client message ID. A definite rejection can be retried. An ambiguous result is
-  reconciled with `GET /api/session/{id}/message/{id}` and the inbox before any retry; a retry mints a new ID
-  only after the old ID is confirmed absent. An unreadable reconciliation is shown as unverified and never
-  duplicated.
+- A send is admitted under a client message ID. A definite rejection can be retried under a new ID that is
+  written to the outbound record before the delegate runs. An ambiguous result is reconciled with
+  `GET /api/session/{id}/message/{id}` and the inbox before any retry; when the old ID is confirmed absent,
+  `ComposerFeature` replaces the outbound record with the new ID and saves it before the prompt. A failed save
+  sends nothing and restores the prior identity. An unreadable reconciliation is shown as unverified and never
+  duplicated. Results, optimistic rows and restarted records use the dispatched ID; they never fall back to a
+  different outbound record.
 - `SessionWaitLoop` is the only retry owner for `POST /api/experimental/session/{id}/wait`: 25 s polls, a 20 s
   fast threshold, 12 fast failures, an active probe, and a caller-owned `.once` escape. A completed wait asks
   the existing settlement read; it never opens another stream or read queue.
@@ -191,10 +194,15 @@ message or file content.
 - Quotes are one block’s selected text plus an optional comment. The send body appends the audited quoted block
   to the model text and writes `{"type":"quote"}` to `metadata.comments`.
 - Project-to-session draft migration writes the destination first, removes the source only after success, and
-  skips a newer destination. A source keeps `createdSessionID` so a restart can recover it.
-- Done uses an explicit flush request/identity; a saved completion closes the matching session, a failure keeps
-  it open with a notice. Replacement, server switch and disconnect transfer the draft through an App-owned
-  effect before the child disappears. There is no dismissal timer.
+  skips a newer destination (timestamp, then revision). A source keeps `createdSessionID` so a restart can
+  recover it. Draft records carry a monotonic `revision`; records written before it decode as revision 0.
+- Done uses an explicit flush request/identity and a content snapshot. If text, quotes, failed sends or the
+  outbound changed while persistence was suspended, the composer saves the newer content before reporting
+  success; a failure keeps the session open with a notice. Replacement, server switch, disconnect and
+  interactive dismissal transfer the draft through an App-owned effect before the child disappears. A failed
+  transfer is retained under its server/key in `AppFeature.retainedDraftTransfers`, surfaced as `draftKept`,
+  and retried on launch, foreground and navigation. `saveIfNewer` compares timestamp then revision, so an old
+  transfer never replaces newer typing after returning to the session. There is no dismissal timer.
 - Long input grows to 168 pt, then scrolls internally with the caret/selection visible.
 - Model/agent/mode pickers, autocomplete, mentions and attachments are deliberately absent until P11/P10; do not
   add a control that looks functional before those boundaries exist.
@@ -264,14 +272,14 @@ Useful entry points:
 
 ### P9 evidence
 
-- `swift test --package-path ios/OpenCodeKit`: 477 tests (194 server, 67 core, 68 app, 38 drawer, 62
-  session, 26 transcript, 22 composer).
+- `swift test --package-path ios/OpenCodeKit`: 492 tests (194 server, 67 core, 75 app, 38 drawer, 66
+  session, 26 transcript, 26 composer).
 - Full XCUITest suite: 58 tests pass; `ComposerUITests` adds eleven journeys, including relaunch, failed-send
   retry, separate session drafts, running/queue management, dock vs chat, quote handoff, Dynamic Type/dark,
   long multiline scrolling and two typing traces.
 - Screenshots: `docs/ios-migration/screens/p9-{composer,composer-quote,quote,request-dock,queued}[-dark].png`.
-- Simulator typing trace: long static transcript 5.7 ms average / 11.4 ms max across 38 changes with no
-  Markdown reparse; streaming 9.3 ms average / 15.3 ms max across 13 changes.
+- Simulator typing trace: long static transcript 6.6 ms average / 24.3 ms max across 34 changes with no
+  Markdown reparse; streaming 9.1 ms average / 14.8 ms max across 17 changes.
 - Deferred: model/agent/mode pickers and autocomplete (P11), attachments and cross-block selection (P10/P14),
   physical IME/hardware-keyboard/VoiceOver checks (P14).
 

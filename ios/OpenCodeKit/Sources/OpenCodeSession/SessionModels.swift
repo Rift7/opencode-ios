@@ -372,4 +372,7 @@ public enum ComposerSendResult: Equatable, Sendable {
   case accepted(sessionID: String, created: OpenCodeSession?)
   case failed(created: OpenCodeSession?, failure: ComposerSendFailure)
   case unverified(created: OpenCodeSession?)
+  /// Reconciliation proved an ambiguous retry never landed. The composer must persist a new
+  /// identity before a prompt is issued again.
+  case retryAbsent(created: OpenCodeSession?)
 }

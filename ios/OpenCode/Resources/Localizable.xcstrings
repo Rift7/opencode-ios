@@ -1893,6 +1893,17 @@
         }
       }
     },
+    "notice.draft_kept": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t save the composer draft. It’s kept on this device until it can be saved."
+          }
+        }
+      }
+    },
     "notice.draft_save_failed": {
       "extractionState": "manual",
       "localizations": {

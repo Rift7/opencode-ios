@@ -56,6 +56,38 @@ public actor ComposerDraftStore {
     }
   }
 
+  /// Saves only when the destination does not already hold newer content. A departing transfer
+  /// must not overwrite typing that reached the same key after it started.
+  public func saveIfNewer(_ draft: ComposerDraft, for key: ComposerDraftKey) -> ComposerDraftSave {
+    do {
+      let current = try records()
+      if let existing = current.drafts[key.storageKey], existing.supersedes(draft) {
+        return .saved
+      }
+    } catch let failure as StorageFailure {
+      return .failure(failure)
+    } catch {
+      return .failure(.unavailable)
+    }
+    return save(draft, for: key)
+  }
+
+  /// Removes only when the destination does not hold newer content. An empty departing snapshot
+  /// must not delete typing that arrived after it.
+  public func removeIfNotNewer(_ draft: ComposerDraft, for key: ComposerDraftKey) -> ComposerDraftSave {
+    do {
+      let current = try records()
+      if let existing = current.drafts[key.storageKey], existing.supersedes(draft) {
+        return .saved
+      }
+    } catch let failure as StorageFailure {
+      return .failure(failure)
+    } catch {
+      return .failure(.unavailable)
+    }
+    return remove(key)
+  }
+
   /// A New Session draft whose created session key is missing or stale. The destination is written
   /// before the source is removed, so a failed migration never destroys the only copy.
   public func recoverCreated(
@@ -91,7 +123,7 @@ public actor ComposerDraftStore {
       // A newer save may have reached the destination while migration was pending. Never overwrite
       // it with the older source snapshot; only remove the now-redundant source.
       let current = try records()
-      if current.drafts[destination.storageKey] == nil {
+      if current.drafts[destination.storageKey].map({ !$0.supersedes(draft) }) ?? true {
         let saved = save(draft, for: destination)
         switch saved {
         case .saved:
@@ -258,6 +290,15 @@ public struct ComposerDraftClient: Sendable {
   public var load: @Sendable (ComposerDraftKey) async -> ComposerDraftLoad
   public var save: @Sendable (ComposerDraft, ComposerDraftKey) async -> ComposerDraftSave
   public var remove: @Sendable (ComposerDraftKey) async -> ComposerDraftSave
+  /// Saves unless the destination already holds a newer revision.
+  public var saveIfNewer: @Sendable (ComposerDraft, ComposerDraftKey) async -> ComposerDraftSave
+  /// Removes unless the destination holds newer content than the empty snapshot.
+  public var removeIfNotNewer:
+    @Sendable (ComposerDraft, ComposerDraftKey) async -> ComposerDraftSave
+  /// A departing session's conditional save. Defaults to `saveIfNewer`.
+  public var saveDeparting: @Sendable (ComposerDraft, ComposerDraftKey) async -> ComposerDraftSave
+  /// A departing session's conditional removal. Defaults to `removeIfNotNewer`.
+  public var removeDeparting: @Sendable (ComposerDraft, ComposerDraftKey) async -> ComposerDraftSave
   /// Loads a created session's draft from the New Session key when the destination key is missing,
   /// after trying a destination-first migration.
   public var recoverCreated: @Sendable (String, ComposerDraftKey) async -> ComposerDraftLoad
@@ -271,6 +312,10 @@ public struct ComposerDraftClient: Sendable {
       .saved
     },
     remove: @escaping @Sendable (ComposerDraftKey) async -> ComposerDraftSave = { _ in .saved },
+    saveIfNewer: (@Sendable (ComposerDraft, ComposerDraftKey) async -> ComposerDraftSave)? = nil,
+    removeIfNotNewer: (@Sendable (ComposerDraft, ComposerDraftKey) async -> ComposerDraftSave)? = nil,
+    saveDeparting: (@Sendable (ComposerDraft, ComposerDraftKey) async -> ComposerDraftSave)? = nil,
+    removeDeparting: (@Sendable (ComposerDraft, ComposerDraftKey) async -> ComposerDraftSave)? = nil,
     recoverCreated: @escaping @Sendable (String, ComposerDraftKey) async -> ComposerDraftLoad = {
       _, _ in .missing
     },
@@ -281,6 +326,10 @@ public struct ComposerDraftClient: Sendable {
     self.load = load
     self.save = save
     self.remove = remove
+    self.saveIfNewer = saveIfNewer ?? save
+    self.removeIfNotNewer = removeIfNotNewer ?? { _, key in await remove(key) }
+    self.saveDeparting = saveDeparting ?? self.saveIfNewer
+    self.removeDeparting = removeDeparting ?? self.removeIfNotNewer
     self.recoverCreated = recoverCreated
     self.migrate = migrate
     self.flush = flush
@@ -291,6 +340,10 @@ public struct ComposerDraftClient: Sendable {
       load: { await store.load($0) },
       save: { await store.save($0, for: $1) },
       remove: { await store.remove($0) },
+      saveIfNewer: { await store.saveIfNewer($0, for: $1) },
+      removeIfNotNewer: { await store.removeIfNotNewer($0, for: $1) },
+      saveDeparting: { await store.saveIfNewer($0, for: $1) },
+      removeDeparting: { await store.removeIfNotNewer($0, for: $1) },
       recoverCreated: { await store.recoverCreated(sessionID: $0, destination: $1) },
       migrate: { await store.migrate($0, from: $1, to: $2) },
       flush: { await store.flush() }

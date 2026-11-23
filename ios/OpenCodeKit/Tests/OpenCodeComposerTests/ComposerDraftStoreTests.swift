@@ -154,6 +154,138 @@ struct ComposerDraftStoreTests {
     #expect(await store.load(newKey) == .missing)
   }
 
+
+  @Test("saveIfNewer keeps a newer destination and writes a newer source")
+  func saveIfNewerFencesByRevision() async {
+    let storage = ScriptedStorage()
+    let store = ComposerDraftStore(storage: storage, storageKey: "drafts")
+    _ = await store.save(
+      ComposerDraft(text: "newer", revision: 4, updatedAt: Date(timeIntervalSince1970: 1_700_000_100)),
+      for: sessionKey
+    )
+
+    let older = await store.saveIfNewer(
+      ComposerDraft(text: "older", revision: 3, updatedAt: Date(timeIntervalSince1970: 1_700_000_000)),
+      for: sessionKey
+    )
+    #expect(older == .saved)
+    #expect(await store.load(sessionKey) == .found(
+      ComposerDraft(text: "newer", revision: 4, updatedAt: Date(timeIntervalSince1970: 1_700_000_100))
+    ))
+
+    let newer = await store.saveIfNewer(
+      ComposerDraft(text: "newest", revision: 5, updatedAt: Date(timeIntervalSince1970: 1_700_000_200)),
+      for: sessionKey
+    )
+    #expect(newer == .saved)
+    #expect(await store.load(sessionKey) == .found(
+      ComposerDraft(text: "newest", revision: 5, updatedAt: Date(timeIntervalSince1970: 1_700_000_200))
+    ))
+  }
+
+
+  @Test("a newer timestamp wins even when the older session's revision is higher")
+  func saveIfNewerUsesTimestampsAcrossSessions() async {
+    let storage = ScriptedStorage()
+    let store = ComposerDraftStore(storage: storage, storageKey: "drafts")
+    _ = await store.save(
+      ComposerDraft(
+        text: "newer",
+        revision: 1,
+        updatedAt: Date(timeIntervalSince1970: 1_700_000_100)
+      ),
+      for: sessionKey
+    )
+
+    let skipped = await store.saveIfNewer(
+      ComposerDraft(
+        text: "older high revision",
+        revision: 9,
+        updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+      ),
+      for: sessionKey
+    )
+    #expect(skipped == .saved)
+    #expect(await store.load(sessionKey) == .found(
+      ComposerDraft(
+        text: "newer",
+        revision: 1,
+        updatedAt: Date(timeIntervalSince1970: 1_700_000_100)
+      )
+    ))
+
+    let written = await store.saveIfNewer(
+      ComposerDraft(
+        text: "latest",
+        revision: 0,
+        updatedAt: Date(timeIntervalSince1970: 1_700_000_200)
+      ),
+      for: sessionKey
+    )
+    #expect(written == .saved)
+    #expect(await store.load(sessionKey) == .found(
+      ComposerDraft(
+        text: "latest",
+        revision: 0,
+        updatedAt: Date(timeIntervalSince1970: 1_700_000_200)
+      )
+    ))
+  }
+
+  @Test("migration compares revisions before replacing a destination")
+  func migrationUsesRevisions() async {
+    let storage = ScriptedStorage()
+    let store = ComposerDraftStore(storage: storage, storageKey: "drafts")
+    _ = await store.save(
+      ComposerDraft(text: "destination", revision: 6, updatedAt: Date(timeIntervalSince1970: 1_700_000_100)),
+      for: sessionKey
+    )
+
+    let skipped = await store.migrate(
+      ComposerDraft(text: "source", revision: 5, updatedAt: Date(timeIntervalSince1970: 1_700_000_000)),
+      from: newKey,
+      to: sessionKey
+    )
+    #expect(skipped == .migrated)
+    #expect(await store.load(sessionKey) == .found(
+      ComposerDraft(text: "destination", revision: 6, updatedAt: Date(timeIntervalSince1970: 1_700_000_100))
+    ))
+
+    _ = await store.save(
+      ComposerDraft(text: "newer source", revision: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_200)),
+      for: newKey
+    )
+    let replaced = await store.migrate(
+      ComposerDraft(text: "newer source", revision: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_200)),
+      from: newKey,
+      to: sessionKey
+    )
+    #expect(replaced == .migrated)
+    #expect(await store.load(sessionKey) == .found(
+      ComposerDraft(text: "newer source", revision: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_200))
+    ))
+    #expect(await store.load(newKey) == .missing)
+  }
+
+  @Test("a record written before revisions still decodes with revision zero")
+  func legacyRecordDecodes() async {
+    let storage = OpenCodeCore.InMemoryStorage()
+    let key = "server|session:session-1"
+    let legacy = """
+      {"version":1,"drafts":{"\(key)":{"text":"Legacy","quotes":[],\
+      "failedSends":[],"outbound":[],"updatedAt":0}}}
+      """
+    #expect(storage.write(Data(legacy.utf8), for: "drafts") == .success)
+    let store = ComposerDraftStore(storage: storage, storageKey: "drafts")
+
+    guard case .found(let draft) = await store.load(sessionKey) else {
+      Issue.record("expected the legacy record")
+      return
+    }
+    #expect(draft.text == "Legacy")
+    #expect(draft.revision == 0)
+  }
+
   @Test("a newer destination save is never overwritten by a pending migration")
   func newerDestinationWins() async {
     let storage = ScriptedStorage()

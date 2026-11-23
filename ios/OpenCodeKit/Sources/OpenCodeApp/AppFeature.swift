@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Foundation
+import OpenCodeComposer
 import OpenCodeCore
 import OpenCodeDrawer
 import OpenCodeServer
@@ -175,6 +176,7 @@ public enum AppNotice: Equatable, Sendable {
   case couldNotReadCache
   case couldNotReplaceSavedData(StorageFailure)
   case couldNotSaveDraft
+  case draftKept
 }
 
 /// The session a Done tap is trying to close. Late completion is accepted only for this identity.
@@ -187,6 +189,26 @@ public struct PendingSessionDismissal: Equatable, Sendable {
     self.requestID = requestID
     self.serverID = serverID
     self.sessionID = sessionID
+  }
+}
+
+/// A departing composer draft whose save is still owned by the app after its session closed.
+public struct DraftTransfer: Equatable, Sendable, Identifiable {
+  public var id: UUID
+  public var key: ComposerDraftKey
+  public var draft: ComposerDraft
+  public var failure: StorageFailure?
+
+  public init(
+    id: UUID,
+    key: ComposerDraftKey,
+    draft: ComposerDraft,
+    failure: StorageFailure? = nil
+  ) {
+    self.id = id
+    self.key = key
+    self.draft = draft
+    self.failure = failure
   }
 }
 
@@ -711,6 +733,8 @@ public struct AppFeature {
     public var savedData: SavedDataState
     public var showsReplaceSavedDataConfirmation: Bool
     public var pendingDismissal: PendingSessionDismissal?
+    public var pendingDraftTransfers: [UUID: DraftTransfer]
+    public var retainedDraftTransfers: [ComposerDraftKey: DraftTransfer]
 
     var didStart = false
     var pendingSave: OpenCodeServer?
@@ -737,7 +761,9 @@ public struct AppFeature {
       isPinnedForUITest: Bool = false,
       savedData: SavedDataState = .notLoaded,
       showsReplaceSavedDataConfirmation: Bool = false,
-      pendingDismissal: PendingSessionDismissal? = nil
+      pendingDismissal: PendingSessionDismissal? = nil,
+      pendingDraftTransfers: [UUID: DraftTransfer] = [:],
+      retainedDraftTransfers: [ComposerDraftKey: DraftTransfer] = [:]
     ) {
       self.restore = restore
       self.connection = connection
@@ -758,6 +784,8 @@ public struct AppFeature {
       self.savedData = savedData
       self.showsReplaceSavedDataConfirmation = showsReplaceSavedDataConfirmation
       self.pendingDismissal = pendingDismissal
+      self.pendingDraftTransfers = pendingDraftTransfers
+      self.retainedDraftTransfers = retainedDraftTransfers
     }
 
     public static func == (lhs: State, rhs: State) -> Bool {
@@ -780,6 +808,8 @@ public struct AppFeature {
         && lhs.savedData == rhs.savedData
         && lhs.showsReplaceSavedDataConfirmation == rhs.showsReplaceSavedDataConfirmation
         && lhs.pendingDismissal == rhs.pendingDismissal
+        && lhs.pendingDraftTransfers == rhs.pendingDraftTransfers
+        && lhs.retainedDraftTransfers == rhs.retainedDraftTransfers
     }
   }
 
@@ -806,6 +836,13 @@ public struct AppFeature {
     case pairingFinished(attempt: Int, result: Result<OpenCodeServer, OpenCodeClientError>)
     case disconnectTapped
     case sessionDestinationDismissed
+    case draftTransferFinished(
+      id: UUID,
+      key: ComposerDraftKey,
+      draft: ComposerDraft,
+      result: ComposerDraftSave
+    )
+    case retryRetainedDrafts
     case noticeDismissed
     case persisted(saved: StorageWrite, list: StorageWrite)
     case replaceSavedDataTapped
@@ -844,7 +881,7 @@ public struct AppFeature {
         guard !state.didStart else { return .none }
         state.didStart = true
         if state.isPinnedForUITest { return .none }
-        return .merge(restoreEffect(), pathEffect())
+        return .merge(restoreEffect(), pathEffect(), retryRetainedEffect(state: state))
 
       case .restored(let result):
         switch result {
@@ -931,6 +968,7 @@ public struct AppFeature {
         var effects: [Effect<Action>] = [
           .send(.connection(.scenePhaseChanged(isActive: isActive)))
         ]
+        if isActive { effects.append(retryRetainedEffect(state: state)) }
         if state.home != nil { effects.append(.send(.home(.connectionChanged(isConnected: live)))) }
         if state.session != nil {
           effects.append(.send(.session(.connectionChanged(isConnected: live))))
@@ -1126,6 +1164,7 @@ public struct AppFeature {
         }
 
       case .disconnectTapped:
+        let transfer = transferDraft(from: state.session, state: &state)
         state.connection = nil
         state.home = nil
         state.session = nil
@@ -1133,14 +1172,58 @@ public struct AppFeature {
         state.pairingAttempt = nil
         state.pendingPairing = nil
         state.pendingSave = nil
-        return .cancel(id: CancelID.pairing)
+        return .merge(transfer, .cancel(id: CancelID.pairing))
 
       case .sessionDestinationDismissed:
-        let transfer = transferDraft(from: state.session)
+        let transfer = transferDraft(from: state.session, state: &state)
         state.pendingDismissal = nil
         state.session = nil
         state.sessionDestination = nil
         return transfer
+
+      case .draftTransferFinished(let id, let key, let draft, let result):
+        guard let pending = state.pendingDraftTransfers[id],
+          pending.key == key,
+          pending.draft == draft
+        else { return .none }
+        state.pendingDraftTransfers[id] = nil
+        switch result {
+        case .saved:
+          if let retained = state.retainedDraftTransfers[key],
+            draft.supersedes(retained.draft)
+          {
+            state.retainedDraftTransfers[key] = nil
+          }
+          if state.retainedDraftTransfers.isEmpty, state.notice == .draftKept {
+            state.notice = nil
+          }
+          if state.session?.composer.draftKey == key {
+            return .send(.session(.composer(.restoreRetried)))
+          }
+        case .tooLarge, .failure:
+          var failed = pending
+          if case .failure(let failure) = result { failed.failure = failure }
+          if let retained = state.retainedDraftTransfers[key],
+            retained.draft.supersedes(failed.draft)
+          {
+            break
+          }
+          state.retainedDraftTransfers[key] = failed
+          state.notice = .draftKept
+        }
+        return .none
+
+      case .retryRetainedDrafts:
+        guard !state.retainedDraftTransfers.isEmpty else { return .none }
+        var effects: [Effect<Action>] = []
+        for retained in state.retainedDraftTransfers.values {
+          var retry = retained
+          retry.id = uuid.uuid()
+          state.pendingDraftTransfers[retry.id] = retry
+          effects.append(transferEffect(id: retry.id, key: retry.key, draft: retry.draft))
+        }
+        state.retainedDraftTransfers = [:]
+        return .merge(effects)
 
       case .noticeDismissed:
         state.notice = nil
@@ -1224,7 +1307,7 @@ public struct AppFeature {
         {
           return .none
         }
-        let transfer = transferDraft(from: state.session)
+        let transfer = transferDraft(from: state.session, state: &state)
         state.pendingDismissal = nil
         let id = state.nextSessionID
         state.nextSessionID += 1
@@ -1236,7 +1319,12 @@ public struct AppFeature {
           isLive: homeIsLive(state),
           isPinned: state.isPinnedForUITest
         )
-        return .merge(transfer, .send(.session(.task)))
+        raiseDraftWatermark(into: &state)
+        return .merge(
+          transfer,
+          retryRetainedEffect(state: state),
+          .send(.session(.task))
+        )
 
       case .home(.delegate(.newSession(let directory))):
         guard let home = state.home else { return .none }
@@ -1252,7 +1340,7 @@ public struct AppFeature {
         {
           return .none
         }
-        let transfer = transferDraft(from: state.session)
+        let transfer = transferDraft(from: state.session, state: &state)
         state.pendingDismissal = nil
         let id = state.nextSessionID
         state.nextSessionID += 1
@@ -1264,23 +1352,32 @@ public struct AppFeature {
           isLive: homeIsLive(state),
           isPinned: state.isPinnedForUITest
         )
-        return .merge(transfer, .send(.session(.task)))
+        raiseDraftWatermark(into: &state)
+        return .merge(
+          transfer,
+          retryRetainedEffect(state: state),
+          .send(.session(.task))
+        )
 
       case .home(.delegate(.switchServer(let server))):
-        let transfer = transferDraft(from: state.session)
+        let transfer = transferDraft(from: state.session, state: &state)
         state.session = nil
         state.sessionDestination = nil
         state.pendingDismissal = nil
-        return .merge(transfer, connect(to: server, state: &state))
+        return .merge(
+          transfer,
+          retryRetainedEffect(state: state),
+          connect(to: server, state: &state)
+        )
 
       case .home(.delegate(.disconnect)):
-        let transfer = transferDraft(from: state.session)
+        let transfer = transferDraft(from: state.session, state: &state)
         state.connection = nil
         state.home = nil
         state.session = nil
         state.sessionDestination = nil
         state.pendingDismissal = nil
-        return transfer
+        return .merge(transfer, retryRetainedEffect(state: state))
 
       case .home:
         return .none
@@ -1333,18 +1430,58 @@ public struct AppFeature {
 
   /// Saves a departing session's composer outside its child lifetime. The effect owns the captured
   /// draft, so replacing/disconnecting cannot cancel the last copy of unsent text.
-  private func transferDraft(from session: SessionFeature.State?) -> Effect<Action> {
+  private func transferDraft(
+    from session: SessionFeature.State?,
+    state: inout State
+  ) -> Effect<Action> {
     guard let session else { return .none }
     let composer = session.composer
     let key = composer.draftKey
     let draft = composer.persistedDraft
+    let id = uuid.uuid()
+    state.pendingDraftTransfers[id] = DraftTransfer(id: id, key: key, draft: draft)
+    return transferEffect(id: id, key: key, draft: draft)
+  }
+
+  private func raiseDraftWatermark(into state: inout State) {
+    guard let session = state.session else { return }
+    let key = session.composer.draftKey
+    var newest: DraftTransfer?
+    for transfer in state.pendingDraftTransfers.values where transfer.key == key {
+      if newest == nil || transfer.draft.supersedes(newest!.draft) { newest = transfer }
+    }
+    if let retained = state.retainedDraftTransfers[key],
+      newest == nil || retained.draft.supersedes(newest!.draft)
+    {
+      newest = retained
+    }
+    guard let newest else { return }
+    state.session?.composer.raiseContentWatermark(
+      revision: newest.draft.revision,
+      updatedAt: newest.draft.updatedAt
+    )
+  }
+
+  private func retryRetainedEffect(state: State) -> Effect<Action> {
+    state.retainedDraftTransfers.isEmpty ? .none : .send(.retryRetainedDrafts)
+  }
+
+  private func transferEffect(
+    id: UUID,
+    key: ComposerDraftKey,
+    draft: ComposerDraft
+  ) -> Effect<Action> {
     let drafts = composerDrafts
-    return .run { _ in
+    return .run { send in
+      let result: ComposerDraftSave
       if draft.isEmpty {
-        _ = await drafts.remove(key)
+        result = await drafts.removeDeparting(draft, key)
       } else {
-        _ = await drafts.save(draft, key)
+        result = await drafts.saveDeparting(draft, key)
       }
+      await send(
+        .draftTransferFinished(id: id, key: key, draft: draft, result: result)
+      )
     }
   }
 

@@ -435,12 +435,7 @@ public struct SessionFeature: Sendable {
         case .send(let send):
           return startComposerSend(send, isRetry: false, state: &state)
         case .retry(let failed):
-          return startComposerSend(
-            failed.send,
-            isRetry: true,
-            retryFailure: failed.failure,
-            state: &state
-          )
+          return startComposerSend(failed.send, isRetry: true, state: &state)
         case .restoredCreatedSession(let sessionID):
           return adoptRestoredSession(sessionID, state: &state)
         case .flushForDismissFinished(let requestID, let result):
@@ -1722,7 +1717,6 @@ extension SessionFeature {
   private func startComposerSend(
     _ send: ComposerSend,
     isRetry: Bool,
-    retryFailure: ComposerSendFailure? = nil,
     state: inout State
   ) -> Effect<Action> {
     guard send.hasContent else { return .send(.composer(.sendBlocked(.couldNotSend))) }
@@ -1754,7 +1748,6 @@ extension SessionFeature {
 
     let client = client
     let server = state.server
-    let uuid = uuid
     AppLog(category: .send).event(
       .composerSent,
       [
@@ -1765,15 +1758,12 @@ extension SessionFeature {
       ]
     )
     return .run { emit in
-      var actual = send
+      let actual = send
       var created: OpenCodeSession?
       var sessionID = existingSessionID
-      var reconciledRetry = !isRetry || retryFailure == .definite
+      var reconciledRetry = !isRetry
 
-      if isRetry, retryFailure == .definite {
-        // A definite rejection cannot have been admitted; the recorded gate is a new message ID.
-        actual.messageID = uuid.uuid().uuidString.lowercased()
-      } else if isRetry, let sessionID {
+      if isRetry, let sessionID {
         let found = await reconcileMessage(
           messageID: actual.messageID,
           sessionID: sessionID,
@@ -1800,8 +1790,14 @@ extension SessionFeature {
           )
           return
         case .absent:
-          actual.messageID = uuid.uuid().uuidString.lowercased()
-          reconciledRetry = true
+          await emit(
+            .composerSendResult(
+              operationID: operationID,
+              messageID: actual.messageID,
+              result: .retryAbsent(created: nil)
+            )
+          )
+          return
         }
       }
 
@@ -1863,7 +1859,14 @@ extension SessionFeature {
           )
           return
         case .absent:
-          actual.messageID = uuid.uuid().uuidString.lowercased()
+          await emit(
+            .composerSendResult(
+              operationID: operationID,
+              messageID: send.messageID,
+              result: .retryAbsent(created: created)
+            )
+          )
+          return
         }
       }
 
@@ -1942,6 +1945,24 @@ extension SessionFeature {
       || (createdSession.map { currentTarget == .session(id: $0.id) } == true)
 
     switch result {
+    case .retryAbsent:
+      removeOptimistic(operation.send, messageID: operation.send.messageID, state: &state)
+      effects.append(
+        .send(
+          .composer(
+            .retryMessageIDConfirmedAbsent(
+              messageID: operation.send.messageID,
+              createdSessionID: createdSession?.id
+            )
+          )
+        )
+      )
+      AppLog(category: .send).event(
+        .composerSent,
+        [LogField("retryAbsent", .flag(true)), LogField("operation", .count(operationID))]
+      )
+      return .merge(effects)
+
     case .accepted(let sessionID, _):
       var accepted = operation.send
       accepted.messageID = messageID
@@ -2031,7 +2052,8 @@ extension SessionFeature {
 
   private func createdSession(in result: ComposerSendResult) -> OpenCodeSession? {
     switch result {
-    case .accepted(_, let created), .failed(let created, _), .unverified(let created):
+    case .accepted(_, let created), .failed(let created, _), .unverified(let created),
+      .retryAbsent(let created):
       return created
     }
   }

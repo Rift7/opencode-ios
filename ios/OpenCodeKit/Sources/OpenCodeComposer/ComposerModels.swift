@@ -98,6 +98,8 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
   public var failedSends: [FailedComposerSend]
   /// An admitted or possibly admitted send whose outcome is not settled. At most one is in flight.
   public var outbound: [ComposerOutbound]
+  /// Monotonic content revision. A late transfer or migration may not replace a newer record.
+  public var revision: Int
   public var updatedAt: Date
 
   public init(
@@ -107,6 +109,7 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
     createdSessionID: String? = nil,
     failedSends: [FailedComposerSend] = [],
     outbound: [ComposerOutbound] = [],
+    revision: Int = 0,
     updatedAt: Date = Date(timeIntervalSince1970: 0)
   ) {
     self.text = text
@@ -115,7 +118,55 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
     self.createdSessionID = createdSessionID
     self.failedSends = failedSends
     self.outbound = outbound
+    self.revision = revision
     self.updatedAt = updatedAt
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case text, quotes, projectDirectory, createdSessionID, failedSends, outbound, revision, updatedAt
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    text = try container.decode(String.self, forKey: .text)
+    quotes = try container.decodeIfPresent([ComposerQuote].self, forKey: .quotes) ?? []
+    projectDirectory = try container.decodeIfPresent(String.self, forKey: .projectDirectory)
+    createdSessionID = try container.decodeIfPresent(String.self, forKey: .createdSessionID)
+    failedSends = try container.decodeIfPresent([FailedComposerSend].self, forKey: .failedSends) ?? []
+    outbound = try container.decodeIfPresent([ComposerOutbound].self, forKey: .outbound) ?? []
+    revision = try container.decodeIfPresent(Int.self, forKey: .revision) ?? 0
+    updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
+      ?? Date(timeIntervalSince1970: 0)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(text, forKey: .text)
+    try container.encode(quotes, forKey: .quotes)
+    try container.encodeIfPresent(projectDirectory, forKey: .projectDirectory)
+    try container.encodeIfPresent(createdSessionID, forKey: .createdSessionID)
+    try container.encode(failedSends, forKey: .failedSends)
+    try container.encode(outbound, forKey: .outbound)
+    try container.encode(revision, forKey: .revision)
+    try container.encode(updatedAt, forKey: .updatedAt)
+  }
+
+  /// Whether this record is at least as new as another. Timestamps decide across sessions whose
+  /// per-target revisions restarted; the revision breaks ties for fixed-clock records.
+  public func supersedes(_ other: ComposerDraft) -> Bool {
+    if updatedAt != other.updatedAt { return updatedAt > other.updatedAt }
+    return revision >= other.revision
+  }
+
+  /// Whether two snapshots would persist the same composer content. Timestamps and the revision
+  /// itself are excluded so a flush can wait for content, not bookkeeping.
+  public func sameContent(as other: ComposerDraft) -> Bool {
+    text == other.text
+      && quotes == other.quotes
+      && projectDirectory == other.projectDirectory
+      && createdSessionID == other.createdSessionID
+      && failedSends == other.failedSends
+      && outbound == other.outbound
   }
 
   public var isEmpty: Bool {

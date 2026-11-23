@@ -957,3 +957,26 @@ App-owned effect before removing the child. No arbitrary sleep participates in d
 `ComposerTextInput` grows to 168 pt; beyond that it enables internal scrolling and scrolls the caret/selection
 into view. Shrinking below the cap disables scrolling and resets the offset. Marked text, selection, Dynamic Type
 and the keyboard inset are unchanged. A physical IME/hardware-keyboard check remains unverified.
+
+### D-75 A retry records its actual message ID before the prompt
+`ComposerFeature` owns message-ID allocation for retries. A definite failure retries under a new ID that is
+written into `ComposerOutbound` before the delegate runs. An ambiguous failure keeps its recorded ID and is
+reconciled first; a confirmed absence produces `retryMessageIDConfirmedAbsent`, after which the composer replaces
+the outbound record with a new ID and saves it before issuing the prompt. A failed save restores the previous
+identity and sends nothing. Accept/fail/unverify actions match the dispatched ID and never fall back to another
+outbound record. This keeps the stored record, optimistic row, restart recovery and client request ID identical.
+
+### D-76 A failed departing-draft transfer stays app-owned
+`AppFeature` tracks each departing draft as a `DraftTransfer(id, key, draft)`. The save effect reports an
+explicit result; a failure retains the draft under its original server/key in `retainedDraftTransfers`, shows a
+`draftKept` notice, and leaves the in-memory copy available. Retries run on launch, foreground and navigation,
+and a completion is fenced by transfer ID, key and the exact draft. `ComposerDraftStore.saveIfNewer` compares
+`updatedAt` first and `revision` as a tie-breaker, so a transfer from a session whose revision restarted cannot
+replace newer content. A successful save clears a retained copy it supersedes; a newer retained copy wins.
+
+### D-77 Dismissal waits for the content, not just a request
+`flushForDismiss` captures the complete draft snapshot (text, quotes, failed sends, outbound) and a flush token.
+When the save completes, the composer compares the current snapshot with the saved one; if newer content exists,
+it saves that content and only then reports a saved completion. A failure or over-limit result keeps the session
+open. `AppFeature` still fences the completion by request ID and session identity. The debounced save is
+cancelled while a flush is active, and a later flush token invalidates an earlier completion.

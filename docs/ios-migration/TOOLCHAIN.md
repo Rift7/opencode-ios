@@ -126,7 +126,7 @@ therefore runs in the app process through a DEBUG-only `-uiTestKeychainProbe` la
 | `swift test --package-path OpenCodeKit` (Phase 4) | 205 tests pass (125 server, 66 core, 14 app) |
 | `swift test --package-path OpenCodeKit` (review corrections) | 222 tests pass (142 server, 66 core, 14 app); the live suite is skipped without env vars |
 | `swift test --package-path OpenCodeKit` (overflow follow-up) | 232 tests pass (152 server, 66 core, 14 app) |
-| `swift test --package-path OpenCodeKit` (P9) | 477 tests pass (194 server, 67 core, 68 app, 38 drawer, 62 session, 26 transcript, 22 composer) |
+| `swift test --package-path OpenCodeKit` (P9) | 492 tests pass (194 server, 67 core, 75 app, 38 drawer, 66 session, 26 transcript, 26 composer) |
 | `xcodebuild … test` (P9) | app build succeeds; 58 UI tests pass |
 | Device build (iPhone Air, iOS 27.2) | succeeds with `-allowProvisioningUpdates DEVELOPMENT_TEAM=<team> -skipMacroValidation`; automatic signing registered the app |
 

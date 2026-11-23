@@ -124,6 +124,48 @@ struct ComposerSessionTests {
     }
   }
 
+  private actor DraftRecorder {
+    private var records: [String: ComposerDraft] = [:]
+    private var rejectedOutboundID: String?
+
+    func seed(_ draft: ComposerDraft, key: ComposerDraftKey) {
+      records[key.storageKey] = draft
+    }
+
+    func reject(outboundID: String) {
+      rejectedOutboundID = outboundID
+    }
+
+    func load(_ key: ComposerDraftKey) -> ComposerDraftLoad {
+      records[key.storageKey].map(ComposerDraftLoad.found) ?? .missing
+    }
+
+    func save(_ draft: ComposerDraft, key: ComposerDraftKey) -> ComposerDraftSave {
+      if let id = draft.outbound.first?.messageID, id == rejectedOutboundID {
+        return .failure(.unavailable)
+      }
+      records[key.storageKey] = draft
+      return .saved
+    }
+
+    func remove(_ key: ComposerDraftKey) -> ComposerDraftSave {
+      records[key.storageKey] = nil
+      return .saved
+    }
+
+    func stored(_ key: ComposerDraftKey) -> ComposerDraft? {
+      records[key.storageKey]
+    }
+  }
+
+  private func client(_ recorder: DraftRecorder) -> ComposerDraftClient {
+    ComposerDraftClient(
+      load: { await recorder.load($0) },
+      save: { await recorder.save($0, key: $1) },
+      remove: { await recorder.remove($0) }
+    )
+  }
+
   private func makeStore(
     _ state: SessionFeature.State,
     client: OpenCodeClient,
@@ -419,6 +461,242 @@ struct ComposerSessionTests {
     #expect(calls.prompts.all.map(\.1.id) == [newID])
     #expect(calls.prompts.all.first?.1.text == "Retry me")
     #expect(store.state.composer.failedSends.isEmpty)
+  }
+
+
+  @Test("a definite retry stores its new message id before dispatch and keeps it when unreadable")
+  func definiteRetryStoresNewIdentity() async {
+    let draftStore = ComposerDraftStore(
+      storage: OpenCodeCore.InMemoryStorage(),
+      storageKey: "drafts"
+    )
+    let key = ComposerDraftKey(serverID: server.persistenceID, scope: .session("root"))
+    _ = await draftStore.save(
+      ComposerDraft(
+        failedSends: [
+          FailedComposerSend(
+            messageID: "old-id",
+            text: "Retry me",
+            quotes: [],
+            delivery: .steer,
+            target: .session(id: "root"),
+            reason: .couldNotSend,
+            failure: .definite
+          )
+        ],
+        revision: 1
+      ),
+      for: key
+    )
+    let newID = "66666666-6666-4666-8666-666666666666"
+    let calls = Calls()
+    let client = client(
+      calls: calls,
+      getSession: { _, _ in makeRoot() },
+      send: { _, _, _ in throw OpenCodeClientError(.transport(.timedOut)) },
+      message: { _, _, _ in throw OpenCodeClientError(.status(500)) },
+      inputs: { _, _ in throw OpenCodeClientError(.status(500)) }
+    )
+    let store = makeStore(
+      state(),
+      client: client,
+      uuid: UuidClient { UUID(uuidString: newID)! },
+      draftClient: .live(store: draftStore)
+    )
+
+    await store.send(.composer(.task))
+    await settle(store)
+    await store.send(.composer(.retryFailed(messageID: "old-id")))
+    await settle(store)
+
+    #expect(calls.prompts.all.map(\.1.id) == [newID])
+    #expect(store.state.composer.failedSends.map(\.messageID) == [newID])
+    guard case .found(let record) = await draftStore.load(key) else {
+      Issue.record("expected the retried draft record")
+      return
+    }
+    #expect(record.outbound.isEmpty)
+    #expect(record.failedSends.map(\.messageID) == [newID])
+  }
+
+  @Test("a retry suspended after dispatch reopens under its actual id and settles without a third prompt")
+  func retrySuspendedRestartUsesActualIdentity() async {
+    let draftStore = ComposerDraftStore(
+      storage: OpenCodeCore.InMemoryStorage(),
+      storageKey: "drafts"
+    )
+    let key = ComposerDraftKey(serverID: server.persistenceID, scope: .session("root"))
+    _ = await draftStore.save(
+      ComposerDraft(
+        failedSends: [
+          FailedComposerSend(
+            messageID: "old-id",
+            text: "Retry me",
+            quotes: [],
+            delivery: .steer,
+            target: .session(id: "root"),
+            reason: .couldNotSend,
+            failure: .definite
+          )
+        ],
+        revision: 1
+      ),
+      for: key
+    )
+    let newID = "77777777-7777-4777-8777-777777777777"
+    let firstCalls = Calls()
+    let gate = Gate()
+    let firstClient = client(
+      calls: firstCalls,
+      getSession: { _, _ in makeRoot() },
+      send: { _, _, _ in await gate.wait() }
+    )
+    let firstStore = makeStore(
+      state(),
+      client: firstClient,
+      uuid: UuidClient { UUID(uuidString: newID)! },
+      draftClient: .live(store: draftStore)
+    )
+
+    await firstStore.send(.composer(.task))
+    await settle(firstStore)
+    await firstStore.send(.composer(.retryFailed(messageID: "old-id")))
+    #expect(await waitUntilPumping(firstStore) { firstCalls.prompts.all.count == 1 })
+    #expect(firstCalls.prompts.all.first?.1.id == newID)
+
+    guard case .found(let inFlight) = await draftStore.load(key) else {
+      Issue.record("expected the in-flight record")
+      return
+    }
+    #expect(inFlight.outbound.map(\.messageID) == [newID])
+    #expect(inFlight.failedSends.isEmpty)
+
+    let secondCalls = Calls()
+    let secondClient = client(
+      calls: secondCalls,
+      getSession: { _, _ in makeRoot() },
+      message: { _, _, id in
+        [.userText(id: id, text: "Retry me", source: nil, quotes: [])]
+      },
+      inputs: { _, _ in [] }
+    )
+    let secondStore = makeStore(
+      state(),
+      client: secondClient,
+      uuid: .incrementing(),
+      draftClient: .live(store: draftStore)
+    )
+
+    await secondStore.send(.composer(.task))
+    await settle(secondStore)
+    #expect(secondStore.state.composer.failedSends.map(\.messageID) == [newID])
+    await secondStore.send(.composer(.retryFailed(messageID: newID)))
+    await settle(secondStore)
+
+    #expect(secondCalls.prompts.all.isEmpty)
+    #expect(secondStore.state.composer.failedSends.isEmpty)
+    guard case .found(let settled) = await draftStore.load(key) else {
+      Issue.record("expected the settled record")
+      return
+    }
+    #expect(settled.outbound.isEmpty)
+    #expect(settled.failedSends.isEmpty)
+
+    await gate.release()
+    await settle(firstStore)
+  }
+
+
+  @Test("a definite retry whose new id cannot be stored does not dispatch")
+  func definiteRetryPersistenceFailureDoesNotPrompt() async {
+    let recorder = DraftRecorder()
+    let key = ComposerDraftKey(serverID: server.persistenceID, scope: .session("root"))
+    await recorder.seed(
+      ComposerDraft(
+        failedSends: [
+          FailedComposerSend(
+            messageID: "old-id",
+            text: "Retry me",
+            quotes: [],
+            delivery: .steer,
+            target: .session(id: "root"),
+            reason: .couldNotSend,
+            failure: .definite
+          )
+        ],
+        revision: 1
+      ),
+      key: key
+    )
+    let newID = "99999999-9999-4999-8999-999999999999"
+    await recorder.reject(outboundID: newID)
+    let calls = Calls()
+    let client = client(calls: calls, getSession: { _, _ in makeRoot() })
+    let store = makeStore(
+      state(),
+      client: client,
+      uuid: UuidClient { UUID(uuidString: newID)! },
+      draftClient: self.client(recorder)
+    )
+
+    await store.send(.composer(.task))
+    await settle(store)
+    await store.send(.composer(.retryFailed(messageID: "old-id")))
+    await settle(store)
+
+    #expect(calls.prompts.all.isEmpty)
+    #expect(store.state.composer.draft == "Retry me")
+    #expect(store.state.composer.problem == .couldNotSave)
+    #expect(await recorder.stored(key)?.failedSends.map(\.messageID) == ["old-id"])
+    #expect(await recorder.stored(key)?.outbound.isEmpty == true)
+  }
+
+  @Test("a failed save while replacing a retry id never dispatches the prompt")
+  func retryIDPersistenceFailureDoesNotPrompt() async {
+    let recorder = DraftRecorder()
+    let key = ComposerDraftKey(serverID: server.persistenceID, scope: .session("root"))
+    await recorder.seed(
+      ComposerDraft(
+        outbound: [
+          ComposerOutbound(
+            target: .session(id: "root"),
+            messageID: "old-id",
+            text: "Ambiguous",
+            quotes: [],
+            delivery: .steer,
+            revision: 1
+          )
+        ],
+        revision: 1
+      ),
+      key: key
+    )
+    let newID = "88888888-8888-4888-8888-888888888888"
+    await recorder.reject(outboundID: newID)
+    let calls = Calls()
+    let client = client(
+      calls: calls,
+      getSession: { _, _ in makeRoot() },
+      message: { _, _, _ in [] },
+      inputs: { _, _ in [] }
+    )
+    let store = makeStore(
+      state(),
+      client: client,
+      uuid: UuidClient { UUID(uuidString: newID)! },
+      draftClient: self.client(recorder)
+    )
+
+    await store.send(.composer(.task))
+    await settle(store)
+    #expect(store.state.composer.failedSends.map(\.messageID) == ["old-id"])
+    await store.send(.composer(.retryFailed(messageID: "old-id")))
+    await settle(store)
+
+    #expect(calls.prompts.all.isEmpty)
+    #expect(store.state.composer.failedSends.map(\.messageID) == ["old-id"])
+    #expect(store.state.composer.problem == .couldNotSave)
+    #expect(await recorder.stored(key)?.outbound.map(\.messageID) == ["old-id"])
   }
 
   @Test("Send Now changes a queued inbox input to steering")
