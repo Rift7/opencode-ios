@@ -100,6 +100,6 @@ rows run only on hardware or a live V2 server.
 - Package: 553 tests — 203 server, 67 core, 75 app, 38 drawer, 70 session, 44 composer, 26 transcript,
   30 media.
 - UI: 70 tests, including 8 `MediaUITests`, 1 `MediaScreenshotUITests`, 3 `MediaPerformanceUITests`.
-  The correction full run passed 68/70; two P8 transcript timing journeys failed and passed on a focused
-  nine-test rerun (recorded, not fixed).
+  The final grouped run passed 70/70. An earlier run had two P8 transcript timing failures; the focused
+  nine-test rerun and the final run passed, and the earlier flake is recorded, not fixed.
 - Screenshots: 16 P10 light/dark captures under `docs/ios-migration/screens/`.

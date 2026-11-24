@@ -464,7 +464,9 @@ dock and queued sheet show fixture-only questions and messages.
 | Command | Result |
 | --- | --- |
 | `swift test --package-path ios/OpenCodeKit` (P10 corrections) | **553 tests pass**: 203 server, 67 core, 75 app, 38 drawer, 70 session, 44 composer, 26 transcript, 30 media; live and loopback opt-outs unchanged |
-| `ios/scripts/verify.sh` (P10 corrections) | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **68 of 70 UI tests passed** in the full run. Two P8 transcript journeys failed on timing (`testFollowingSurvivesTailGrowthAndBrowsingHoldsItsAnchor`, `testJumpToLatestAfterReadingOlderContent`); a focused rerun of all nine `TranscriptUITests` passed. The script stopped before package tests because UI failed; a separate full `swift test` run passed 553 tests. Neither rerun is claimed as a fix. |
+| `ios/scripts/verify.sh --skip-ui` (P10 corrections) | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build and `OpenCodeTests` pass; package tests pass |
+| `xcodebuild ... test` (P10 correction final UI) | **70 of 70 UI tests pass** in one grouped run on the final code. An earlier full run had two P8 transcript timing failures; the nine-test `TranscriptUITests` suite then passed, and this final run also passed. The earlier flake is recorded, not claimed fixed. |
+| `swift test --package-path ios/OpenCodeKit` (P10 corrections) | **553 tests pass** (separate from the UI invocation) |
 | `xcodebuild … -only-testing:OpenCodeUITests/MediaUITests` | 8 journeys pass: transcript image gallery, tool mosaic, server file preview, browser gate, paste preview/remove, pasted-image send, annotation return, Dynamic Type/dark, relaunch recovery |
 | `xcodebuild … -only-testing:OpenCodeUITests/MediaScreenshotUITests` | 16 light/dark screenshots captured: transcript media, image viewer, tool mosaic, file viewer, browser, composer attachment, attachment preview, annotation |
 | `xcodebuild … -only-testing:OpenCodeUITests/MediaPerformanceUITests` | media-heavy scroll trace, large-image open/close metric and typing-while-attached trace; results below |

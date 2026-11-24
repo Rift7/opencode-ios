@@ -336,9 +336,10 @@ Useful entry points:
 
 - `swift test --package-path ios/OpenCodeKit`: 553 tests (203 server, 67 core, 75 app, 38 drawer, 70 session,
   44 composer, 26 transcript, 30 media).
-- `ios/scripts/verify.sh`: app build; 68 of 70 UI tests passed in the correction full run. Two P8 transcript
-  timing journeys failed and passed when the nine-test `TranscriptUITests` suite was rerun. The script stopped
-  before package tests; a separate full `swift test` passed 553 tests. These are recorded, not fixed.
+- `ios/scripts/verify.sh --skip-ui`: app build and `OpenCodeTests` pass; package tests pass.
+- Final grouped UI run: 70/70 pass. An earlier run had two P8 transcript timing failures; the nine-test
+  `TranscriptUITests` suite then passed, and the final run passed too. The flake is recorded, not fixed.
+- `swift test --package-path ios/OpenCodeKit` (separate): 553 tests pass.
 - `MediaUITests`: eight journeys — image gallery, tool mosaic, server file preview, browser gate, paste
   preview/remove, pasted-image send, annotation return, Dynamic Type/dark and relaunch recovery.
 - `MediaScreenshotUITests`: 16 light/dark captures in `docs/ios-migration/screens/p10-*`.
