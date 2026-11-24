@@ -46,6 +46,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>OpenCode connects to OpenCode servers running on your local network.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Take a photo to attach it to a message.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

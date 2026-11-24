@@ -1,5 +1,8 @@
 import ComposableArchitecture
+import CoreGraphics
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 import OpenCodeComposer
 import OpenCodeCore
 import OpenCodeServer
@@ -222,6 +225,7 @@ import OpenCodeServer
           if mode.hasPrefix("connected-composer") {
             return PendingRequests()
           }
+          if mode == "connected-media" { return PendingRequests() }
           let wantsForm = mode == "connected-form"
           var result = PendingRequests()
           if wantsForm {
@@ -285,6 +289,7 @@ import OpenCodeServer
           if mode.hasPrefix("connected-composer") {
             return await composer.pendingInputs()
           }
+          if mode == "connected-media" { return [] }
           return [PendingInput(id: "input-alpha", text: "Also check the logs.", delivery: .steer)]
         },
         setPendingInputDelivery: { _, _, id, delivery in
@@ -327,6 +332,23 @@ import OpenCodeServer
         },
         message: { _, sessionID, messageID in
           await composer.message(sessionID: sessionID, messageID: messageID)
+        },
+        mediaBlob: { _, _ in syntheticImageData() },
+        uploadFile: { _, _, _, name, uploadID, progress in
+          progress(4)
+          return "/tmp/uploads/\(uploadID)/\(name)"
+        },
+        listDirectory: { _, path in
+          DirectoryListing(
+            directory: path ?? "/work/opencode",
+            entries: [
+              DirectoryEntry(path: "Sources", type: "directory"),
+              DirectoryEntry(path: "README.md", type: "file"),
+            ]
+          )
+        },
+        readFile: { _, _, path, _ in
+          Data("// \(path)\nlet fixtureValue = 1\n".utf8)
         },
         sendPrompt: { _, sessionID, body in
           try await composer.send(sessionID: sessionID, body: body)
@@ -449,6 +471,30 @@ import OpenCodeServer
         )
       }
       switch mode {
+      case "connected-media":
+        return TranscriptPage(items: mediaTranscriptItems())
+      case "connected-media-long":
+        return TranscriptPage(items: mediaHeavyTranscriptItems(count: 30))
+      case "connected-media-large":
+        return TranscriptPage(
+          items: [
+            .userText(id: "large-user", text: "Open the original.", source: nil, quotes: []),
+            .userImages(
+              id: "large-images",
+              images: [
+                TranscriptImage(
+                  id: "large-image",
+                  data: syntheticImageData(width: 3_000, height: 2_000),
+                  name: "Original.png",
+                  mime: "image/png",
+                  byteCount: 240_000,
+                  pixelWidth: 3_000,
+                  pixelHeight: 2_000
+                )
+              ]
+            ),
+          ]
+        )
       case "connected-composer-long":
         return TranscriptPage(items: longTranscriptItems(count: 600))
       case "connected-composer-stream":
@@ -485,6 +531,145 @@ import OpenCodeServer
       let all = longTranscriptItems(count: 200)
       let older = Array(all.dropLast(30))
       return TranscriptPage(items: older, next: nil)
+    }
+
+    nonisolated static var browserFixtureURL: String {
+      ProcessInfo.processInfo.environment["OPENCODE_UI_TEST_BROWSER_URL"]
+        ?? "https://example.invalid/docs"
+    }
+
+    nonisolated static func mediaHeavyTranscriptItems(count: Int) -> [TranscriptItem] {
+      var items: [TranscriptItem] = []
+      for index in 0..<count {
+        let first = TranscriptImage(
+          id: "heavy-\(index)-a",
+          data: syntheticImageData(tint: Double(index % 8) / 10 + 0.1),
+          name: "Frame \(index).png",
+          mime: "image/png",
+          pixelWidth: 320,
+          pixelHeight: 200
+        )
+        let second = TranscriptImage(
+          id: "heavy-\(index)-b",
+          data: syntheticImageData(tint: 0.8),
+          name: "Frame \(index)b.png",
+          mime: "image/png",
+          pixelWidth: 200,
+          pixelHeight: 320
+        )
+        items.append(.userText(id: "heavy-user-\(index)", text: "Media reply \(index)", source: nil, quotes: []))
+        items.append(.userImages(id: "heavy-images-\(index)", images: [first, second]))
+        items.append(
+          .assistantMarkdown(
+            id: "heavy-reply-\(index)",
+            text: "Frame \(index) reviewed. The mosaic keeps its shape while the gallery opens.",
+            inProgress: false
+          )
+        )
+      }
+      return items
+    }
+
+    nonisolated static func mediaTranscriptItems() -> [TranscriptItem] {
+      let first = TranscriptImage(
+        id: "media-image-1",
+        data: syntheticImageData(),
+        name: "Chart.png",
+        mime: "image/png",
+        byteCount: 2_048,
+        pixelWidth: 320,
+        pixelHeight: 200
+      )
+      let second = TranscriptImage(
+        id: "media-image-2",
+        data: syntheticImageData(tint: 0.9),
+        name: "Photo.png",
+        mime: "image/png",
+        byteCount: 2_048,
+        pixelWidth: 200,
+        pixelHeight: 320
+      )
+      return [
+        .userText(id: "media-user", text: "Look at these attachments.", source: nil, quotes: []),
+        .userImages(id: "media-user-images", images: [first, second]),
+        .assistantMarkdown(
+          id: "media-reply",
+          text: "Here is the preview. [Open the docs](\(browserFixtureURL))",
+          inProgress: false
+        ),
+        .tool(
+          id: "media-tool-images",
+          call: TranscriptToolCall(
+            callID: "tool-images",
+            messageID: "media-reply",
+            name: "screenshot",
+            status: .completed,
+            output: ["Captured two frames"],
+            images: [
+              TranscriptImage(
+                id: "tool-image-1",
+                data: syntheticImageData(tint: 0.4),
+                name: "Frame 1.png",
+                mime: "image/png",
+                pixelWidth: 240,
+                pixelHeight: 180
+              ),
+              TranscriptImage(
+                id: "tool-image-2",
+                data: syntheticImageData(tint: 0.7),
+                name: "Frame 2.png",
+                mime: "image/png",
+                pixelWidth: 240,
+                pixelHeight: 180
+              ),
+            ]
+          )
+        ),
+        .userFiles(
+          id: "media-user-files",
+          files: [
+            TranscriptFile(
+              id: "media-file-1",
+              name: "main.swift",
+              mime: "text/plain",
+              path: "Sources/main.swift",
+              byteCount: 24
+            )
+          ]
+        ),
+      ]
+    }
+
+    nonisolated static func syntheticImageData(tint: Double = 0.2) -> Data {
+      syntheticImageData(width: 320, height: 200, tint: tint)
+    }
+
+    nonisolated static func syntheticImageData(width: Int, height: Int, tint: Double = 0.2) -> Data {
+      let space = CGColorSpaceCreateDeviceRGB()
+      guard let context = CGContext(
+        data: nil,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: space,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+      ) else { return Data() }
+      context.setFillColor(red: tint, green: 0.45, blue: 0.85, alpha: 1)
+      context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+      context.setFillColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
+      context.fill(CGRect(x: 24, y: 24, width: 120, height: 80))
+      guard let image = context.makeImage() else { return Data() }
+      let data = NSMutableData()
+      guard let destination = CGImageDestinationCreateWithData(
+        data,
+        UTType.png.identifier as CFString,
+        1,
+        nil
+      ) else { return Data() }
+      CGImageDestinationAddImage(destination, image, nil)
+      guard CGImageDestinationFinalize(destination) else { return Data() }
+      return data as Data
     }
 
     nonisolated static func richTranscriptItems() -> [TranscriptItem] {

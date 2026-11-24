@@ -34,7 +34,9 @@ The Android tree is not modified by this work.
 - `ios-transcript` — Phase 8: transcript rows, Markdown and scrolling. Reviewed head `5ea6ea65`; merged
   as `2823c06e` (PR #7), with an identical tree `1147dca8`.
 - `ios-composer` — Phase 9: composer, drafts, sends, queue, request dock and quotes. Branched from
-  `origin/ios` `2823c06e`; pushed to the fork with a draft PR into `ios`.
+  `origin/ios` `2823c06e`; merged as `e42cb455` (PR #8), tree `62d44987` equals corrected `1fd90423`.
+- `ios-media` — Phase 10: media, files, viewers, annotation, browser and rendering fallback. Branched from
+  `origin/ios` `e42cb455`; pushed to the fork with a draft PR into `ios`.
 - Later task branches from `ios` are pushed to the fork and opened as **draft** PRs into `ios`. Nothing is
   merged, released or distributed from here.
 
@@ -105,6 +107,24 @@ The fixture modes `connected-composer`, `connected-composer-fail`, `connected-co
 `connected-composer-stream` are synthetic. `-uiTestResetDrafts` clears the isolated draft file before a
 journey; a relaunch check launches again without it.
 
+P10 surfaces:
+
+```sh
+xcodebuild -project ios/OpenCode.xcodeproj -scheme OpenCode \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro Max' -skipMacroValidation \
+  -only-testing:OpenCodeUITests/MediaUITests test
+xcodebuild -project ios/OpenCode.xcodeproj -scheme OpenCode \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro Max' -skipMacroValidation \
+  -only-testing:OpenCodeUITests/MediaScreenshotUITests test
+xcodebuild -project ios/OpenCode.xcodeproj -scheme OpenCode \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro Max' -skipMacroValidation \
+  -only-testing:OpenCodeUITests/MediaPerformanceUITests test
+```
+
+`connected-media`, `connected-media-long` and `connected-media-large` are synthetic and open no socket. The
+in-app browser gate uses `-uiTestInAppBrowser`; `OPENCODE_UI_TEST_CLIPBOARD_IMAGE=1` puts a synthetic image on
+the pasteboard before launch. Both are DEBUG-only.
+
 ## Where tests run
 
 | Suite | Location | Runner |
@@ -116,6 +136,7 @@ journey; a relaunch check launches again without it.
 | App reducer, connection child, launch scenarios, store semantics | `ios/OpenCodeKit/Tests/OpenCodeAppTests` | `swift test` on the host |
 | Composer reducer, drafts, send eligibility | `ios/OpenCodeKit/Tests/OpenCodeComposerTests` | `swift test` on the host |
 | Composer in the session (sends, inbox, dock, quote) | `ios/OpenCodeKit/Tests/OpenCodeSessionTests/ComposerSessionTests.swift` | `swift test` on the host |
+| Media imports, caches, browser policy, file viewer, annotation, composer attachments | `ios/OpenCodeKit/Tests/{OpenCodeMediaTests,OpenCodeComposerTests/ComposerAttachmentTests,OpenCodeServerTests/MediaClientTests,OpenCodeSessionTests/SessionMediaTests}` | `swift test` on the host |
 | Prompt/create/wait routes and bounded wait loop | `ios/OpenCodeKit/Tests/OpenCodeServerTests/{ComposerClientTests,SessionWaitLoopTests}.swift` | `swift test` on the host |
 | Platform checks (UserDefaults, endpoint encoding, launch mapping) | `ios/OpenCodeTests` | `xcodebuild test` on the simulator |
 | Launch, connection, pairing and failure UI | `ios/OpenCodeUITests` | `xcodebuild test` on the simulator |
@@ -156,7 +177,8 @@ message or file content.
   successful authoritative transcript with no new overflow clears it. One immediate attempt plus one delayed
   retry, then a recoverable failure. Do not silently drop, truncate, or raise the buffer without changing that
   policy and its tests.
-- Media, file opening, math/Mermaid typesetting and composer quote actions belong to P9/P10.
+- Media, file opening and the browser are P10 (see the Media section below); math/Mermaid keep the source
+  fallback. Composer quote actions are P9.
 
 ## Composer (P9)
 
@@ -211,6 +233,42 @@ Composer surfaces: `ios/OpenCode/Composer/*`, `OpenCodeKit/Sources/OpenCodeCompo
 parts of `OpenCodeKit/Sources/OpenCodeSession`, and the Home New Session entry. Screenshots:
 `docs/ios-migration/screens/p9-{composer,composer-quote,quote,request-dock,queued}[-dark].png`.
 
+## Media (P10)
+
+- Attachments are app-owned staged files under Application Support, referenced by `storedName` in the P9
+  draft/failed/outbound records. Never persist a picker or security-scoped URL. The file store opens and closes
+  the scope around its copy. Writes stage under `.staging` and move into the final directory only after
+  completion; launch cleanup deletes only that namespace, never a filename ending in `.tmp`/`.partial`.
+- A staged source is released only after the owning record is durably saved and no current, parked, failed,
+  outbound, persisted or leased reference needs it. Upload completion, removal and accepted sends queue a
+  release; a failed save or a viewer lease keeps the file. The 256 MiB media disk cache and 48/64 MiB memory
+  tiers are Caches only and are authentication-scoped.
+- Uploads carry the originating server/key, attachment ID and monotonic attempt. A hidden completion merges
+  into the parked/persisted draft without replacing newer text; an old attempt cannot overwrite a retry; a
+  persistence failure is retained and retried when the owner is visible. The remote upload path is
+  `<tmp>/uploads/<attachmentID>/<name>` and is stable across retries; the protocol has no resume. An
+  interrupted upload restores as `.failed(.uploadInterrupted)` with its source.
+- The prompt carries inline images/pastes as `data:` file parts, uploaded files as path reference lines and
+  `metadata.attachments`, and quotes as `metadata.comments`.
+- Viewers are native. Remote video/audio/PDF is downloaded through the authenticated client into a Caches
+  scratch file before playback; closing a gallery does not mutate transcript or composer. Images decode
+  off-main into a bounded cache. A tool mosaic uses the same gallery as user images.
+- Server file paths are remote identifiers: `AgentFilePath` produces `(location, relativePath)`, `fs/read` is
+  bounded to 2 MiB for previews, and code highlighting is capped at 64 KiB/1,500 lines/4 KiB lines.
+- The browser is Experimental, off by default, with a non-persistent store, no script bridge, no file access,
+  no server credentials and public pages only. Downloads, private hosts and other schemes are handed to the
+  system. A failed load shows Try Again. UI tests enable a DEBUG loopback page with
+  `-uiTestInAppBrowser -uiTestBrowserLoopback`; production still refuses loopback. Ask/page context is
+  deferred to P14.
+- Math remains source in a code band and Mermaid an ordinary fenced block (D-87). Cross-block selection
+  remains per-block + reply Copy (D-88).
+- Background subagent stop interrupts an active child and cancels its subtree's jobs. Shell output has Copy
+  and Share. The share extension/App Group remains P12.
+
+Media surfaces: `ios/OpenCode/Media/*`, `ios/OpenCode/Composer/{ComposerViews,CameraCaptureSheet}.swift`,
+`OpenCodeKit/Sources/OpenCodeMedia/*`, and the viewer/file/browser parts of `OpenCodeSession`. Screenshots:
+`docs/ios-migration/screens/p10-*`.
+
 ## Test conventions
 
 - Swift Testing for reducers, dependency clients, transport decoding, persistence and formatting.
@@ -222,10 +280,10 @@ parts of `OpenCodeKit/Sources/OpenCodeSession`, and the Home New Session entry. 
 
 ## Where the work stands
 
-`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P8 are merged into `ios`
-(P8 as `2823c06e`). P9 is implemented on `ios-composer` (draft PR into `ios`). The transcript's state
+`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P9 are merged into `ios`
+(P9 as `e42cb455`). P10 is implemented on `ios-media` (draft PR into `ios`). The transcript's state
 boundaries are P7's refresh identity plus P8's per-session `TranscriptState`; the composer sits above both and
-borrows the same settlement read. Media is P10.
+borrows the same settlement read; media viewers and the browser are `@Presents` children of the session.
 
 What P6 added, in one paragraph: `HomeFeature` replaces the project-only connected destination with the
 authenticated Home — projects, the drawer's pinned/recent session lists, 50-session paging, local and
@@ -259,6 +317,10 @@ Useful entry points:
 | Composer native input, dock, answer bar, queued sheet, quote selection | `ios/OpenCode/Composer/{ComposerTextInput,ComposerViews}.swift` |
 | Prompt/create/wait/cancel routes and the wait loop | `OpenCodeKit/Sources/OpenCodeServer/Client/PromptOperations.swift`, `Retry/SessionWaitLoop.swift` |
 | Session screen, subagents, request sheet, background/output sheets | `ios/OpenCode/Session/SessionView.swift` |
+| Media staging, import, blob cache, code preview, viewers, browser, annotation | `OpenCodeKit/Sources/OpenCodeMedia/*` |
+| Media SwiftUI: viewer, file viewer, browser, annotation | `ios/OpenCode/Media/*` |
+| Composer attachments, + menu, camera | `ios/OpenCode/Composer/{ComposerViews,CameraCaptureSheet}.swift` |
+| Media upload/blob/fs routes and streaming upload transport | `OpenCodeServer/Client/MediaOperations.swift`, `OpenCodeCore/Transport/URLSessionTransport.swift` |
 | App ↔ Home ↔ Session ownership | `OpenCodeKit/Sources/OpenCodeApp/AppFeature.swift` |
 | Request/family/shell wire models | `OpenCodeKit/Sources/OpenCodeServer/Models/{RequestModels,SessionModels}.swift` |
 | New client operations | `OpenCodeKit/Sources/OpenCodeServer/Client/SessionOperations.swift` |
@@ -269,6 +331,23 @@ Useful entry points:
 | Reviewed boundary regressions | `OpenCodeKit/Tests/OpenCodeAppTests/AppFeatureTests.swift` (`sessionEventForwarding`), `OpenCodeSessionTests/SessionFeatureTests.swift` (family identity, uncached load, shell poll/range/drain) |
 | Screenshots and scroll trace | `ios/OpenCodeUITests/{HomeScreenshotUITests,SessionScreenshotUITests,HomeScrollTraceUITests}.swift` |
 | Debug frame probe | `ios/OpenCode/Drawer/ScrollFrameProbe.swift` |
+
+### P10 evidence
+
+- `swift test --package-path ios/OpenCodeKit`: 553 tests (203 server, 67 core, 75 app, 38 drawer, 70 session,
+  44 composer, 26 transcript, 30 media).
+- `ios/scripts/verify.sh --skip-ui`: app build and `OpenCodeTests` pass; package tests pass.
+- Final grouped UI run: 70/70 pass. An earlier run had two P8 transcript timing failures; the nine-test
+  `TranscriptUITests` suite then passed, and the final run passed too. The flake is recorded, not fixed.
+- `swift test --package-path ios/OpenCodeKit` (separate): 553 tests pass.
+- `MediaUITests`: eight journeys — image gallery, tool mosaic, server file preview, browser gate, paste
+  preview/remove, pasted-image send, annotation return, Dynamic Type/dark and relaunch recovery.
+- `MediaScreenshotUITests`: 16 light/dark captures in `docs/ios-migration/screens/p10-*`.
+- `MediaPerformanceUITests` (corrections): media-heavy scroll 129–132 frames, p50 16.7 ms, p95 34.6–35.8 ms,
+  peak 29.7 MB; large image open/close 5.06 s loop average; typing with an attachment 6.5 ms average /
+  32.0 ms max.
+- Deferred: foldered server-file browser and picker videos (P11/P14), Ask/page context (P14), math/Mermaid
+  and cross-block selection (P14), physical camera/permissions/playback/sharing (P14).
 
 ### P9 evidence
 

@@ -41,6 +41,8 @@ targets:
       - package: OpenCodeKit
         product: OpenCodeTranscript
       - package: OpenCodeKit
+        product: OpenCodeMedia
+      - package: OpenCodeKit
         product: OpenCodeComposer
       - package: ComposableArchitecture
         product: ComposableArchitecture

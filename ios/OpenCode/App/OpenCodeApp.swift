@@ -30,7 +30,7 @@ struct OpenCodeApp: App {
           $0.networkPath = UITestFixture.path
           $0.uuidClient = UuidClient.incrementing()
           $0.dateClient = DateClient { Date(timeIntervalSince1970: 1_700_000_000) }
-          $0.pasteboard = PasteboardClient(string: { nil })
+          $0.pasteboard = .liveValue
           $0.composerDrafts = UITestFixture.draftClient()
         } operation: {
           Store(initialState: configuration.initialState) { AppFeature() }
@@ -46,6 +46,11 @@ struct OpenCodeApp: App {
     #if DEBUG
       if let clipboard = configuration.uiTestClipboard {
         UIPasteboard.general.string = clipboard
+      }
+      if ProcessInfo.processInfo.environment["OPENCODE_UI_TEST_CLIPBOARD_IMAGE"] == "1",
+        let image = UIImage(data: UITestFixture.syntheticImageData())
+      {
+        UIPasteboard.general.image = image
       }
       keychainSelfTest = KeychainSelfTest.runIfRequested()
       savedServerProbe = SavedServerProbe.runIfRequested()

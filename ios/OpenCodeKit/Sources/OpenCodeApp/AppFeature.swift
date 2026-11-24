@@ -3,6 +3,7 @@ import Foundation
 import OpenCodeComposer
 import OpenCodeCore
 import OpenCodeDrawer
+import OpenCodeMedia
 import OpenCodeServer
 import OpenCodeSession
 
@@ -44,6 +45,8 @@ public enum ConnectionFailure: Equatable, Sendable {
     case .unsupported:
       return .unsupported
     case .undecodable(let feature):
+      return .malformed(feature: feature)
+    case .responseTooLarge(let feature):
       return .malformed(feature: feature)
     case .incompatibleAPI(let feature):
       return .incompatibleAPI(feature: feature)
@@ -816,6 +819,7 @@ public struct AppFeature {
   public enum Action: Equatable, Sendable {
     case task
     case restored(AppRestoreResult)
+    case memoryWarning
     case scenePhaseChanged(isActive: Bool)
     case networkPathChanged(NetworkPath)
     case restoreRetried
@@ -871,6 +875,10 @@ public struct AppFeature {
   @Dependency(\.pasteboard) private var pasteboard
   @Dependency(\.uuidClient) private var uuid
   @Dependency(\.composerDrafts) private var composerDrafts
+  @Dependency(\.mediaReferences) private var mediaReferences
+  @Dependency(\.mediaImages) private var mediaImages
+  @Dependency(\.mediaScratch) private var mediaScratch
+  @Dependency(\.mediaFiles) private var mediaFiles
 
   public init() {}
 
@@ -881,7 +889,21 @@ public struct AppFeature {
         guard !state.didStart else { return .none }
         state.didStart = true
         if state.isPinnedForUITest { return .none }
-        return .merge(restoreEffect(), pathEffect(), retryRetainedEffect(state: state))
+        let scratch = mediaScratch
+        let files = mediaFiles
+        let cleanup = Effect<Action>.run { _ in
+          await scratch.store.cleanup()
+          await files.store.cleanupTemporaryArtifacts()
+        }
+        return .merge(restoreEffect(), pathEffect(), retryRetainedEffect(state: state), cleanup)
+
+      case .memoryWarning:
+        let references = mediaReferences
+        let images = mediaImages
+        return .run { _ in
+          await images.purged()
+          await references.trim()
+        }
 
       case .restored(let result):
         switch result {

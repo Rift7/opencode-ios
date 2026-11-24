@@ -18,7 +18,7 @@ apart:
 | `P-1` | Typography and colour system | D-1 (typography), D-2 (colour) | — |
 | `P-2` | Transcript motion | — | **open** |
 | `P-3` | Composer text input | D-64 (`UITextView` bridge) | — |
-| `P-4` | Photo picking | — | **open** |
+| `P-4` | Photo picking | D-78 (`PhotosPicker`, no in-app photo sheet) | — |
 | `P-5` | Glass | — | **open** |
 | `P-6` | Branch location | D-3 | — |
 | `P-7` | Bundle id, team, App Group, Keychain service | D-8 (historical values are evidence), D-15 (service configurable), D-32 (service derives from bundle id) | owner-supplied bundle id/team before distribution |
@@ -847,8 +847,8 @@ surface. This keeps P9's composer and P10's media above the transcript rather th
 
 - Files: `OpenCodeKit/Sources/OpenCodeTranscript/*`, `OpenCodeKit/Sources/OpenCodeSession/TranscriptState.swift`,
   `ios/OpenCode/Transcript/*`.
-- P10 owns image decoding, viewers, file opening, the browser and richer math/Mermaid. P8's placeholders and
-  link cards are the routing boundary, not a claim that media is complete.
+- P10 resolved image decoding, viewers, file opening and the browser (D-78–D-86); math/Mermaid keep the
+  source fallback (D-87). P8's placeholders and link cards were the routing boundary.
 
 ### D-64 The composer's text input is a focused UITextView bridge
 `P-3` is resolved with `ios/OpenCode/Composer/ComposerTextInput.swift`, a small `UIViewRepresentable` around
@@ -980,3 +980,180 @@ When the save completes, the composer compares the current snapshot with the sav
 it saves that content and only then reports a saved completion. A failure or over-limit result keeps the session
 open. `AppFeature` still fences the completion by request ID and session identity. The debounced save is
 cancelled while a flush is active, and a later flush token invalidates an earlier completion.
+
+### D-78 P-4 is resolved with the system photo picker, and the camera is a system capture bridge
+`PhotosPicker` is the only photo surface; there is no in-app photo sheet, morph or send flight. The camera
+button opens `UIImagePickerController` in `.camera` mode, which owns permission, unavailable-device states and
+the capture UI. This is a deliberate native adaptation of the audited in-app camera (lenses, pinch zoom,
+AE/AF lock and its own shutter are not reproduced). The composer limits a pick to eight images and four
+pastes; a picked video is not requested, while a video attached through Files uploads and plays.
+
+- Replaces: the open plan question `P-4`.
+- Evidence: `ComposerViews.swift`, `CameraCaptureSheet.swift`, `ComposerFeature.importSources`.
+- Not claimed: pixel or gesture parity with the recovered camera sheet.
+
+### D-79 Attachments are app-owned staged files, never picker URLs
+An import copies bytes into `Application Support/ComposerAttachments/<hashed server>/<attachmentID>/<name>`.
+Drafts store only `storedName` plus metadata and transfer state; a security-scoped or picker URL is used for
+the copy and then released. Writes are atomic and protected; a failed write removes only its new folder.
+Source bounds are 20 MB for an image (re-encoded to 1568 px JPEG 0.8 with EXIF removed) and 100 MB for a
+file, with MIME determined from the actual name, declared type and first 4 KiB.
+
+- Why Application Support: a draft's attachment is not cache and must survive a cache purge.
+- Writes use an app-controlled `ComposerAttachments/.staging` directory and move into the final
+  attachment folder only after completion. Launch cleanup deletes only that namespace; an imported
+  `report.tmp` or `capture.partial` is a final file and is never inferred disposable from its name.
+- Gate: `MediaImportTests`, `MediaAttachmentTests.{abandonedCleanup,importedSuffixesSurviveScratchCleanup,cleanupKeepsRecordsAndLeases}`,
+  ownership tests in `ComposerAttachmentTests`.
+
+### D-80 Uploads discover the writable temp path once and retry the same path
+`POST /api/experimental/fs/write` is reached only after `/api/info` reports `paths.tmp`. The request streams
+the staged file through `URLSession.upload(fromFile:)` with the request's own credentials, reports throttled
+progress (about 1% or 64 KiB steps), and reuses one absolute `<tmp>/uploads/<uuid>/<name>` path across retries,
+so a retry overwrites rather than duplicates. A 404 without `Location` is `.unsupported`.
+
+The protocol exposes no resumable upload session: a tab termination or cancelled request is not resumed. The
+source copy is retained and the restored attachment becomes `.failed(.uploadInterrupted)` with Retry. A file
+already uploaded keeps its server path and its local copy is released.
+
+- Path identity is the attachment ID: `<tmp>/uploads/<uploadID>/<name>`. Every retry and every
+  restart retry uses that same ID; a retry overwrites rather than creating a second server file.
+- Ambiguity: the request may have reached the server before a failure. Retrying the same path is idempotent;
+  no prompt is issued until every attachment is ready. No resumable session exists.
+- An upload operation carries its originating server/key, attachment and monotonic attempt. A hidden
+  completion merges into the parked/persisted draft with newer-content preservation; an older attempt
+  arriving after a retry is ignored. A hidden merge failure is surfaced and retried when the owner is
+  visible; the source is retained meanwhile.
+- Gate: `MediaClientTests.uploadRequest`, `uploadUnsupported`; `ComposerAttachmentTests.{uploadFailureAndRetry,
+  removeDuringUpload,interruptedUploadRestoresAsFailure,uploadCompletesWhileAnotherDraftIsVisible,
+  oldCompletionAfterRetryIsIgnored,hiddenUploadPersistenceFailureRetries}`.
+- Unverified: the real upload delegate path against a loopback server, because the test server reads only
+  what arrives with the headers.
+
+### D-81 Media blobs use bounded memory and disk tiers with per-server 404s
+`MediaReferenceCache` keeps at most 48 MiB/64 entries in memory and 256 MiB of `<hash>.blob` files on disk,
+trimming oldest finished blobs after a write and never charging or deleting an in-flight `.partial`. A 404 is
+remembered per server persistence ID in memory only. Concurrent loads of one blob coalesce. A memory warning
+drops the memory tier and decoded images, then trims disk; staged attachment files are outside both caches.
+
+- Source: current `dev` `MediaReferenceClient.kt` and the adopted `media-cache-limit` branch behaviour
+  (256 MiB disk cap, finished-blob trim, off-main work).
+- Authentication scope: memory keys and disk paths include a SHA-256 token over the server persistence
+  identity and credentials; no raw credential is stored in a filename or log. Changing credentials changes
+  the scope, so old bytes are not read under the new scope; old files remain until disk trim.
+- Hash validation: fetched bytes and disk-loaded bytes must match the requested lowercase SHA-256. A corrupt
+  disk entry is removed and refetched; a mismatched fetch is rejected and never cached. Cache-only and
+  decoded-image keys carry the same scope.
+- Gate: `MediaReferenceCacheTests` (coalescing, scope isolation, credential change, mismatch, corrupt disk,
+  trim), `CodePreview`/decode bounds.
+
+### D-82 Viewers are native and remote playback is downloaded first
+Images are decoded off the main actor into a bounded cache and drawn in a UIScrollView zoom/pan surface; a
+gallery is one SwiftUI page view. Videos/audio and PDFs are downloaded through the authenticated client into a
+Caches scratch file before AVPlayer/PDFView sees them, so no server credential is handed to a media framework
+and no external URL is fetched. Scratch files are removed on the next launch.
+
+- Opening a viewer never mutates the transcript or the composer; it is a `@Presents` child of the session.
+- An inline page source compares by length, not content, so an image's megabytes are not hashed on every
+  session action; identity is the transcript image ID.
+- Gate: `MediaUITests`, `SessionMediaTests`.
+- Not claimed: the audited viewer's flight, PIP, per-page audio chrome or hand-off into the composer.
+
+### D-83 Server file paths stay remote and previews are bounded
+A file card resolves to `(location, relativePath)` and calls `GET /api/fs/read/{relative}`; a path is never
+passed to `FileManager`. Absolute paths outside the session folder use their parent as the location, and `~`
+is not resolved. Text previews read at most 2 MiB, highlight at most 64 KiB/1,500 lines with 4 KiB lines, and
+fall back to plain numbered lines beyond that. PDFs and media take the authenticated download path.
+
+- `GET /api/fs/list` is implemented and tested but has no session folder-browser screen in P10; file
+  autocomplete owns that surface in P11.
+- Gate: `AgentFilePath` tests, `FileViewerTests`, server-file UI journey.
+
+### D-84 Annotation produces a new attachment and never edits the original
+Drawing uses normalized strokes, six inks and an undo stack. Save flattens at the image-import bounds (JPEG
+0.8, long edge ≤1568) off the main actor and adds the result to the same composer through the normal image
+importer. Cancel or discard leaves the original attachment and draft unchanged. The editor is full-screen and
+uses the system sheet dismissal for cancel; there is no bitmap flight.
+
+- Gate: `MediaRenderingTests.annotationRenderer`; `MediaUITests.testAnnotationReturnsADrawingToTheComposer`.
+
+### D-85 The in-app browser is Experimental, public-only and bounded
+WKWebView is used only as a page surface, never as the app shell. It is off by default (`in-app-browser`,
+Settings owns the switch in P11); a DEBUG launch argument enables it for UI tests, and a second DEBUG argument
+allows a loopback fixture page served by the test runner. Each visit uses a
+non-persistent data store, no script-message bridge, default file access off, and no server object or auth
+headers. Navigation is allowed only for public `http(s)` pages; private/loopback/tailnet/IP/credentialed or
+signed links are handed to the system, pairing links are never loaded, and downloads or unshowable responses
+open externally. A failed load shows a message and Try Again.
+
+- Deferred: Ask/page-context prompts and browser page sharing; both need the page-context prompt contract.
+- Gate: `BrowserPolicyTests`, `SessionMediaTests.browserGate`, `MediaUITests.testBrowserGateOpensOnlyWithTheExperiment`.
+
+### D-86 Transcript media identity is the existing row/part identity
+A user image row and a tool mosaic use the transcript's stable item and part IDs; a gallery page is keyed by
+its image ID. New transcript rows arriving during viewing do not replace the viewer. A tool mosaic opens the
+same gallery as a user image group.
+
+- Gate: `SessionMediaTests.imageGalleryPresentation`; UI gallery/mosaic journeys.
+
+### D-87 Math and Mermaid keep the source fallback
+No maintained math or Mermaid renderer was adopted. Math remains the source in a code band; Mermaid remains
+an ordinary fenced code block. This is the phase's explicit final fallback: a renderer would add either a
+native math library or a WebKit/JS renderer with offline, licence and untrusted-content obligations that are
+not justified by the reproduced behaviour. The blocks are not labelled as rendered output.
+
+- Owner if revisited: P14, with an offline/licence/untrusted-content evaluation and a pinned dependency.
+
+### D-88 Cross-block selection remains deferred
+Selecting one reply as a single document is not rebuilt. Native per-block selection and the reply Copy action
+remain, and quote handoff stays one block. A later bridge must preserve native handles, accessibility and
+performance; building a custom text engine is not justified now.
+
+- Owner: P14. Acceptance: one reply selects across blocks with native handles and becomes one quote without
+  losing the composer draft.
+
+### D-89 Background subagent stop and shell copy/share are P10 surfaces
+Stop on a subagent interrupts the child when the family marks it active and cancels every running job owned by
+that child or a descendant; the stopping set is optimistic and a failure keeps rows and surfaces a problem.
+Shell output gains Copy and Share in its sheet, using the existing pasteboard dependency and native share
+presentation; the share extension/App Group is still P12.
+
+### D-90 Memory pressure and launch cleanup are explicit
+A memory warning clears decoded images and the media memory tier, then trims the disk tier. App launch clears
+the viewer scratch directory and staging `.partial`/`.tmp` files. A draft's staged folders are not swept by a
+cache trim; sweeping folders no draft/failed/outbound record names is deferred to P14.
+
+### D-91 Staged sources are released only after a durable save
+`ComposerFeature.pendingReleases` is a set of staged names whose owner no longer needs the local file in
+memory. A release is attempted only after `.saveFinished(.saved)` and only when the name is absent from the
+current draft, every parked draft, failed sends, outbound records, upload operations and the persisted
+draft store (which includes other sessions and failed/outbound records), and when no `MediaFileStore` lease
+holds it. A failed save, an unreadable draft store, a persisted reference or a lease keeps the file.
+
+- Upload success, accepted-send cleanup and removal only queue a release; none deletes immediately.
+- A hidden upload is merged with `ComposerDraftStore.applyAttachmentTransfer`, which preserves newer text
+  and quotes; a merge failure is kept in `deferredUploads` and retried when the owning key is visible.
+- Leases cover preview reads and annotation sources, so a viewer cannot lose bytes during cleanup.
+- Gate: storage-backed tests for failed save, restart, failed removal, outbound ownership and viewer lease.
+
+### D-92 Bounded downloads consume the stream, not a completed body
+Media blobs and server file reads use `HTTPTransport.open` and a cumulative received-byte bound. A declared
+`Content-Length` over the bound is rejected before reading the body; otherwise every chunk is counted and the
+stream is closed immediately on overflow with `OpenCodeClientError.responseTooLarge(feature:)`. A missing or
+understated length cannot bypass the cumulative limit. Error bodies for status mapping are read only to a
+64 KiB prefix. Redirect and credential rules are the request's existing rules.
+
+- The media blob limit is injectable through `OpenCodeClient.live(mediaBlobLimit:)`; file reads pass their own
+  caller limit.
+- Gate: loopback tests for declared, chunked and understated bodies, connection close on overflow, and a
+  within-bound body.
+
+### D-93 Cache scope is authentication-bound, not hash-only
+Authenticated media is partitioned by `MediaCacheScope.token(for:)`: a SHA-256 over `persistenceID`,
+username and password, truncated for filenames. Memory keys, disk paths, negative 404 entries, coalescing
+keys and decoded-image keys use it. A credential change invalidates reads under the old scope without
+rewriting or exposing the credential. Content is still verified by SHA-256 before admission, so a server
+cannot substitute different bytes for a requested hash.
+
+- Gate: same-hash two-server isolation, second-scope mismatch, credential change, corrupt disk, fetch
+  mismatch, coalescing and normal disk hits.

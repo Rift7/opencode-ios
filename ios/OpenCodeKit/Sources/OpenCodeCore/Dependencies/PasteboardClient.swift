@@ -8,13 +8,21 @@ import Foundation
 public struct PasteboardClient: Sendable {
   public var string: @Sendable () -> String?
   public var setString: @Sendable (String) -> Void
+  /// Image data the person copied, as JPEG re-encodable sources. Empty when the clipboard holds text.
+  public var images: @Sendable () -> [Data]
+  /// File URLs the person copied. A URL is only read after an explicit paste action.
+  public var fileURLs: @Sendable () -> [URL]
 
   public init(
     string: @escaping @Sendable () -> String?,
-    setString: @escaping @Sendable (String) -> Void = { _ in }
+    setString: @escaping @Sendable (String) -> Void = { _ in },
+    images: @escaping @Sendable () -> [Data] = { [] },
+    fileURLs: @escaping @Sendable () -> [URL] = { [] }
   ) {
     self.string = string
     self.setString = setString
+    self.images = images
+    self.fileURLs = fileURLs
   }
 }
 
@@ -23,7 +31,16 @@ extension PasteboardClient: DependencyKey {
     #if canImport(UIKit)
       PasteboardClient(
         string: { UIPasteboard.general.string },
-        setString: { UIPasteboard.general.string = $0 }
+        setString: { UIPasteboard.general.string = $0 },
+        images: {
+          guard UIPasteboard.general.hasImages else { return [] }
+          return (UIPasteboard.general.images ?? []).compactMap {
+            $0.jpegData(compressionQuality: 0.9)
+          }
+        },
+        fileURLs: {
+          (UIPasteboard.general.urls ?? []).filter(\.isFileURL)
+        }
       )
     #else
       .empty

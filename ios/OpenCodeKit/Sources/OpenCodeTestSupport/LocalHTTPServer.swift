@@ -24,6 +24,8 @@ public final class LocalHTTPServer: @unchecked Sendable {
 
   public enum Response: Sendable {
     case http(status: Int, headers: [String: String], body: Data)
+    /// A body whose declared Content-Length is independent of the bytes sent (for bound tests).
+    case declared(status: Int, headers: [String: String], contentLength: Int, body: Data)
     /// Chunked body, written with `intervalMilliseconds` between pieces, then the terminating chunk.
     case stream(headers: [String: String], chunks: [Data], intervalMilliseconds: Int)
     /// Accepts the request and never sends a status line or headers.
@@ -175,6 +177,11 @@ public final class LocalHTTPServer: @unchecked Sendable {
     switch response {
     case .http(let status, let headers, let body):
       writeHead(status: status, headers: headers, contentLength: body.count, on: connection)
+      connection.send(content: body, isComplete: true, completion: .contentProcessed { [weak self] _ in
+        self?.finish(connection)
+      })
+    case .declared(let status, let headers, let contentLength, let body):
+      writeHead(status: status, headers: headers, contentLength: contentLength, on: connection)
       connection.send(content: body, isComplete: true, completion: .contentProcessed { [weak self] _ in
         self?.finish(connection)
       })

@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import OpenCodeCore
+import OpenCodeMedia
 import OpenCodeServer
 import OpenCodeSession
 import OpenCodeTranscript
@@ -74,7 +75,9 @@ private struct TranscriptItemRow: View {
         onLink: { store.send(.transcriptLinkTapped($0)) }
       )
     case .userImages(_, let images):
-      UserImagesRow(images: images)
+      UserImagesRow(images: images, server: store.server) { index in
+        store.send(.transcriptImagesTapped(images, index))
+      }
     case .userFiles(_, let files):
       UserFilesRow(files: files) { store.send(.transcriptFileTapped($0)) }
     case .assistantMarkdown(_, let text, _):
@@ -244,36 +247,65 @@ private struct QuoteCard: View {
 
 private struct UserImagesRow: View {
   let images: [TranscriptImage]
+  let server: OpenCodeServer?
+  let onOpen: (Int) -> Void
 
   var body: some View {
     HStack {
       Spacer(minLength: OpenCodeSpacing.s24)
       LazyVGrid(
-        columns: Array(repeating: GridItem(.fixed(72), spacing: OpenCodeSpacing.s6), count: min(3, images.count)),
+        columns: Array(repeating: GridItem(.fixed(96), spacing: OpenCodeSpacing.s6), count: min(3, images.count)),
         spacing: OpenCodeSpacing.s6
       ) {
-        ForEach(images) { image in
-          VStack(spacing: OpenCodeSpacing.s2) {
-            Image(systemName: "photo")
-              .font(.title3)
-              .foregroundStyle(OpenCodeColors.color(.textWeak))
-            Text(image.name ?? AppCopy.text("transcript.image"))
-              .font(OpenCodeFonts.font(.caption2))
-              .lineLimit(1)
+        ForEach(Array(images.enumerated()), id: \.element.id) { index, image in
+          Button {
+            onOpen(index)
+          } label: {
+            if let source = image.tileSource {
+              MediaThumbnail(
+                source: source,
+                server: server,
+                maximumPixelSize: 320,
+                aspectRatio: image.aspectRatio,
+                label: image.name ?? AppCopy.text("transcript.attached_image")
+              )
+              .frame(width: 96, height: 96)
+            } else {
+              VStack(spacing: OpenCodeSpacing.s2) {
+                Image(systemName: image.isUnavailable ? "exclamationmark.triangle" : "photo")
+                  .font(.title3)
+                  .foregroundStyle(OpenCodeColors.color(.textWeak))
+                Text(image.name ?? AppCopy.text("transcript.image"))
+                  .font(OpenCodeFonts.font(.caption2))
+                  .lineLimit(1)
+              }
+              .frame(width: 96, height: 96)
+              .background(
+                OpenCodeColors.color(.canvasWeak),
+                in: .rect(cornerRadius: OpenCodeRadius.tile)
+              )
+            }
           }
-          .frame(width: 72, height: 72)
-          .background(
-            OpenCodeColors.color(.canvasWeak),
-            in: .rect(cornerRadius: OpenCodeRadius.tile)
-          )
+          .buttonStyle(.plain)
+          .clipShape(.rect(cornerRadius: OpenCodeRadius.tile))
           .overlay {
             RoundedRectangle(cornerRadius: OpenCodeRadius.tile)
               .strokeBorder(OpenCodeColors.color(.border), lineWidth: 0.5)
           }
           .accessibilityLabel(AppCopy.text("transcript.attached_image"))
+          .accessibilityIdentifier("transcript-image-\(image.id)")
         }
       }
     }
+  }
+}
+
+private extension TranscriptImage {
+  var tileSource: MediaImageSource? {
+    if isUnavailable { return nil }
+    if !data.isEmpty { return .data(data) }
+    if let mediaHash, !mediaHash.isEmpty { return .hash(mediaHash) }
+    return nil
   }
 }
 
@@ -448,11 +480,38 @@ private struct ToolRow: View {
               .foregroundStyle(OpenCodeColors.color(.danger))
           }
           if !call.images.isEmpty {
-            Text(
-              AppCopy.count("transcript.tool_image", call.images.count)
-            )
-            .font(OpenCodeFonts.font(.caption))
-            .foregroundStyle(OpenCodeColors.color(.textWeak))
+            LazyVGrid(
+              columns: Array(
+                repeating: GridItem(.fixed(72), spacing: OpenCodeSpacing.s6),
+                count: min(4, call.images.count)
+              ),
+              alignment: .leading,
+              spacing: OpenCodeSpacing.s6
+            ) {
+              ForEach(Array(call.images.enumerated()), id: \.element.id) { index, image in
+                Button {
+                  store.send(.transcriptImagesTapped(call.images, index))
+                } label: {
+                  if let source = image.tileSource {
+                    MediaThumbnail(
+                      source: source,
+                      server: store.server,
+                      maximumPixelSize: 320,
+                      aspectRatio: image.aspectRatio,
+                      label: image.name ?? AppCopy.text("transcript.image")
+                    )
+                    .frame(width: 72, height: 72)
+                    .clipShape(.rect(cornerRadius: OpenCodeRadius.tile))
+                  } else {
+                    Image(systemName: "photo")
+                      .frame(width: 72, height: 72)
+                      .background(OpenCodeColors.color(.canvasWeak))
+                  }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("tool-image-\(image.id)")
+              }
+            }
             .accessibilityIdentifier("tool-image-mosaic")
           }
           if !call.videos.isEmpty {

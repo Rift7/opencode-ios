@@ -81,6 +81,38 @@ public struct URLSessionTransport: Sendable {
     }
   }
 
+  public func upload(
+    _ request: HTTPRequest,
+    fromFile fileURL: URL,
+    progress: @escaping @Sendable (Int64) -> Void
+  ) async throws -> HTTPResponse {
+    try Task.checkCancellation()
+    try checkCleartext(request.url)
+    var urlRequest = try request.wireRequest()
+    urlRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+    let delegate = UploadReceiver(request: request, progress: progress)
+    let session = URLSession(configuration: makeConfiguration(), delegate: delegate, delegateQueue: nil)
+    defer { session.finishTasksAndInvalidate() }
+    let (data, response): (Data, URLResponse)
+    do {
+      (data, response) = try await session.upload(for: urlRequest, fromFile: fileURL)
+    } catch let error as URLError where error.code == .cancelled || Task.isCancelled {
+      throw CancellationError()
+    }
+    if delegate.didRefuseCrossOrigin {
+      throw TransportError.crossOriginRedirect
+    }
+    guard let http = response as? HTTPURLResponse else {
+      throw TransportError.invalidRequest
+    }
+    return HTTPResponse(
+      status: http.statusCode,
+      headers: http.lowercasedHeaders,
+      body: data,
+      finalURL: http.url ?? request.url
+    )
+  }
+
   private func checkCleartext(_ url: URL) throws {
     guard TransportSecurity.allowsInsecureHTTP(url: url) else {
       throw TransportError.insecureHTTP
@@ -132,9 +164,53 @@ extension HTTPURLResponse {
   }
 }
 
+/// Progress and redirect ownership for one file upload. URLSession calls the delegate on its own
+/// queue; the cross-origin flag is Mutex-guarded.
+private final class UploadReceiver: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+  private let rule: HTTPRedirectRule
+  private let progress: @Sendable (Int64) -> Void
+  private let refused = Mutex(false)
+
+  init(request: HTTPRequest, progress: @escaping @Sendable (Int64) -> Void) {
+    self.rule = HTTPRedirectRule(request: request)
+    self.progress = progress
+  }
+
+  var didRefuseCrossOrigin: Bool {
+    refused.withLock { $0 }
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest,
+    completionHandler: @escaping (URLRequest?) -> Void
+  ) {
+    switch rule.decide(request) {
+    case .follow(let allowed):
+      completionHandler(allowed)
+    case .refuse:
+      completionHandler(nil)
+    case .refuseCrossOrigin:
+      refused.withLock { $0 = true }
+      completionHandler(nil)
+    }
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    didSendBodyData bytesSent: Int64,
+    totalBytesSent: Int64,
+    totalBytesExpectedToSend: Int64
+  ) {
+    progress(totalBytesSent)
+  }
+}
+
 /// Scheme, host and effective port: the unit a credential is bound to.
-public struct HTTPOrigin: Sendable, Equatable {
-  public let scheme: String
+public struct HTTPOrigin: Sendable, Equatable {  public let scheme: String
   public let host: String
   public let port: Int
 

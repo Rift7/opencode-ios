@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import OpenCodeCore
+import OpenCodeMedia
 import OpenCodeServer
 import OpenCodeSession
 import SwiftUI
@@ -7,7 +8,7 @@ import SwiftUI
 /// The session screen: the run's Stop, the subagent family, pending requests and background work.
 /// Transcript rows and composer editing stay with P8/P9; the placeholder says so.
 struct SessionView: View {
-  let store: StoreOf<SessionFeature>
+  @Bindable var store: StoreOf<SessionFeature>
 
   @State private var showsSubagents = false
   @State private var showsRequests = false
@@ -79,8 +80,33 @@ struct SessionView: View {
     .sheet(isPresented: $showsBackground) {
       BackgroundWorkSheet(store: store) { showsBackground = false }
     }
-    .sheet(item: inspectedFileBinding) { file in
-      TranscriptFileSheet(file: file, store: store)
+    .sheet(item: $store.scope(state: \.fileViewer, action: \.fileViewer), onDismiss: {
+      store.send(.fileViewerClosed)
+    }) { viewer in
+      FileViewerView(store: viewer) {
+        store.send(.fileViewerClosed)
+      }
+    }
+    .fullScreenCover(item: $store.scope(state: \.mediaViewer, action: \.mediaViewer), onDismiss: {
+      store.send(.mediaViewerClosed)
+    }) { viewer in
+      MediaViewerView(store: viewer) {
+        store.send(.mediaViewerClosed)
+      }
+    }
+    .fullScreenCover(item: $store.scope(state: \.browser, action: \.browser), onDismiss: {
+      store.send(.browserClosed)
+    }) { browser in
+      BrowserSheet(
+        store: browser,
+        onClose: { store.send(.browserClosed) },
+        onOpenExternal: { url in
+          _ = OpenURLAccess.open(url)
+        },
+        onPairing: { url in
+          _ = OpenURLAccess.open(url)
+        }
+      )
     }
     .confirmationDialog(
       AppCopy.text("transcript.link_title"),
@@ -222,15 +248,6 @@ struct SessionView: View {
     )
   }
 
-  private var inspectedFileBinding: Binding<TranscriptFile?> {
-    Binding(
-      get: { store.inspectedFile },
-      set: { file in
-        if file == nil { store.send(.transcriptFileDismissed) }
-      }
-    )
-  }
-
   private var pageBackRow: some View {
     HStack {
       Button {
@@ -356,18 +373,33 @@ private struct SubagentList: View {
   var body: some View {
     NavigationStack {
       List(store.subagents, id: \.id) { session in
-        Button {
-          store.send(.openSubagent(session.id))
-          close()
-        } label: {
-          VStack(alignment: .leading, spacing: OpenCodeSpacing.s2) {
-            Text(session.title)
-              .font(OpenCodeFonts.font(.body))
-            if let agent = session.agent {
-              Text(agent)
-                .font(OpenCodeFonts.font(.caption))
-                .foregroundStyle(OpenCodeColors.color(.textWeak))
+        HStack {
+          Button {
+            store.send(.openSubagent(session.id))
+            close()
+          } label: {
+            VStack(alignment: .leading, spacing: OpenCodeSpacing.s2) {
+              Text(session.title)
+                .font(OpenCodeFonts.font(.body))
+              if let agent = session.agent {
+                Text(agent)
+                  .font(OpenCodeFonts.font(.caption))
+                  .foregroundStyle(OpenCodeColors.color(.textWeak))
+              }
             }
+          }
+          Spacer()
+          if store.family?.activeSessionIDs.contains(session.id) == true {
+            Button {
+              store.send(.backgroundSubagentStopTapped(session.id))
+            } label: {
+              Image(systemName: "stop.circle")
+                .foregroundStyle(OpenCodeColors.color(.danger))
+            }
+            .buttonStyle(.plain)
+            .disabled(store.background.stoppingIDs.contains(session.id))
+            .accessibilityLabel(AppCopy.text("session.background.stop_subagent"))
+            .accessibilityIdentifier("subagent-stop-\(session.id)")
           }
         }
         .accessibilityIdentifier("subagent-\(session.id)")
@@ -857,6 +889,21 @@ private struct ShellOutputSheet: View {
           Button(AppCopy.text("common.done")) { store.send(.backgroundDismissed) }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
+          Button {
+            store.send(.shellOutputCopyTapped)
+          } label: {
+            Image(systemName: "doc.on.doc")
+          }
+          .disabled(current.output.isEmpty)
+          .accessibilityLabel(AppCopy.text("common.copy"))
+          .accessibilityIdentifier("shell-output-copy")
+          if !current.output.isEmpty {
+            ShareLink(item: current.output) {
+              Image(systemName: "square.and.arrow.up")
+            }
+            .accessibilityLabel(AppCopy.text("media.file_share"))
+            .accessibilityIdentifier("shell-output-share")
+          }
           if current.canLoadEarlier {
             Button(AppCopy.text("session.shell.load_earlier")) {
               store.send(.shellEarlierTapped)

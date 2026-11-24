@@ -24,6 +24,8 @@ public struct OpenCodeClientError: Error, Equatable, Sendable {
     case unsupported
     /// The body did not match the current contract.
     case undecodable(feature: String)
+    /// A bounded read stopped at its configured limit before buffering the whole response.
+    case responseTooLarge(feature: String)
     /// A 2xx carried a web page instead of API data: this server does not expose the V2 API at
     /// that address. Distinct from a decode mismatch and from authentication/connectivity failures.
     case incompatibleAPI(feature: String)
@@ -108,6 +110,7 @@ public struct OpenCodeClientError: Error, Equatable, Sendable {
     if let transport { parts.append("transport \(transport.rawValue)") }
     if isUnsupported { parts.append("unsupported") }
     if case .undecodable(let feature) = failure { parts.append("undecodable \(feature)") }
+    if case .responseTooLarge(let feature) = failure { parts.append("too large \(feature)") }
     if case .incompatibleAPI(let feature) = failure { parts.append("incompatible API \(feature)") }
     if parts.isEmpty { parts.append("client error") }
     if attempts > 1 { parts.append("after \(attempts) attempts") }

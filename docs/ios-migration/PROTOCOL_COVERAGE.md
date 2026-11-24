@@ -85,11 +85,12 @@ uses: unknown keys ignored, absent optionals nil, a present wrong type rejects t
 | POST | `/api/experimental/job/{jobID}/cancel` | same | `Operations.cancelJob` | implemented + tested: idempotent |
 | GET | `/api/model`, `/api/model/default` | `live/LiveCatalog.kt` | `ModelRef` only | deferred to P11 (composer model picker) |
 | GET | `/api/agent`, `/api/skill`, `/api/command`, `/api/plugin`, `/api/mcp`, `/api/integration` | `live/LiveCatalog.kt` | — | deferred to P11 (agent/mode and autocomplete) |
-| GET | `/api/fs/list`, `/api/fs/find`, `/api/fs/read/{rel}` | `live/LiveFiles.kt` | — | deferred to P11/P10 (autocomplete and file opening) |
-| POST | `/api/experimental/fs/write` | `live/LiveFiles.kt` | — | deferred to P10 (attachments) |
-| GET | `/api/experimental/media/{hash}` | `live/MediaReferenceFetch.kt` | — | deferred to P10 |
+| GET | `/api/fs/list`, `/api/fs/read/{rel}` | `live/LiveFiles.kt` | `Operations.listDirectory`, `Operations.readFile`, `DirectoryListing` | implemented + tested: folder list decode; authenticated read scoped by `location[directory]`, bounded by the caller, capability header; no local path is read |
+| GET | `/api/fs/find` | `live/LiveFiles.kt` | — | deferred to P11 (file autocomplete) |
+| POST | `/api/experimental/fs/write` | `live/LiveFiles.kt` | `Operations.uploadFile`, `HTTPTransport.upload` | implemented + tested: `/api/info` `paths.tmp`, one `<tmp>/uploads/<uuid>/<name>` path across retries, streaming octet body, throttled progress, 404 → unsupported |
+| GET | `/api/experimental/media/{hash}` | `live/MediaReferenceFetch.kt` | `Operations.mediaBlob`, `MediaReferenceCache` | implemented + tested: authenticated `*/*` read with `experimental-media-uri`, 25 MiB blob bound, coalesced 48 MiB/64-entry memory and 256 MiB disk tiers, per-server 404 |
 | POST | `/api/rpc/mobile-notifications/pair` | `live/LiveConnection.kt` | — | deferred to P12 (Experimental, off) |
-| — | `X-OpenCode-Capabilities: experimental-media-uri` | `live/LiveTransport.kt` | event stream only | implemented on the event stream; other calls advertise it when their phase adds media |
+| — | `X-OpenCode-Capabilities: experimental-media-uri` | `live/LiveTransport.kt` | event stream, media blob, file read and upload | implemented: these requests advertise the capability; Markdown image cards still do not fetch |
 
 Notes that stay visible:
 
@@ -177,7 +178,7 @@ Do not silently remap `/api/project` to `/project` or treat the web shell as dat
 audited contract. A connection attempt that lands on an HTML page now fails as
 `.incompatibleAPI` (D-31), which is distinct from a rejected password and from an unreachable host.
 
-P9 adds the prompt admission (`POST /api/session/{id}/prompt`), the client-id session create
+P10 adds the attachment/media/file routes above: `/api/info` `paths.tmp`, the fs write/read/list calls, the blob read and the capability header on them. P9 adds the prompt admission (`POST /api/session/{id}/prompt`), the client-id session create
 (`POST /api/session`), the inbox delivery PATCH/DELETE read-back and the experimental wait
 (`POST /api/experimental/session/{id}/wait`). The wait loop is the only retry owner for that route; prompt and
 create calls use the normal client layer because both are idempotent by a client-made ID. The prompt is not

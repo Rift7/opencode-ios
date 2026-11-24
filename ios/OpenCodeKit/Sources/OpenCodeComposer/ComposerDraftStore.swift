@@ -1,6 +1,7 @@
 import ComposableArchitecture
 import Foundation
 import OpenCodeCore
+import OpenCodeMedia
 
 /// All drafts for one app, keyed by server and composer scope. The actor serializes reads and
 /// writes, so a save for one session can never interleave with another's.
@@ -169,6 +170,60 @@ public actor ComposerDraftStore {
     return nil
   }
 
+  /// Every attachment reference a persisted draft, failed send or outbound record still owns for
+  /// one server. Cleanup uses this union so another session's draft can keep a file alive.
+  public func referencedStoredNames(serverID: String) -> Result<Set<String>, StorageFailure> {
+    do {
+      let records = try records()
+      let prefix = "\(serverID)|"
+      var names: Set<String> = []
+      for (key, draft) in records.drafts where key.hasPrefix(prefix) {
+        for attachment in draft.attachments where !attachment.transfer.isUploaded {
+          names.insert(attachment.storedName)
+        }
+        for failed in draft.failedSends {
+          for attachment in failed.attachments where !attachment.transfer.isUploaded {
+            names.insert(attachment.storedName)
+          }
+        }
+        for outbound in draft.outbound {
+          for attachment in outbound.attachments where !attachment.transfer.isUploaded {
+            names.insert(attachment.storedName)
+          }
+        }
+      }
+      return .success(names)
+    } catch let failure as StorageFailure {
+      return .failure(failure)
+    } catch {
+      return .failure(.unavailable)
+    }
+  }
+
+  /// Merges one attachment transfer into the persisted draft that owns it without replacing newer
+  /// text, quotes or other attachments. A record where the attachment was removed or sent is a
+  /// no-op.
+  public func applyAttachmentTransfer(
+    key: ComposerDraftKey,
+    attachmentID: String,
+    transfer: MediaTransfer
+  ) -> ComposerDraftSave {
+    do {
+      var records = try records()
+      guard var draft = records.drafts[key.storageKey],
+        let index = draft.attachments.firstIndex(where: { $0.id == attachmentID })
+      else { return .saved }
+      draft.attachments[index].transfer = transfer
+      records.drafts[key.storageKey] = draft
+      try write(records)
+      return .saved
+    } catch let failure as StorageFailure {
+      return .failure(failure)
+    } catch {
+      return .failure(.unavailable)
+    }
+  }
+
   public func remove(_ key: ComposerDraftKey) -> ComposerDraftSave {
     do {
       var records = try records()
@@ -304,6 +359,10 @@ public struct ComposerDraftClient: Sendable {
   public var recoverCreated: @Sendable (String, ComposerDraftKey) async -> ComposerDraftLoad
   public var migrate:
     @Sendable (ComposerDraft, ComposerDraftKey, ComposerDraftKey) async -> ComposerDraftMigration
+  public var applyAttachmentTransfer:
+    @Sendable (ComposerDraftKey, String, MediaTransfer) async -> ComposerDraftSave
+  public var referencedStoredNames:
+    @Sendable (String) async -> Result<Set<String>, StorageFailure>
   public var flush: @Sendable () async -> Void
 
   public init(
@@ -321,6 +380,12 @@ public struct ComposerDraftClient: Sendable {
     },
     migrate: @escaping @Sendable (ComposerDraft, ComposerDraftKey, ComposerDraftKey) async ->
       ComposerDraftMigration = { _, _, _ in .migrated },
+    applyAttachmentTransfer: @escaping @Sendable (
+      ComposerDraftKey, String, MediaTransfer
+    ) async -> ComposerDraftSave = { _, _, _ in .saved },
+    referencedStoredNames: @escaping @Sendable (String) async -> Result<Set<String>, StorageFailure> = {
+      _ in .failure(.unavailable)
+    },
     flush: @escaping @Sendable () async -> Void = {}
   ) {
     self.load = load
@@ -332,6 +397,8 @@ public struct ComposerDraftClient: Sendable {
     self.removeDeparting = removeDeparting ?? self.removeIfNotNewer
     self.recoverCreated = recoverCreated
     self.migrate = migrate
+    self.applyAttachmentTransfer = applyAttachmentTransfer
+    self.referencedStoredNames = referencedStoredNames
     self.flush = flush
   }
 
@@ -346,6 +413,10 @@ public struct ComposerDraftClient: Sendable {
       removeDeparting: { await store.removeIfNotNewer($0, for: $1) },
       recoverCreated: { await store.recoverCreated(sessionID: $0, destination: $1) },
       migrate: { await store.migrate($0, from: $1, to: $2) },
+      applyAttachmentTransfer: {
+        await store.applyAttachmentTransfer(key: $0, attachmentID: $1, transfer: $2)
+      },
+      referencedStoredNames: { await store.referencedStoredNames(serverID: $0) },
       flush: { await store.flush() }
     )
   }
