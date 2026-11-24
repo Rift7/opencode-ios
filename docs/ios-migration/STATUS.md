@@ -22,6 +22,7 @@
 | P9 merged head | `e42cb455` (PR #8 squash merge); merged tree `62d44987` equals the corrected P9 tree `1fd90423` |
 | P10 base | `e42cb455` (`origin/ios`, PR #8 merged) |
 | P10 branch | `ios-media`, created from `origin/ios` after `git fetch origin` |
+| P10 implementation head | `188167c7` (code, tests, screenshots and docs; the evidence head follows this doc commit) |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
 `git fetch origin` moved `origin/ios` to `e42cb455`; PR #8 (`ios: add the native composer, drafts, sends, queue,
