@@ -69,6 +69,9 @@ final class MediaPerformanceUITests: XCTestCase {
     let app = open(mode: "connected-media-large")
     let image = app.buttons["transcript-image-large-image"]
     XCTAssertTrue(image.waitForExistence(timeout: 15))
+    // Clear the P11 composer's safe-area inset before opening the large image.
+    app.scrollViews["transcript-list"].swipeUp()
+    XCTAssertTrue(image.isHittable)
     let options = XCTMeasureOptions()
     options.iterationCount = 3
     measure(metrics: [XCTClockMetric(), XCTMemoryMetric()], options: options) {

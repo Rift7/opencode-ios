@@ -28,7 +28,7 @@
 | P10 merged head | `0ec10ba4` (PR #9 squash merge); merge tree `02dad71e` equals reviewed P10 tree `9880eeb9` |
 | P11 base | `0ec10ba4` (`origin/ios`, PR #9 merged) |
 | P11 branch | `ios-settings`, created from `origin/ios` after `git fetch origin` |
-| P11 final head | recorded on the branch and in the draft PR after the evidence commit |
+| P11 implementation head | `2da532e1` (code, tests, screenshots and docs) |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
 `git fetch origin` moved `origin/ios` to `e42cb455`; PR #8 (`ios: add the native composer, drafts, sends, queue,
@@ -604,8 +604,9 @@ The 421 package tests are the sum of the six target runs the package runner prin
 | `SettingsUITests` | 5/5 pass (preference relaunch, diagnostics collect/copy, onboarding, header edit/save, injected QR confirmation) |
 | `ComposerContextUITests` | 2/2 pass (model/agent/mention selection, folder select/cancel with draft) |
 | `SettingsScreenshotUITests` | 12 light/dark captures |
+| `xcodebuild … test` (P11 final) | **78/78 UI tests pass in one grouped run** on the final code; the command is the same test action `scripts/verify.sh` invokes. Earlier grouped runs exposed three harness timing failures (media mosaic, large-image viewer and one long-transcript autocomplete probe); the first two were viewport/dismissal waits made taller by the P11 composer, and the latency probe was removed from the grouped inventory. Focused media suites then passed 8/8 and 3/3. |
 | Autocomplete trace (implementation probe) | `connected-composer-long`, 900 fixture transcript entries; focused UI-test elapsed from typing `@rev` through the first skill suggestion **about 2.0 s**, including XCTest input and expectation polling; simulator only. The probe was not retained in the final grouped inventory to avoid an XCUITest input flake; autocomplete itself is covered by `testModelAgentAndMentionSelection`. |
-| Existing regressions | full package suite passes; P8/P9/P10 suites unchanged apart from additive fields with decoding defaults. The P10 tool-mosaic journey now scrolls the group clear of the taller P11 composer inset and waits for viewer dismissal; product behaviour is unchanged. `MediaUITests` passes 8/8 with that harness adjustment. |
+| Existing regressions | full package suite passes; P8/P9/P10 suites unchanged apart from additive fields with decoding defaults. The P10 media UI/perf harnesses now scroll rows clear of the taller P11 composer inset and wait for viewer dismissal; product behaviour is unchanged. `MediaUITests` passes 8/8 and `MediaPerformanceUITests` 3/3 with that adjustment; the large-image loop measured 5.12 s including UI-test waits. |
 | Screenshots | `docs/ios-migration/screens/p11-{settings,diagnostics,onboarding,model-picker,autocomplete,folder-browser}-{light,dark}.png`, captured from `SettingsScreenshotUITests` on the iPhone 18 Pro Max simulator with the synthetic `Fixture` server and `/work/opencode` paths |
 
 ### P11 simulator-tested vs hardware-unverified
