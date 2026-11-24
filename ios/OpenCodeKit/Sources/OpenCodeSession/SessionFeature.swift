@@ -33,6 +33,7 @@ public struct SessionFeature: Sendable {
     @Presents public var mediaViewer: MediaViewerFeature.State?
     @Presents public var fileViewer: FileViewerFeature.State?
     @Presents public var browser: BrowserFeature.State?
+    @Presents public var folderBrowser: FolderBrowserFeature.State?
     public var composer: ComposerFeature.State
     public var requestDock: RequestDockState
 
@@ -74,6 +75,7 @@ public struct SessionFeature: Sendable {
       self.mediaViewer = nil
       self.fileViewer = nil
       self.browser = nil
+      self.folderBrowser = nil
       self.requestDock = RequestDockState()
       self.refresh = nil
       self.recovery = nil
@@ -93,6 +95,8 @@ public struct SessionFeature: Sendable {
       self.composer = ComposerFeature.State(serverID: server.persistenceID, target: target)
       self.composer.server = server
       self.composer.uploadDirectory = session?.directory ?? target.directory
+      self.composer.selectedModel = session?.model
+      self.composer.selectedAgent = session?.agent
       if session == nil, case .newSession = selection.intent {
         self.isLoading = false
       }
@@ -128,6 +132,7 @@ public struct SessionFeature: Sendable {
         && lhs.mediaViewer == rhs.mediaViewer
         && lhs.fileViewer == rhs.fileViewer
         && lhs.browser == rhs.browser
+        && lhs.folderBrowser == rhs.folderBrowser
         && lhs.recovery == rhs.recovery
         && lhs.composer == rhs.composer
         && lhs.requestDock == rhs.requestDock
@@ -302,9 +307,13 @@ public struct SessionFeature: Sendable {
     case mediaViewer(PresentationAction<MediaViewerFeature.Action>)
     case fileViewer(PresentationAction<FileViewerFeature.Action>)
     case browser(PresentationAction<BrowserFeature.Action>)
+    case folderBrowser(PresentationAction<FolderBrowserFeature.Action>)
+    case folderBrowserOpened
+    case folderBrowserClosed
     case mediaViewerClosed
     case fileViewerClosed
     case browserClosed
+    case browserExperimentChanged(enabled: Bool)
 
     case noticeDismissed
     case delegate(Delegate)
@@ -453,6 +462,10 @@ public struct SessionFeature: Sendable {
         return .none
 
       case .composer(let action):
+        if case .projectDirectoryChosen = action {
+          state.folderBrowser = nil
+          return .none
+        }
         guard case .delegate(let delegate) = action else { return .none }
         switch delegate {
         case .send(let send):
@@ -1196,6 +1209,21 @@ public struct SessionFeature: Sendable {
       case .browser:
         return .none
 
+      case .folderBrowserOpened:
+        guard state.composer.target.isNewSession else { return .none }
+        state.folderBrowser = FolderBrowserFeature.State(server: state.server)
+        return .send(.folderBrowser(.presented(.appeared)))
+
+      case .folderBrowser(.presented(.delegate(.selected(let directory)))):
+        return .send(.composer(.projectDirectoryChosen(directory)))
+
+      case .folderBrowser:
+        return .none
+
+      case .folderBrowserClosed:
+        state.folderBrowser = nil
+        return .none
+
       case .mediaViewerClosed:
         state.mediaViewer = nil
         return .none
@@ -1204,6 +1232,9 @@ public struct SessionFeature: Sendable {
         return .none
       case .browserClosed:
         state.browser = nil
+        return .none
+      case .browserExperimentChanged(let enabled):
+        if !enabled { state.browser = nil }
         return .none
 
       case .noticeDismissed:
@@ -1225,6 +1256,9 @@ public struct SessionFeature: Sendable {
     }
     .ifLet(\.$browser, action: \.browser) {
       BrowserFeature()
+    }
+    .ifLet(\.$folderBrowser, action: \.folderBrowser) {
+      FolderBrowserFeature()
     }
   }
 }
@@ -1906,6 +1940,8 @@ extension SessionFeature {
     let client = client
     let server = state.server
     let files = mediaFiles
+    let currentModel = state.activeSession?.model
+    let currentAgent = state.activeSession?.agent
     AppLog(category: .send).event(
       .composerSent,
       [
@@ -2032,6 +2068,53 @@ extension SessionFeature {
       // A create or reconciliation may finish after the screen abandoned this operation. Never issue
       // the prompt mutation in that case.
       guard !Task.isCancelled else { return }
+      // The composer's agent and model are applied once, just before the prompt, exactly as the
+      // audited TUI does. A queued message waits behind the run, whose model must not change; a
+      // refused switch fails this send instead of posting to the old configuration.
+      if actual.delivery != .queue {
+        if let agent = actual.agent,
+          existingSessionID == nil || currentAgent != agent
+        {
+          do {
+            try await client.switchAgent(server, sessionID, agent)
+          } catch is CancellationError {
+            return
+          } catch {
+            let failure = ComposerSendFailure.classify(
+              error as? OpenCodeClientError ?? OpenCodeClientError(.unreachable)
+            )
+            await emit(
+              .composerSendResult(
+                operationID: operationID,
+                messageID: actual.messageID,
+                result: .failed(created: created, failure: failure)
+              )
+            )
+            return
+          }
+        }
+        if let model = actual.model,
+          existingSessionID == nil || currentModel != model
+        {
+          do {
+            try await client.switchModel(server, sessionID, model)
+          } catch is CancellationError {
+            return
+          } catch {
+            let failure = ComposerSendFailure.classify(
+              error as? OpenCodeClientError ?? OpenCodeClientError(.unreachable)
+            )
+            await emit(
+              .composerSendResult(
+                operationID: operationID,
+                messageID: actual.messageID,
+                result: .failed(created: created, failure: failure)
+              )
+            )
+            return
+          }
+        }
+      }
       var inlineData: [String: Data] = [:]
       for attachment in actual.attachments where attachment.kind.isInline {
         do {

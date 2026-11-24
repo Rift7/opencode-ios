@@ -43,16 +43,27 @@ public struct PromptBody: Codable, Sendable, Equatable {
   public var id: String
   public var text: String
   public var files: [File]?
+  public var agents: [AgentMention]?
+  public var skills: [SkillMention]?
   public var delivery: String?
   public var metadata: Metadata?
 
   public struct File: Codable, Sendable, Equatable {
     public var uri: String
     public var name: String?
+    public var description: String?
+    public var mention: MentionRange?
 
-    public init(uri: String, name: String? = nil) {
+    public init(
+      uri: String,
+      name: String? = nil,
+      description: String? = nil,
+      mention: MentionRange? = nil
+    ) {
       self.uri = uri
       self.name = name
+      self.description = description
+      self.mention = mention
     }
   }
 
@@ -97,12 +108,16 @@ public struct PromptBody: Codable, Sendable, Equatable {
     id: String,
     text: String,
     files: [File]? = nil,
+    agents: [AgentMention]? = nil,
+    skills: [SkillMention]? = nil,
     delivery: Delivery? = nil,
     metadata: Metadata? = nil
   ) {
     self.id = id
     self.text = text
     self.files = files
+    self.agents = agents
+    self.skills = skills
     self.delivery = delivery?.rawValue
     self.metadata = metadata
   }

@@ -10,7 +10,7 @@ import OpenCodeServer
 /// credential in a filename, memory key or log.
 public enum MediaCacheScope {
   public static func token(for server: OpenCodeServer) -> String {
-    let material = "\(server.persistenceID)|\(server.username)|\(server.password)"
+    let material = server.authenticationScopeMaterial
     let digest = SHA256.hash(data: Data(material.utf8))
     return digest.map { String(format: "%02x", $0) }.joined().prefix(24).description
   }

@@ -6,6 +6,7 @@ import OpenCodeDrawer
 import OpenCodeMedia
 import OpenCodeServer
 import OpenCodeSession
+import OpenCodeSettings
 
 // MARK: - Shared app-shell values
 
@@ -137,6 +138,7 @@ public struct ServerForm: Equatable, Sendable {
   public var address: String
   public var username: String
   public var password: String
+  public var headers: [OpenCodeServer.Header]
   public var isEditingSaved: Bool
   public var problem: ServerFormProblem?
 
@@ -145,6 +147,7 @@ public struct ServerForm: Equatable, Sendable {
     address: String = "",
     username: String = "opencode",
     password: String = "",
+    headers: [OpenCodeServer.Header] = [],
     isEditingSaved: Bool = false,
     problem: ServerFormProblem? = nil
   ) {
@@ -152,8 +155,15 @@ public struct ServerForm: Equatable, Sendable {
     self.address = address
     self.username = username
     self.password = password
+    self.headers = headers
     self.isEditingSaved = isEditingSaved
     self.problem = problem
+  }
+
+  /// Why the form's headers cannot be sent, if they cannot. A blank row the person is still typing
+  /// is refused rather than silently dropped.
+  public var headerProblem: OpenCodeServer.Header.Problem? {
+    headers.first { $0.problem != nil }?.problem
   }
 
   public var server: OpenCodeServer? {
@@ -168,7 +178,8 @@ public struct ServerForm: Equatable, Sendable {
       url: origin.address,
       username: trimmedUser.isEmpty ? "opencode" : trimmedUser,
       password: password,
-      name: trimmedName.isEmpty ? nil : trimmedName
+      name: trimmedName.isEmpty ? nil : trimmedName,
+      headers: headers
     )
   }
 }
@@ -724,6 +735,10 @@ public struct AppFeature {
     public var sessionDestination: SessionSelection?
     public var savedServer: OpenCodeServer?
     public var savedServers: [OpenCodeServer]
+    public var settings: SettingsFeature.State?
+    /// A scanned pairing payload waiting for the Settings cover to finish dismissing. In memory
+    /// only; it is never logged or copied.
+    public var pendingScannedPairing: String?
     public var form: ServerForm?
     public var pendingPairing: PairingConfirmation?
     public var pairingAttempt: PairingAttempt?
@@ -753,6 +768,8 @@ public struct AppFeature {
       sessionDestination: SessionSelection? = nil,
       savedServer: OpenCodeServer? = nil,
       savedServers: [OpenCodeServer] = [],
+      settings: SettingsFeature.State? = nil,
+      pendingScannedPairing: String? = nil,
       form: ServerForm? = nil,
       pendingPairing: PairingConfirmation? = nil,
       pairingAttempt: PairingAttempt? = nil,
@@ -775,6 +792,8 @@ public struct AppFeature {
       self.sessionDestination = sessionDestination
       self.savedServer = savedServer
       self.savedServers = savedServers
+      self.settings = settings
+      self.pendingScannedPairing = pendingScannedPairing
       self.form = form
       self.pendingPairing = pendingPairing
       self.pairingAttempt = pairingAttempt
@@ -799,6 +818,8 @@ public struct AppFeature {
         && lhs.sessionDestination == rhs.sessionDestination
         && lhs.savedServer == rhs.savedServer
         && lhs.savedServers == rhs.savedServers
+        && lhs.settings == rhs.settings
+        && lhs.pendingScannedPairing == rhs.pendingScannedPairing
         && lhs.form == rhs.form
         && lhs.pendingPairing == rhs.pendingPairing
         && lhs.pairingAttempt == rhs.pairingAttempt
@@ -830,6 +851,10 @@ public struct AppFeature {
     case formAddressChanged(String)
     case formUsernameChanged(String)
     case formPasswordChanged(String)
+    case formHeaderNameChanged(index: Int, name: String)
+    case formHeaderValueChanged(index: Int, value: String)
+    case formHeaderAdded
+    case formHeaderRemoved(index: Int)
     case formSubmitted
     case savedServerTapped(OpenCodeServer)
     case pastePairingTapped
@@ -861,6 +886,12 @@ public struct AppFeature {
     case connection(ConnectionFeature.Action)
     case home(HomeFeature.Action)
     case session(SessionFeature.Action)
+    case settings(SettingsFeature.Action)
+    case settingsOpened
+    case settingsDiagnosticContextChanged
+    case settingsSavedCurrentServer(OpenCodeServer, servers: [OpenCodeServer])
+    case settingsForgottenServer(OpenCodeServer, servers: [OpenCodeServer], saved: OpenCodeServer?)
+    case settingsCoverDismissed
   }
 
   enum CancelID: Hashable {
@@ -1115,6 +1146,26 @@ public struct AppFeature {
         state.form?.password = value
         return .none
 
+      case .formHeaderNameChanged(let index, let name):
+        guard state.form?.headers.indices.contains(index) == true else { return .none }
+        state.form?.headers[index].name = name
+        return .none
+
+      case .formHeaderValueChanged(let index, let value):
+        guard state.form?.headers.indices.contains(index) == true else { return .none }
+        state.form?.headers[index].value = value
+        return .none
+
+      case .formHeaderAdded:
+        guard state.form?.headers.count ?? 0 < 16 else { return .none }
+        state.form?.headers.append(.init(name: "", value: ""))
+        return .none
+
+      case .formHeaderRemoved(let index):
+        guard state.form?.headers.indices.contains(index) == true else { return .none }
+        state.form?.headers.remove(at: index)
+        return .none
+
       case .formSubmitted:
         guard var form = state.form else { return .none }
         let text = form.address.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1126,6 +1177,10 @@ public struct AppFeature {
         if PairingLink.decodeCopied(text) != nil || PairingLink.isPairingEndpoint(text) {
           state.form = nil
           return handlePairingText(text, requiresConfirmation: false, state: &state)
+        }
+        if form.headerProblem != nil {
+          state.form = form
+          return .none
         }
         let address = Self.withDefaultScheme(text)
         switch ServerOrigin.parse(address) {
@@ -1251,6 +1306,15 @@ public struct AppFeature {
         state.notice = nil
         return .none
 
+      case .settingsOpened, .settingsDiagnosticContextChanged, .settingsSavedCurrentServer,
+        .settingsForgottenServer, .settings:
+        return reduceSettings(action, state: &state)
+
+      case .settingsCoverDismissed:
+        guard let payload = state.pendingScannedPairing else { return .none }
+        state.pendingScannedPairing = nil
+        return handlePairingText(payload, requiresConfirmation: true, state: &state)
+
       case .connection(.delegate(.verified(let server, let info))):
         let servers = SavedServers.remembering(server, among: state.savedServers)
         let remembered = servers.first ?? server
@@ -1260,6 +1324,7 @@ public struct AppFeature {
         if state.home?.serverID == remembered.persistenceID {
           state.home?.server = remembered
         }
+        state.settings?.server = remembered
         guard state.savedData.isReadable else {
           state.pendingSave = remembered
           return .none
@@ -1381,6 +1446,21 @@ public struct AppFeature {
           .send(.session(.task))
         )
 
+      case .home(.delegate(.whatsNewDestination(let destination))):
+        switch destination {
+        case .newSession:
+          return .send(.home(.newSessionTapped(directory: nil)))
+        case .appearance, .sessions, .servers, .experiment:
+          state.settings = SettingsFeature.State(
+            isPresented: true,
+            server: state.savedServer,
+            diagnosticsFacts: diagnosticFacts(state)
+          )
+          return .send(.settings(.task))
+        case .prompt, .modelPicker, .unavailable:
+          return .none
+        }
+
       case .home(.delegate(.switchServer(let server))):
         let transfer = transferDraft(from: state.session, state: &state)
         state.session = nil
@@ -1445,6 +1525,9 @@ public struct AppFeature {
     }
     .ifLet(\.session, action: \.session) {
       SessionFeature()
+    }
+    .ifLet(\.settings, action: \.settings) {
+      SettingsFeature()
     }
   }
 
@@ -1514,6 +1597,185 @@ public struct AppFeature {
       let list = store.write(servers, for: ServerSharedKeys.savedServers)
       await send(.persisted(saved: saved, list: list))
     }
+  }
+
+
+  private func reduceSettings(_ action: Action, state: inout State) -> Effect<Action> {
+    switch action {
+    case .settingsOpened:
+      state.settings = SettingsFeature.State(
+        isPresented: true,
+        server: state.savedServer,
+        diagnosticsFacts: diagnosticFacts(state)
+      )
+      return .send(.settings(.task))
+
+    case .settingsDiagnosticContextChanged:
+      guard state.settings != nil else { return .none }
+      return .send(.settings(.diagnosticsContextChanged(diagnosticFacts(state))))
+
+    case .settingsSavedCurrentServer(let updated, let servers):
+      state.savedServer = updated
+      state.savedServers = servers
+      state.settings?.server = updated
+      if let home = state.home, home.serverID == updated.persistenceID {
+        return connect(to: updated, state: &state)
+      }
+      return .none
+
+    case .settingsForgottenServer(let forgotten, let servers, let saved):
+      state.savedServers = servers
+      state.savedServer = saved
+      guard state.savedServer?.persistenceID != forgotten.persistenceID else { return .none }
+      if state.connection?.server.persistenceID == forgotten.persistenceID || state.savedServer == nil {
+        state.connection = nil
+        state.home = nil
+        state.session = nil
+        state.sessionDestination = nil
+      }
+      return .none
+
+    case .settings(let settingsAction):
+      switch settingsAction {
+      case .delegate(.close):
+        state.settings = nil
+        return .none
+
+      case .delegate(.saveServer(let previous, let updated)):
+        guard state.savedData.isReadable else {
+          return .send(.settings(.serverSaveResult(previous: previous, result: .failure(.unavailable))))
+        }
+        let others = state.savedServers.filter { !previous.supersedes($0) && !updated.supersedes($0) }
+        let servers = [updated] + others
+        let current = state.savedServer
+        let isCurrent = current?.persistenceID == previous.persistenceID || current == previous
+        let nextSaved = isCurrent ? updated : current
+        let store = store
+        return .run { send in
+          let listWrite = store.write(servers, for: ServerSharedKeys.savedServers)
+          if case .failure(let failure) = listWrite {
+            await send(.settings(.serverSaveResult(previous: previous, result: .failure(failure))))
+            return
+          }
+          let savedWrite: StorageWrite
+          if let nextSaved {
+            savedWrite = store.write(nextSaved, for: ServerSharedKeys.savedServer)
+          } else {
+            savedWrite = .success
+          }
+          if case .failure(let failure) = savedWrite {
+            await send(.settings(.serverSaveResult(previous: previous, result: .failure(failure))))
+            return
+          }
+          await send(.settings(.serverSaveResult(previous: previous, result: .success(updated))))
+          await send(.settings(.delegate(.close)))
+          if isCurrent {
+            await send(.settingsSavedCurrentServer(updated, servers: servers))
+          }
+        }
+
+      case .delegate(.forgetServer(let server)):
+        guard state.savedData.isReadable else {
+          return .send(.settings(.serverForgetResult(server: server, result: .failure(.unavailable))))
+        }
+        let servers = state.savedServers.filter { !server.supersedes($0) }
+        let isCurrent = state.savedServer?.persistenceID == server.persistenceID || state.savedServer == server
+        let nextSaved = isCurrent ? servers.first : state.savedServer
+        let store = store
+        return .run { send in
+          let listWrite = store.write(servers, for: ServerSharedKeys.savedServers)
+          if case .failure(let failure) = listWrite {
+            await send(.settings(.serverForgetResult(server: server, result: .failure(failure))))
+            return
+          }
+          let savedWrite: StorageWrite
+          if let nextSaved {
+            savedWrite = store.write(nextSaved, for: ServerSharedKeys.savedServer)
+          } else {
+            savedWrite = store.delete(ServerSharedKeys.savedServer)
+          }
+          if case .failure(let failure) = savedWrite {
+            await send(.settings(.serverForgetResult(server: server, result: .failure(failure))))
+            return
+          }
+          await send(.settings(.serverForgetResult(server: server, result: .removed)))
+          await send(.settingsForgottenServer(server, servers: servers, saved: nextSaved))
+        }
+
+      case .delegate(.pairingPayload(let payload)):
+        state.pendingScannedPairing = payload
+        state.settings = nil
+        return .none
+
+      case .delegate(.inAppBrowserChanged(let enabled)):
+        guard state.session != nil else { return .none }
+        return .send(.session(.browserExperimentChanged(enabled: enabled)))
+
+      case .delegate:
+        return .none
+
+      case .serverSaveResult:
+        return .none
+      default:
+        return .none
+      }
+    default:
+      return .none
+    }
+  }
+
+  private func diagnosticFacts(_ state: State) -> DiagnosticFacts {
+    let bundle = Bundle.main
+    let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+    let build = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
+    let phase: DiagnosticFacts.Phase
+    if state.pairingAttempt != nil {
+      phase = .pairing
+    } else {
+      switch state.connection?.phase {
+      case .some(.connecting): phase = .connecting
+      case .some(.loading), .some(.connected): phase = .connected
+      case .some(.reconnecting): phase = .reconnecting
+      case .some(.failed): phase = .failed
+      case .none: phase = .disconnected
+      }
+    }
+    var failure: DiagnosticFacts.FailureKind = .none
+    var statusCode: Int?
+    switch state.connection?.failure {
+    case .invalidAddress: failure = .invalidAddress
+    case .unreachable: failure = .unreachable
+    case .offline: failure = .offline
+    case .timedOut: failure = .timedOut
+    case .credentialsRejected: failure = .credentialsRejected
+    case .incompatibleAPI: failure = .incompatibleAPI
+    case .malformed: failure = .malformed
+    case .serverStatus(let status):
+      failure = .serverStatus
+      statusCode = status
+    case .pairingExpired: failure = .pairingExpired
+    case .pairingUnsupported: failure = .pairingUnsupported
+    case .streamEnded, .streamOverflow: failure = .stream
+    case .unsupported: failure = .unsupported
+    case .unknown, .none: failure = .none
+    }
+    let home = state.home
+    let sessions = home?.sessions.count ?? 0
+    let rows = state.session?.transcripts.values.reduce(0) { $0 + $1.items.count } ?? 0
+    let requests = state.session.map { $0.requests.permissions.count + $0.requests.forms.count } ?? 0
+    return DiagnosticFacts(
+      appVersion: version,
+      build: build,
+      phase: phase,
+      failure: failure,
+      statusCode: statusCode,
+      savedServers: state.savedServers.count,
+      projects: home?.projects.count ?? 0,
+      sessions: sessions,
+      transcriptRows: rows,
+      drafts: state.session == nil ? 0 : 1,
+      activeRequests: requests
+    )
   }
 
   private func restoreEffect() -> Effect<Action> {

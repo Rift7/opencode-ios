@@ -358,27 +358,71 @@ public enum HomeSharedKeys {
 
 // MARK: - What's New
 
-/// One shipped What's New entry. The text keys live in the app's String Catalog; the package keeps
-/// only identity and the routing fact.
-public struct WhatsNewEntry: Equatable, Sendable, Identifiable {
-  public var id: String
-  public var titleKey: String
-  public var bodyKey: String
+/// Where a What's New entry's action goes. A destination that this build does not implement is
+/// explicitly unavailable rather than a dead control.
+public enum WhatsNewDestination: Equatable, Sendable {
+  case newSession
+  case prompt(String)
+  case appearance
+  case sessions
+  case servers
+  case modelPicker
+  case experiment(String)
+  case unavailable(String)
+}
 
-  public init(id: String, titleKey: String, bodyKey: String) {
+/// One shipped What's New entry, including its audited day, copy and Try It destination.
+public struct WhatsNewEntry: Equatable, Sendable, Identifiable {
+  public enum Kind: String, Equatable, Sendable {
+    case feature
+    case smaller
+  }
+
+  public var id: String
+  public var day: String
+  public var kind: Kind
+  public var title: String
+  public var symbol: String
+  public var tint: String
+  public var summary: String
+  public var details: [String]
+  public var example: String?
+  public var destination: WhatsNewDestination?
+
+  public init(
+    id: String,
+    day: String,
+    kind: Kind = .feature,
+    title: String,
+    symbol: String = "sparkles",
+    tint: String = "blue",
+    summary: String,
+    details: [String] = [],
+    example: String? = nil,
+    destination: WhatsNewDestination? = nil
+  ) {
     self.id = id
-    self.titleKey = titleKey
-    self.bodyKey = bodyKey
+    self.day = day
+    self.kind = kind
+    self.title = title
+    self.symbol = symbol
+    self.tint = tint
+    self.summary = summary
+    self.details = details
+    self.example = example
+    self.destination = destination
   }
 }
 
-/// The entries this build ships. The audited app ships a large release catalogue; P6 establishes
-/// the row, routing and seen-state, and the release catalogue is filled by the Settings phase.
+/// The entries this build ships. See `WhatsNewCatalogue` for the reconstructed catalogue.
 public struct WhatsNewCatalog: Sendable, Equatable {
   public var entries: [WhatsNewEntry]
 
   public init(entries: [WhatsNewEntry]) {
-    self.entries = entries
+    self.entries = entries.sorted { lhs, rhs in
+      if lhs.day != rhs.day { return lhs.day > rhs.day }
+      return lhs.id < rhs.id
+    }
   }
 
   public func unseen(seen: Set<String>) -> [WhatsNewEntry] {
@@ -387,23 +431,7 @@ public struct WhatsNewCatalog: Sendable, Equatable {
 
   public var ids: Set<String> { Set(entries.map(\.id)) }
 
-  public static let migration = WhatsNewCatalog(entries: [
-    WhatsNewEntry(
-      id: "migration-home-drawer",
-      titleKey: "whats_new.home_drawer.title",
-      bodyKey: "whats_new.home_drawer.body"
-    ),
-    WhatsNewEntry(
-      id: "migration-catch-up",
-      titleKey: "whats_new.catch_up.title",
-      bodyKey: "whats_new.catch_up.body"
-    ),
-    WhatsNewEntry(
-      id: "migration-project-icons",
-      titleKey: "whats_new.project_icons.title",
-      bodyKey: "whats_new.project_icons.body"
-    ),
-  ])
+  public static let migration = WhatsNewCatalog(entries: WhatsNewCatalogue.entries)
 }
 
 extension WhatsNewCatalog: DependencyKey {

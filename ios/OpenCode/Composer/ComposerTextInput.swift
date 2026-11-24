@@ -16,6 +16,9 @@ struct ComposerTextInput: UIViewRepresentable {
   var onPasteImages: ([Data]) -> Void = { _ in }
   var onPasteFiles: ([URL]) -> Void = { _ in }
   var onPasteText: (String) -> Void = { _ in }
+  /// Reports the draft, the UTF-16 caret and whether an IME composition is open. The reducer
+  /// never queries suggestions or commits text while marked text exists.
+  var onCaretChanged: (String, Int?, Bool) -> Void = { _, _, _ in }
 
   func makeCoordinator() -> Coordinator {
     Coordinator(parent: self)
@@ -155,10 +158,18 @@ struct ComposerTextInput: UIViewRepresentable {
         updateHeight(view, binding: parent.$height)
         scrollCaretIfNeeded(view)
       }
+      publishCaret(textView)
     }
 
     func textViewDidChangeSelection(_ textView: UITextView) {
       scrollCaretIfNeeded(textView)
+      publishCaret(textView)
+    }
+
+    private func publishCaret(_ textView: UITextView) {
+      guard !isPublishing, let range = textView.selectedTextRange else { return }
+      let caret = textView.offset(from: textView.beginningOfDocument, to: range.start)
+      parent.onCaretChanged(textView.text, caret, textView.markedTextRange != nil)
     }
 
     func textView(

@@ -156,12 +156,46 @@ import OpenCodeServer
       }
     }
 
+    /// Keeps Settings' preference keys in a UI-test suite across a relaunch while every other
+    /// key stays in memory. The server credentials are re-seeded on each launch.
+    private struct UITestSettingsStorage: KeyValueStorage {
+      static let names: Set<String> = [
+        SharedKeys.appearanceColorScheme.name,
+        SharedKeys.returnKeySends.name,
+        SharedKeys.fileViewerWrapsLines.name,
+        SharedKeys.experimentalInAppBrowser.name,
+        SharedKeys.onboardingCompleted.name,
+      ]
+
+      let memory: OpenCodeCore.InMemoryStorage
+      let defaults = UserDefaultsStorage(suiteName: "ai.opencode.ui-tests.settings")
+
+      init() {
+        memory = OpenCodeCore.InMemoryStorage()
+        if ProcessInfo.processInfo.arguments.contains("-uiTestResetSettings") {
+          for name in Self.names { _ = defaults.delete(name) }
+        }
+      }
+
+      func read(_ key: String) -> StorageRead {
+        Self.names.contains(key) ? defaults.read(key) : memory.read(key)
+      }
+
+      func write(_ data: Data, for key: String) -> StorageWrite {
+        Self.names.contains(key) ? defaults.write(data, for: key) : memory.write(data, for: key)
+      }
+
+      func delete(_ key: String) -> StorageWrite {
+        Self.names.contains(key) ? defaults.delete(key) : memory.delete(key)
+      }
+    }
+
     static func make(mode: String = "connected") -> Fixture {
       let requestState = RequestState()
       let composer = ComposerFixture(mode: mode)
       let storage = SharedStore(
-        defaults: InMemoryStorage(),
-        keychain: InMemoryStorage()
+        defaults: UITestSettingsStorage(),
+        keychain: OpenCodeCore.InMemoryStorage()
       )
       _ = storage.write(server, for: ServerSharedKeys.savedServer)
       _ = storage.write([server, secondServer], for: ServerSharedKeys.savedServers)
@@ -339,16 +373,69 @@ import OpenCodeServer
           return "/tmp/uploads/\(uploadID)/\(name)"
         },
         listDirectory: { _, path in
-          DirectoryListing(
-            directory: path ?? "/work/opencode",
-            entries: [
-              DirectoryEntry(path: "Sources", type: "directory"),
-              DirectoryEntry(path: "README.md", type: "file"),
-            ]
-          )
+          switch path {
+          case "Sources", "/work/opencode/Sources":
+            DirectoryListing(
+              directory: "/work/opencode/Sources",
+              entries: [DirectoryEntry(path: "/work/opencode/Sources/App.swift", type: "file")]
+            )
+          case nil:
+            DirectoryListing(
+              directory: "/work/opencode",
+              entries: [
+                DirectoryEntry(path: "/work/opencode/Sources", type: "directory"),
+                DirectoryEntry(path: "/work/opencode/README.md", type: "file"),
+              ]
+            )
+          default:
+            DirectoryListing(directory: path ?? "/work/opencode", entries: [])
+          }
         },
         readFile: { _, _, path, _ in
           Data("// \(path)\nlet fixtureValue = 1\n".utf8)
+        },
+        modelCatalog: { _, _ in
+          ModelCatalog(
+            models: [
+              ServerModel(
+                modelID: "claude-opus-5.5",
+                providerID: "anthropic",
+                name: "Claude Opus 5.5",
+                inputs: ["image"],
+                variants: ["low", "high", "max"]
+              ),
+              ServerModel(
+                modelID: "gpt-5.4",
+                providerID: "openai",
+                name: "GPT-5.4"
+              ),
+            ],
+            defaultModel: ServerModel(
+              modelID: "claude-opus-5.5",
+              providerID: "anthropic",
+              name: "Claude Opus 5.5",
+              variants: ["low", "high", "max"]
+            )
+          )
+        },
+        switchModel: { _, _, _ in },
+        agents: { _, _, primaryOnly in
+          let values = [
+            ServerAgent(id: "build", name: "build", description: "Build things", mode: "primary"),
+            ServerAgent(id: "plan", name: "plan", description: "Plan first", mode: "primary"),
+          ]
+          return primaryOnly ? ServerAgent.choosable(values) : values
+        },
+        switchAgent: { _, _, _ in },
+        skills: { _, _ in
+          [ServerSkill(id: "review", name: "review", description: "Review a change")]
+        },
+        commands: { _, _ in
+          [ServerCommand(name: "init", description: "Create AGENTS.md")]
+        },
+        findFiles: { _, _, query, _ in
+          [ServerFileSuggestion(path: "/work/opencode/Sources/App.swift")]
+            .filter { query.isEmpty || $0.name.lowercased().contains(query.lowercased()) }
         },
         sendPrompt: { _, sessionID, body in
           try await composer.send(sessionID: sessionID, body: body)

@@ -148,6 +148,21 @@ public struct OpenCodeClient: Sendable {
   /// `GET /api/fs/read/{relative}`: one server file, bounded by the caller.
   public var readFile:
     @Sendable (OpenCodeServer, String, String, Int64) async throws -> Data
+  /// `GET /api/model` and, where offered, `/api/model/default`.
+  public var modelCatalog: @Sendable (OpenCodeServer, String?) async throws -> ModelCatalog
+  /// `POST /api/session/{id}/model`.
+  public var switchModel: @Sendable (OpenCodeServer, String, ModelRef) async throws -> Void
+  /// `GET /api/agent`; `primaryOnly` keeps agents a session can start with.
+  public var agents: @Sendable (OpenCodeServer, String?, Bool) async throws -> [ServerAgent]
+  /// `POST /api/session/{id}/agent`.
+  public var switchAgent: @Sendable (OpenCodeServer, String, String) async throws -> Void
+  /// `GET /api/skill`.
+  public var skills: @Sendable (OpenCodeServer, String?) async throws -> [ServerSkill]
+  /// `GET /api/command`.
+  public var commands: @Sendable (OpenCodeServer, String?) async throws -> [ServerCommand]
+  /// `GET /api/fs/find`: remote path suggestions, bounded by `limit`.
+  public var findFiles: @Sendable (OpenCodeServer, String, String, Int) async throws
+    -> [ServerFileSuggestion]
   /// Admits one prompt under a client-made message ID, so a retry cannot create a second copy.
   public var sendPrompt: @Sendable (OpenCodeServer, String, PromptBody) async throws -> Void
   /// Creates a session in `directory`; `id` makes the create idempotent.
@@ -243,6 +258,26 @@ public struct OpenCodeClient: Sendable {
     readFile: @escaping @Sendable (OpenCodeServer, String, String, Int64) async throws -> Data = {
       _, _, _, _ in throw OpenCodeClientError(.unsupported)
     },
+    modelCatalog: @escaping @Sendable (OpenCodeServer, String?) async throws -> ModelCatalog = {
+      _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    switchModel: @escaping @Sendable (OpenCodeServer, String, ModelRef) async throws -> Void = {
+      _, _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    agents: @escaping @Sendable (OpenCodeServer, String?, Bool) async throws -> [ServerAgent] = {
+      _, _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    switchAgent: @escaping @Sendable (OpenCodeServer, String, String) async throws -> Void = {
+      _, _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    skills: @escaping @Sendable (OpenCodeServer, String?) async throws -> [ServerSkill] = {
+      _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    commands: @escaping @Sendable (OpenCodeServer, String?) async throws -> [ServerCommand] = {
+      _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    findFiles: @escaping @Sendable (OpenCodeServer, String, String, Int) async throws
+      -> [ServerFileSuggestion] = { _, _, _, _ in throw OpenCodeClientError(.unsupported) },
     sendPrompt: @escaping @Sendable (OpenCodeServer, String, PromptBody) async throws -> Void = {
       _, _, _ in throw OpenCodeClientError(.unsupported)
     },
@@ -290,6 +325,13 @@ public struct OpenCodeClient: Sendable {
     self.uploadFile = uploadFile
     self.listDirectory = listDirectory
     self.readFile = readFile
+    self.modelCatalog = modelCatalog
+    self.switchModel = switchModel
+    self.agents = agents
+    self.switchAgent = switchAgent
+    self.skills = skills
+    self.commands = commands
+    self.findFiles = findFiles
     self.sendPrompt = sendPrompt
     self.createSession = createSession
     self.cancelPendingInput = cancelPendingInput
@@ -647,6 +689,67 @@ private struct Runtime: Sendable {
           directory: directory,
           relativePath: relativePath,
           maximumBytes: maximumBytes,
+          environment: environment,
+          policy: policy
+        )
+      },
+      modelCatalog: { server, directory in
+        try await Operations.modelCatalog(
+          server,
+          directory: directory,
+          environment: environment,
+          policy: policy
+        )
+      },
+      switchModel: { server, sessionID, model in
+        try await Operations.switchModel(
+          server,
+          sessionID: sessionID,
+          model: model,
+          environment: environment,
+          policy: policy
+        )
+      },
+      agents: { server, directory, primaryOnly in
+        try await Operations.agents(
+          server,
+          directory: directory,
+          primaryOnly: primaryOnly,
+          environment: environment,
+          policy: policy
+        )
+      },
+      switchAgent: { server, sessionID, agent in
+        try await Operations.switchAgent(
+          server,
+          sessionID: sessionID,
+          agent: agent,
+          environment: environment,
+          policy: policy
+        )
+      },
+      skills: { server, directory in
+        try await Operations.skills(
+          server,
+          directory: directory,
+          environment: environment,
+          policy: policy
+        )
+      },
+      commands: { server, directory in
+        try await Operations.commands(
+          server,
+          directory: directory,
+          environment: environment,
+          policy: policy
+        )
+      },
+      findFiles: { server, directory, query, limit in
+        try await Operations.findFiles(
+          server,
+          directory: directory,
+          query: query,
+          limit: limit,
           environment: environment,
           policy: policy
         )

@@ -4247,6 +4247,390 @@
           }
         }
       }
+    },
+    "common.remove": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Remove" } } }
+    },
+    "composer.agent": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Agent" } } }
+    },
+    "composer.agent.server_default": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Server Default" } } }
+    },
+    "composer.agent.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Agent" } } }
+    },
+    "composer.model": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Model" } } }
+    },
+    "composer.model.empty": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "This server offers no models for this folder." } } }
+    },
+    "composer.model.loading": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Loading models…" } } }
+    },
+    "composer.model.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Model" } } }
+    },
+    "composer.model.unavailable": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "The chosen model is no longer offered. Pick another before sending." } } }
+    },
+    "composer.project": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Project" } } }
+    },
+    "folder.empty": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "No folders here." } } }
+    },
+    "folder.failed": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Couldn’t read this folder" } } }
+    },
+    "folder.loading": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Loading folders…" } } }
+    },
+    "folder.select": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Select" } } }
+    },
+    "folder.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Choose Folder" } } }
+    },
+    "settings.address.credentials": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "includes a user name or password" } } }
+    },
+    "settings.address.host": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "has no host name" } } }
+    },
+    "settings.address.not_web": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "isn’t a web address" } } }
+    },
+    "settings.address.path": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "has a path; the server must be at the root" } } }
+    },
+    "settings.address.port": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "has a port outside 1–65535" } } }
+    },
+    "settings.address.query": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "has a query or fragment" } } }
+    },
+    "settings.address.scheme": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "doesn’t start with http:// or https://" } } }
+    },
+    "settings.appearance.section": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Appearance" } } }
+    },
+    "settings.appearance.style": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Style" } } }
+    },
+    "settings.diagnostics.collect": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Collect Report" } } }
+    },
+    "settings.diagnostics.copied": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Copied" } } }
+    },
+    "settings.diagnostics.copy": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Copy Report" } } }
+    },
+    "settings.diagnostics.copy_failed": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Couldn’t copy the report." } } }
+    },
+    "settings.diagnostics.detail": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Reports contain only app version, phase, status and counts. They never include credentials, headers, addresses, pairing codes, message text or file contents." } } }
+    },
+    "settings.diagnostics.empty": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Collect a report to see the facts this build can share." } } }
+    },
+    "settings.diagnostics.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Diagnostics" } } }
+    },
+    "settings.empty": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Choose a setting." } } }
+    },
+    "settings.experimental.browser": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "In-App Browser" } } }
+    },
+    "settings.experimental.browser_detail": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Open public links inside the app. Off by default; private and signed links still open in your browser." } } }
+    },
+    "settings.experimental.section": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Experimental" } } }
+    },
+    "settings.help.browser.body": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Turn on In-App Browser under Experimental to open public links without leaving OpenCode. Private, loopback and signed links are handed to your browser." } } }
+    },
+    "settings.help.browser.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "In-App Browser" } } }
+    },
+    "settings.help.pair.body": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Scan the QR code from opencode pair, or paste its link. Pairing codes work once and expire; run the command again for a new one." } } }
+    },
+    "settings.help.pair.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Pairing" } } }
+    },
+    "settings.help.privacy.body": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Credentials and custom header values stay in the Keychain. Diagnostics and logs never include them, message text or file contents." } } }
+    },
+    "settings.help.privacy.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Privacy" } } }
+    },
+    "settings.help.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Help" } } }
+    },
+    "settings.onboarding.back": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Back" } } }
+    },
+    "settings.onboarding.done.message": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "You can revisit this guide from Settings at any time." } } }
+    },
+    "settings.onboarding.done.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "You’re Ready" } } }
+    },
+    "settings.onboarding.finish": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Finish" } } }
+    },
+    "settings.onboarding.next": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Next" } } }
+    },
+    "settings.onboarding.step.0.body": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "OpenCode runs on your computer and this app connects to it. Nothing is paired until you choose a computer." } } }
+    },
+    "settings.onboarding.step.0.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Welcome to OpenCode" } } }
+    },
+    "settings.onboarding.step.1.body": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Run opencode pair on your computer, then scan its QR code or paste the link. You’ll confirm before the one-time code is used." } } }
+    },
+    "settings.onboarding.step.1.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Pair Your Computer" } } }
+    },
+    "settings.onboarding.step.2.body": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Pick a project, describe what you want, and send. Your drafts and choices stay on this phone." } } }
+    },
+    "settings.onboarding.step.2.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Start a Session" } } }
+    },
+    "settings.onboarding.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Welcome" } } }
+    },
+    "settings.problem.corrupt": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "A saved preference couldn’t be read. The default is shown until you choose again." } } }
+    },
+    "settings.problem.last_server": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "The last server can’t be removed while it is open." } } }
+    },
+    "settings.problem.storage": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Couldn’t read or write this preference. Check that storage is available, then try again." } } }
+    },
+    "settings.remove.action": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Remove" } } }
+    },
+    "settings.remove.message": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "This forgets the saved address and credentials on this phone. Drafts and cached media stay unless you remove them separately." } } }
+    },
+    "settings.remove.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Remove Server?" } } }
+    },
+    "settings.save.failed": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Couldn’t save that preference. Your previous choice is still in effect." } } }
+    },
+    "settings.scan.denied": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Camera access is off for OpenCode. Allow it in Settings, or paste the pairing link instead." } } }
+    },
+    "settings.scan.failed": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Couldn’t start the camera. Paste the pairing link instead." } } }
+    },
+    "settings.scan.instruction": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Point the camera at the QR code from opencode pair." } } }
+    },
+    "settings.scan.restricted": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Camera access is restricted on this device. Paste the pairing link instead." } } }
+    },
+    "settings.scan.unavailable": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "No camera is available here. Paste the pairing link instead." } } }
+    },
+    "settings.server.add_header": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Add Header" } } }
+    },
+    "settings.server.address": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Address" } } }
+    },
+    "settings.server.edit": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Edit Server" } } }
+    },
+    "settings.server.empty_address": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Enter the server’s address." } } }
+    },
+    "settings.server.header_empty": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Enter a name for every header, or remove the empty row." } } }
+    },
+    "settings.server.header_forbidden": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "“%@” is set by the app and can’t be edited here." } } }
+    },
+    "settings.server.header_invalid_name": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "“%@” isn’t a valid header name." } } }
+    },
+    "settings.server.header_invalid_value": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "“%@” can’t contain a line break." } } }
+    },
+    "settings.server.header_name": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Header name" } } }
+    },
+    "settings.server.header_value": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Header value" } } }
+    },
+    "settings.server.headers": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Custom Headers" } } }
+    },
+    "settings.server.headers_detail": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Sent only to this server’s addresses. Authorization and transport headers cannot be set here." } } }
+    },
+    "settings.server.invalid_address": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Check the address: it %@." } } }
+    },
+    "settings.server.name": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Name" } } }
+    },
+    "settings.server.no_changes": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "No changes to save." } } }
+    },
+    "settings.server.none": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "No server is connected." } } }
+    },
+    "settings.server.password": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Password" } } }
+    },
+    "settings.server.remove": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Remove Server" } } }
+    },
+    "settings.server.save": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Save" } } }
+    },
+    "settings.server.scan": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Scan QR Code" } } }
+    },
+    "settings.server.section": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Server" } } }
+    },
+    "settings.server.username": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Username" } } }
+    },
+    "settings.sessions.return_detail": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Return inserts a new line unless this is on. Shift-Return always inserts a new line." } } }
+    },
+    "settings.sessions.return_sends": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Return Sends" } } }
+    },
+    "settings.sessions.section": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Sessions" } } }
+    },
+    "settings.sessions.wrap_lines": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Wrap Lines in Files" } } }
+    },
+    "settings.support.section": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Support" } } }
+    },
+    "settings.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Settings" } } }
+    },
+    "whats_new.try": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Try It" } } }
+    },
+    "whats_new.try_unavailable": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Unavailable in this build" } } }
     }
   },
   "version": "1.0"

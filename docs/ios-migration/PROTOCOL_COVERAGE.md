@@ -83,10 +83,13 @@ uses: unknown keys ignored, absent optionals nil, a present wrong type rejects t
 | DELETE | `/api/shell/{id}` | same | `Operations.stopShell` | implemented + tested: drains output first, unsafe |
 | GET | `/api/experimental/job?sessionID&descendants=true&status=running` | same | `Operations.runningJobs` | implemented + tested: running jobs only |
 | POST | `/api/experimental/job/{jobID}/cancel` | same | `Operations.cancelJob` | implemented + tested: idempotent |
-| GET | `/api/model`, `/api/model/default` | `live/LiveCatalog.kt` | `ModelRef` only | deferred to P11 (composer model picker) |
-| GET | `/api/agent`, `/api/skill`, `/api/command`, `/api/plugin`, `/api/mcp`, `/api/integration` | `live/LiveCatalog.kt` | — | deferred to P11 (agent/mode and autocomplete) |
+| GET | `/api/model`, `/api/model/default` | `live/LiveCatalog.kt` | `Operations.modelCatalog`, `ModelCatalog`, `ServerModel` | implemented + tested: location-scoped catalogue, enabled/active filter, variants and optional default |
+| POST | `/api/session/{id}/model` | `live/LiveCatalog.kt` | `Operations.switchModel`, `SessionFeature.startComposerSend` | implemented + tested: `{model}`, idempotent, applied once before the prompt |
+| GET | `/api/agent` | `live/LiveCatalog.kt` | `Operations.agents`, `ServerAgent` | implemented + tested: full and choosable lists, hidden/primary rules |
+| POST | `/api/session/{id}/agent` | `live/LiveCatalog.kt` | `Operations.switchAgent`, `SessionFeature.startComposerSend` | implemented + tested: `{agent}`, idempotent, applied before the prompt |
+| GET | `/api/skill`, `/api/command` | `live/LiveCatalog.kt` | `Operations.skills`, `Operations.commands` | implemented + tested: location-scoped autocomplete catalogue |
 | GET | `/api/fs/list`, `/api/fs/read/{rel}` | `live/LiveFiles.kt` | `Operations.listDirectory`, `Operations.readFile`, `DirectoryListing` | implemented + tested: folder list decode; authenticated read scoped by `location[directory]`, bounded by the caller, capability header; no local path is read |
-| GET | `/api/fs/find` | `live/LiveFiles.kt` | — | deferred to P11 (file autocomplete) |
+| GET | `/api/fs/find` | `live/LiveFiles.kt` | `Operations.findFiles`, `ServerFileSuggestion` | implemented + tested: location, query, `type=file`, bounded limit; remote paths only |
 | POST | `/api/experimental/fs/write` | `live/LiveFiles.kt` | `Operations.uploadFile`, `HTTPTransport.upload` | implemented + tested: `/api/info` `paths.tmp`, one `<tmp>/uploads/<uuid>/<name>` path across retries, streaming octet body, throttled progress, 404 → unsupported |
 | GET | `/api/experimental/media/{hash}` | `live/MediaReferenceFetch.kt` | `Operations.mediaBlob`, `MediaReferenceCache` | implemented + tested: authenticated `*/*` read with `experimental-media-uri`, 25 MiB blob bound, coalesced 48 MiB/64-entry memory and 256 MiB disk tiers, per-server 404 |
 | POST | `/api/rpc/mobile-notifications/pair` | `live/LiveConnection.kt` | — | deferred to P12 (Experimental, off) |

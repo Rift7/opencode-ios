@@ -25,6 +25,10 @@
 | P10 implementation head | `188167c7` (code, tests, screenshots and docs) |
 | P10 correction head | `b7967f5f` (durable release, upload ownership, staging namespace, bounded downloads, scoped/validated cache) |
 | P10 evidence head | `0dcd0eb0` (verification record and final UI/package results) |
+| P10 merged head | `0ec10ba4` (PR #9 squash merge); merge tree `02dad71e` equals reviewed P10 tree `9880eeb9` |
+| P11 base | `0ec10ba4` (`origin/ios`, PR #9 merged) |
+| P11 branch | `ios-settings`, created from `origin/ios` after `git fetch origin` |
+| P11 final head | recorded on the branch and in the draft PR after the evidence commit |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
 `git fetch origin` moved `origin/ios` to `e42cb455`; PR #8 (`ios: add the native composer, drafts, sends, queue,
@@ -52,8 +56,8 @@ is the hand-off check.
 | 7 | Session, subagents, background work, request review | complete — `92a7c677` (PR #6); merged tree `e8e1db5b` equals reviewed `56c10086` |
 | 8 | Transcript | complete — merged as `2823c06e` (PR #7); merged tree `1147dca8` equals reviewed head `5ea6ea65` |
 | 9 | Composer | complete on `ios` — PR #8 merged as `e42cb455`; merged tree `62d44987` equals reviewed `1fd90423` |
-| 10 | Media | **complete on `ios-media`** (draft PR, base `ios`) |
-| 11 | Settings, experiments, diagnostics, onboarding | not started |
+| 10 | Media | complete — merged as `0ec10ba4` (PR #9); merged tree `02dad71e` equals reviewed `9880eeb9` |
+| 11 | Settings, experiments, diagnostics, onboarding, QR pairing, models, autocomplete, files | **complete on `ios-settings`** (draft PR, base `ios`); see [P11_MATRIX.md](P11_MATRIX.md) and [P12_DEVICE_CHECKLIST.md](P12_DEVICE_CHECKLIST.md) |
 | 12 | System integrations | not started |
 | 13 | Voice (Experimental, off) | not started |
 | 14 | Hardening | not started |
@@ -451,7 +455,7 @@ dock and queued sheet show fixture-only questions and messages.
 | Prompt encoding | inline JPEG/paste `data:` parts, path reference lines, `metadata.attachments` | `ComposerAttachmentTests.promptEncoding` |
 | Transcript images/tool mosaics | native tiles and gallery; tool mosaic opens the same viewer | fixture UI journeys |
 | Viewers | image/zoom, video/audio, PDF, code/text, file | UI journeys; playback interruptions unverified |
-| Server files | `fs/list` and bounded `fs/read` through the client; preview; remote-only paths | folder-browser UI is not surfaced (P11 file autocomplete); read flows tested |
+| Server files | `fs/list` and bounded `fs/read` through the client; preview; remote-only paths | P11 adds the on-demand folder browser; read flows tested |
 | Annotation | draw, undo, flatten and add to the originating composer; cancel keeps the draft | UI Add journey and renderer test |
 | Browser | Experimental, off by default; public pages only; non-persistent store; handoff and fallback | gate journey; no credentials, no script bridge, no file access |
 | Math/Mermaid | explicit final source fallback | no renderer dependency added; not labelled as rendered |
@@ -507,7 +511,7 @@ The 421 package tests are the sum of the six target runs the package runner prin
 - **P9 live server**: no compatible V2 server with the audited prompt/create/wait routes was available.
   Every positive send, retry, queue and dock journey used the deterministic fixture; live session mutation
   was not authorized and did not run.
-- **P9 model/agent/mentions/commands**: not built (see the P11 row below).
+- **P9 model/agent/mentions/commands**: implemented in P11 for models, agents, skills, commands and files; session mentions remain deferred.
 - **P10 physical device**: no hardware run. Camera, photo-library prompts, file-provider download/eviction,
   video/audio interruptions, share sheet, mobile-network upload and real memory warnings remain unverified.
 - **P10 live server**: no compatible V2 server with `paths.tmp`, `/api/experimental/fs/write` and
@@ -520,8 +524,8 @@ The 421 package tests are the sum of the six target runs the package runner prin
   the UI test runner, enabled by DEBUG launch arguments; the production policy still refuses loopback.
 - **P10 photo-picker video**: `PhotosPicker` is filtered to images; a video can be attached through Files and
   server video playback is covered, but picking a video in Photos is not implemented.
-- **P10 file browser UI**: `fs/list` is implemented and tested, but the session has no folder-browser screen;
-  file cards open their referenced file directly. P11 file autocomplete owns the browse surface.
+- **P10 file browser UI**: `fs/list` was implemented and tested in P10; P11 adds the new-session folder
+  browser and file autocomplete. File cards still open their referenced file directly.
 - **P10 math/Mermaid**: source fallback is final for this phase; no renderer was added.
 - **P10 cross-block selection**: per-block selection and reply Copy remain; the cross-block handoff is not built.
 - **Pre-existing Home deletion timing failure**: the intermittent Home deletion test remains a known
@@ -546,12 +550,12 @@ The 421 package tests are the sum of the six target runs the package runner prin
 
 | Deferred item | Later phase | Acceptance check |
 | --- | --- | --- |
-| Model, agent/mode and reasoning-variant pickers | P11 | `GET /api/model`, `/api/model/default` and `/api/agent` decode; the chosen model/agent is applied once before the next send; a refused pick leaves the composer draft intact |
-| Autocomplete for files, agents, skills and slash commands; mentions | P11/P10 | Filtering is next-frame; a chosen mention survives draft restore; the prompt carries the audited `agents`, `skills`, `files` and `mentions` shapes; file results never read local disk |
+| Model, agent/mode and reasoning-variant pickers | **P11 — done** | `GET /api/model`, `/api/model/default` and `/api/agent` decode; the chosen model/agent is applied once before the next send; a refused pick leaves the composer draft intact |
+| Autocomplete for files, agents, skills and slash commands; mentions | **P11 — done** | Filtering is next-frame; a chosen mention survives draft restore; the prompt carries the audited `agents`, `skills`, `files` and `mentions` shapes; file results never read local disk |
 | Attachment picker, camera, photo/file uploads and inline pasted text | **P10 — done** | Size/type validation, progress, cancellation and failed-upload recovery; the + control exists and works |
 | Cross-block selection for quoting a whole reply | P14 | One reply selects across blocks with native handles and the selection becomes one quote without losing the composer draft |
 | IME marked text, hardware Shift+Return and VoiceOver on device | P14 | A pinyin/Japanese composition is not committed by an external draft sync; Shift+Return inserts a newline and plain Return sends; each composer control reads and activates in order |
-| Folder browser for server files; picker videos | P11/P14 | The file autocomplete lists `fs/list` results without local reads; a Photos video becomes a staged upload with a poster and duration |
+| Folder browser for server files; picker videos | **P11 — done for folders; video remains P14** | The folder browser lists `fs/list` results without local reads; a Photos video becomes a staged upload with a poster and duration |
 
 ## Deferred P10 items — later phase and acceptance check
 
@@ -571,3 +575,61 @@ The 421 package tests are the sum of the six target runs the package runner prin
    headers, camera QR pairing, model/agent pickers, autocomplete, mentions and the folder browser.
 2. P12: system integrations (share extension/App Group, widgets, notifications).
 3. P14: physical-device media checks, cross-block selection, math/Mermaid decision, orphan sweep and hardening.
+
+
+## Phase 11 — what landed
+
+| Area | New or changed path | Gate |
+| --- | --- | --- |
+| Settings reducer, typed preferences, navigation, server editing, diagnostics, onboarding, scan gate | `OpenCodeKit/Sources/OpenCodeSettings/SettingsModels.swift`, `SettingsFeature.swift` | `OpenCodeSettingsTests` — 13 cases: defaults, restore race, failed write, experiment change, header policy, invalid form, save failure, diagnostics privacy, offline onboarding, exactly-once scan, camera denial, cache scope |
+| Camera QR boundary | `OpenCodeSettings/QRCameraScanner.swift` | AVFoundation metadata output behind `PairingScannerClient`; simulator injects payloads through the same boundary |
+| Appearance application | `ios/OpenCode/App/OpenCodeApp.swift` | `@AppStorage("appearance-color-scheme")` drives `preferredColorScheme`, with the UI-test appearance still winning |
+| Settings UI, server form, diagnostics, onboarding/help, scanner presentation | `ios/OpenCode/Settings/SettingsView.swift` | `SettingsUITests` — 5 journeys: relaunch persistence, diagnostics collect/copy, onboarding offline, header edit/save, injected QR confirmation; 12 light/dark screenshots |
+| Drawer entry and full-screen host | `ios/OpenCode/Drawer/HomeView.swift`, `App/RootView.swift`, `OpenCodeApp/AppFeature.swift` | Gear opens a full-screen Settings surface; server save/remove delegates write only after validation and preserve an unreadable list |
+| Custom-header policy and cache scope | `OpenCodeServer/Address/OpenCodeServer.swift`, `OpenCodeMedia/MediaReferences.swift` | token/newline/forbidden-header validation; `authenticationScopeMaterial` includes sendable headers so a header change starts a new authenticated scope |
+| Model, agent and reasoning catalogue | `OpenCodeServer/Models/ModelCatalog.swift`, `Client/CatalogOperations.swift`, `Client/OpenCodeClient.swift` | `/api/model`, optional `/api/model/default`, `/api/agent`, `/api/skill`, `/api/command`, `/api/fs/find`, and the model/agent switch posts; request shapes through the client seam |
+| Composer model/agent selection, durable snapshot | `OpenCodeComposer/{ComposerFeature,ComposerModels}.swift` | picker state, variant ordering, chips/model/agent persisted in the draft, failed send and outbound record |
+| Apply before send | `OpenCodeSession/SessionFeature.swift` | agent then model applied once before the prompt for ordinary and first sends; skipped for queued delivery; a refused switch fails the send; `SessionSelectionTests` records the payload order |
+| Autocomplete, mentions and trigger safety | `OpenCodeComposer/ComposerAutocomplete.swift`, `ios/OpenCode/Composer/ComposerTextInput.swift`, `ComposerViews.swift` | UTF-16 triggers, chip ranges, composition guard, bounded rows, 250 ms file debounce, generation/server/directory/query fencing, exact mention ranges and `file://` URIs; 7 pure tests plus UI suggestion journey |
+| Remote folder browser | `OpenCodeSession/FolderBrowserFeature.swift`, `ios/OpenCode/Session/FolderBrowserView.swift` | on-demand `fs/list`, back/cancel/retry/loading/empty/error, remote-only paths, draft-preserving project switch; 5 reducer tests plus UI select/cancel journey |
+| Shipped What's New catalogue | `OpenCodeDrawer/WhatsNewCatalogue.swift`, `HomeModels.swift`, `HomeView.swift` | 182 entries reconstructed from the audited Kotlin files and English resources; unique IDs/days; seen state; Try It routes are implemented or explicitly unavailable; 3 catalogue tests |
+| Copy | `ios/OpenCode/Resources/Localizable.xcstrings` | 80 new settings, helper, folder and What's New keys; no translated text compared or stored |
+
+### P11 verification
+
+| Check | Result |
+| --- | --- |
+| `swift test --package-path ios/OpenCodeKit` | 591 tests pass (settings 13, composer 52, session 78, server 209, core 67, app 75, drawer 41, transcript 26, media 30) |
+| `xcodebuild ... build` | app target builds for iPhone 18 Pro Max, iOS 27.2 |
+| `SettingsUITests` | 5/5 pass (preference relaunch, diagnostics collect/copy, onboarding, header edit/save, injected QR confirmation) |
+| `ComposerContextUITests` | 2/2 pass (model/agent/mention selection, folder select/cancel with draft) |
+| `SettingsScreenshotUITests` | 12 light/dark captures |
+| Autocomplete trace (implementation probe) | `connected-composer-long`, 900 fixture transcript entries; focused UI-test elapsed from typing `@rev` through the first skill suggestion **about 2.0 s**, including XCTest input and expectation polling; simulator only. The probe was not retained in the final grouped inventory to avoid an XCUITest input flake; autocomplete itself is covered by `testModelAgentAndMentionSelection`. |
+| Existing regressions | full package suite passes; P8/P9/P10 suites unchanged apart from additive fields with decoding defaults. The P10 tool-mosaic journey now scrolls the group clear of the taller P11 composer inset and waits for viewer dismissal; product behaviour is unchanged. `MediaUITests` passes 8/8 with that harness adjustment. |
+| Screenshots | `docs/ios-migration/screens/p11-{settings,diagnostics,onboarding,model-picker,autocomplete,folder-browser}-{light,dark}.png`, captured from `SettingsScreenshotUITests` on the iPhone 18 Pro Max simulator with the synthetic `Fixture` server and `/work/opencode` paths |
+
+### P11 simulator-tested vs hardware-unverified
+
+- **Simulator-tested:** preference defaults/migration/save failure/restore race; experiment write and
+  browser close; server/header validation and save-failure retention; diagnostics allowlist;
+  onboarding completion; injected QR parsing/confirmation/exactly-once forwarding; catalogue
+  completeness and destinations; model/agent selection, payload order, refused switch and durable
+  snapshot; autocomplete triggers, composition guard and mention encoding; folder navigation and
+  draft preservation.
+- **Hardware-unverified (P12):** real camera capture and permission prompts, physical Keychain on a
+  signed build, haptics, IME marked text and hardware Shift+Return, VoiceOver, photo/file provider
+  eviction, playback interruptions/share, memory pressure and device performance. See
+  [P12_DEVICE_CHECKLIST.md](P12_DEVICE_CHECKLIST.md).
+
+### P11 limitations and deferrals
+
+- Only the In-App Browser experiment is surfaced. Other audited experiments belong to P12/P13 or have
+  no iOS implementation; no inert switches were added.
+- Session mentions (`@session:<id>`) are not reproduced. Commands, skills, agents and files are.
+- `Return Sends` and `Wrap Lines` are persisted and surfaced, but the P9 Return behaviour and the
+  file viewer's wrapping remain their owners' work.
+- Try It destinations for voice, notifications, developer tools, model-list shortcuts and prompts
+  are labelled unavailable rather than navigating nowhere.
+- No live V2 server with the model/agent/skill/command/find routes was available; fixture and
+  request-shape coverage is recorded, not live compatibility.
+- The autocomplete measurement includes XCTest input overhead and is not a device-performance claim.

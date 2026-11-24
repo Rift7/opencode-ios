@@ -10,6 +10,7 @@ struct HomeView: View {
   let store: StoreOf<HomeFeature>
   let savedServers: [OpenCodeServer]
   let disconnect: () -> Void
+  let openSettings: () -> Void
 
   var body: some View {
     NavigationStack {
@@ -60,7 +61,8 @@ struct HomeView: View {
     .accessibilityIdentifier("root-phase-connected")
     .sheet(isPresented: drawerPresented) {
       HomeDrawer(
-        store: store
+        store: store,
+        openSettings: openSettings
       )
     }
     .sheet(isPresented: serverSwitcherPresented) {
@@ -209,6 +211,7 @@ struct HomeView: View {
 
 private struct HomeDrawer: View {
   let store: StoreOf<HomeFeature>
+  let openSettings: () -> Void
   #if DEBUG
   @State private var frameProbe = ScrollFrameProbe()
   #endif
@@ -326,7 +329,15 @@ private struct HomeDrawer: View {
         .accessibilityLabel(AppCopy.text("home.sessions"))
         .accessibilityIdentifier("drawer-more")
       }
-      ToolbarItem(placement: .topBarTrailing) {
+      ToolbarItemGroup(placement: .topBarTrailing) {
+        Button {
+          store.send(.drawerDismissed)
+          openSettings()
+        } label: {
+          Image(systemName: "gearshape")
+        }
+        .accessibilityLabel(AppCopy.text("settings.title"))
+        .accessibilityIdentifier("drawer-settings")
         Button(AppCopy.text("common.done")) {
           store.send(.drawerDismissed)
         }
@@ -815,25 +826,15 @@ private struct WhatsNewView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: OpenCodeSpacing.s16) {
+      LazyVStack(alignment: .leading, spacing: OpenCodeSpacing.s16) {
         Text(AppCopy.text("whats_new.intro"))
           .font(OpenCodeFonts.font(.body))
           .foregroundStyle(OpenCodeColors.color(.textBody))
         ForEach(store.whatsNewEntries) { entry in
-          VStack(alignment: .leading, spacing: OpenCodeSpacing.s6) {
-            Text(AppCopy.text(entry.titleKey))
-              .font(OpenCodeFonts.font(.headline))
-              .foregroundStyle(OpenCodeColors.color(.textStrong))
-            Text(AppCopy.text(entry.bodyKey))
-              .font(OpenCodeFonts.font(.body))
-              .foregroundStyle(OpenCodeColors.color(.textBody))
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(OpenCodeSpacing.s16)
-          .background(OpenCodeColors.color(.surfaceStrong), in: .rect(cornerRadius: OpenCodeRadius.card))
-          .overlay {
-            RoundedRectangle(cornerRadius: OpenCodeRadius.card)
-              .strokeBorder(OpenCodeColors.color(.border), lineWidth: 0.5)
+          WhatsNewCard(entry: entry) {
+            if let destination = entry.destination {
+              store.send(.whatsNewTryTapped(destination))
+            }
           }
         }
       }
@@ -853,6 +854,71 @@ private struct WhatsNewView: View {
       store.send(.whatsNewViewed)
     }
     .accessibilityIdentifier("whats-new-list")
+  }
+}
+
+private struct WhatsNewCard: View {
+  let entry: WhatsNewEntry
+  let tryIt: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: OpenCodeSpacing.s6) {
+      HStack(spacing: OpenCodeSpacing.s8) {
+        Image(systemName: entry.symbol)
+          .foregroundStyle(tint)
+        Text(entry.title)
+          .font(OpenCodeFonts.font(.headline))
+          .foregroundStyle(OpenCodeColors.color(.textStrong))
+        Spacer(minLength: 0)
+        Text(entry.day)
+          .font(OpenCodeFonts.font(.caption2))
+          .foregroundStyle(OpenCodeColors.color(.textWeak))
+      }
+      Text(entry.summary)
+        .font(OpenCodeFonts.font(.body))
+        .foregroundStyle(OpenCodeColors.color(.textBody))
+      ForEach(entry.details, id: \.self) { detail in
+        Text(detail)
+          .font(OpenCodeFonts.font(.footnote))
+          .foregroundStyle(OpenCodeColors.color(.textBody))
+      }
+      if let example = entry.example {
+        Text(example)
+          .font(OpenCodeFonts.font(.footnote))
+          .foregroundStyle(OpenCodeColors.color(.textWeak))
+      }
+      if let destination = entry.destination {
+        switch destination {
+        case .unavailable:
+          Text(AppCopy.text("whats_new.try_unavailable"))
+            .font(OpenCodeFonts.font(.caption))
+            .foregroundStyle(OpenCodeColors.color(.textWeak))
+        default:
+          Button(AppCopy.text("whats_new.try")) { tryIt() }
+            .font(OpenCodeFonts.font(.footnote))
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("whats-new-try-\(entry.id)")
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(OpenCodeSpacing.s16)
+    .background(OpenCodeColors.color(.surfaceStrong), in: .rect(cornerRadius: OpenCodeRadius.card))
+    .overlay {
+      RoundedRectangle(cornerRadius: OpenCodeRadius.card)
+        .strokeBorder(OpenCodeColors.color(.border), lineWidth: 0.5)
+    }
+    .accessibilityIdentifier("whats-new-entry-\(entry.id)")
+  }
+
+  private var tint: Color {
+    switch entry.tint {
+    case "red": OpenCodeColors.color(.danger)
+    case "orange", "brown": OpenCodeColors.color(.warning)
+    case "green", "mint", "teal": OpenCodeColors.color(.success)
+    case "gray": OpenCodeColors.color(.textWeak)
+    default: OpenCodeColors.color(.accent)
+    }
   }
 }
 

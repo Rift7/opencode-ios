@@ -130,3 +130,6 @@ therefore runs in the app process through a DEBUG-only `-uiTestKeychainProbe` la
 | `xcodebuild … test` (P9) | app build succeeds; 58 UI tests pass |
 | Device build (iPhone Air, iOS 27.2) | succeeds with `-allowProvisioningUpdates DEVELOPMENT_TEAM=<team> -skipMacroValidation`; automatic signing registered the app |
 
+| `swift test --package-path OpenCodeKit` (P11) | 591 tests pass (209 server, 67 core, 75 app, 41 drawer, 78 session, 26 transcript, 52 composer, 30 media, 13 settings) |
+| `xcodebuild … test` (P11) | app build succeeds; P11 focused journeys pass on iPhone 18 Pro Max / iOS 27.2; see `STATUS.md` for the grouped/full-run result and any recorded flakes |
+| Phase 11 simulator measurements | iPhone 18 Pro Max, iOS 27.2 (runtime `24B8117`); no physical iPhone, camera, signing team or provisioning change was used |

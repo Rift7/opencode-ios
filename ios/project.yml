@@ -44,6 +44,8 @@ targets:
         product: OpenCodeMedia
       - package: OpenCodeKit
         product: OpenCodeComposer
+      - package: OpenCodeKit
+        product: OpenCodeSettings
       - package: ComposableArchitecture
         product: ComposableArchitecture
     settings:

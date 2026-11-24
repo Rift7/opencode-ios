@@ -36,7 +36,10 @@ The Android tree is not modified by this work.
 - `ios-composer` — Phase 9: composer, drafts, sends, queue, request dock and quotes. Branched from
   `origin/ios` `2823c06e`; merged as `e42cb455` (PR #8), tree `62d44987` equals corrected `1fd90423`.
 - `ios-media` — Phase 10: media, files, viewers, annotation, browser and rendering fallback. Branched from
-  `origin/ios` `e42cb455`; pushed to the fork with a draft PR into `ios`.
+  `origin/ios` `e42cb455`; merged as `0ec10ba4` (PR #9), tree `02dad71e` equals reviewed `9880eeb9`.
+- `ios-settings` — Phase 11: settings, experiments, diagnostics, onboarding, QR pairing, catalogue,
+  custom headers, models/agents, autocomplete and the folder browser. Branched from `origin/ios`
+  `0ec10ba4`; pushed to the fork with a draft PR into `ios`.
 - Later task branches from `ios` are pushed to the fork and opened as **draft** PRs into `ios`. Nothing is
   merged, released or distributed from here.
 
@@ -125,6 +128,24 @@ xcodebuild -project ios/OpenCode.xcodeproj -scheme OpenCode \
 in-app browser gate uses `-uiTestInAppBrowser`; `OPENCODE_UI_TEST_CLIPBOARD_IMAGE=1` puts a synthetic image on
 the pasteboard before launch. Both are DEBUG-only.
 
+P11 surfaces:
+
+```sh
+xcodebuild -project ios/OpenCode.xcodeproj -scheme OpenCode \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro Max' -skipMacroValidation \
+  -only-testing:OpenCodeUITests/SettingsUITests test
+xcodebuild -project ios/OpenCode.xcodeproj -scheme OpenCode \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro Max' -skipMacroValidation \
+  -only-testing:OpenCodeUITests/ComposerContextUITests test
+xcodebuild -project ios/OpenCode.xcodeproj -scheme OpenCode \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro Max' -skipMacroValidation \
+  -only-testing:OpenCodeUITests/SettingsScreenshotUITests test
+```
+
+`-uiTestResetSettings` clears the UI-test preference suite; `-uiTestPairingPayload <link>` injects one decoded
+scan through `PairingScannerClient` so no camera is used. `connected-composer-long` is the 900-entry transcript
+fixture used for the autocomplete trace. All P11 fixtures are synthetic and open no socket.
+
 ## Where tests run
 
 | Suite | Location | Runner |
@@ -137,10 +158,13 @@ the pasteboard before launch. Both are DEBUG-only.
 | Composer reducer, drafts, send eligibility | `ios/OpenCodeKit/Tests/OpenCodeComposerTests` | `swift test` on the host |
 | Composer in the session (sends, inbox, dock, quote) | `ios/OpenCodeKit/Tests/OpenCodeSessionTests/ComposerSessionTests.swift` | `swift test` on the host |
 | Media imports, caches, browser policy, file viewer, annotation, composer attachments | `ios/OpenCodeKit/Tests/{OpenCodeMediaTests,OpenCodeComposerTests/ComposerAttachmentTests,OpenCodeServerTests/MediaClientTests,OpenCodeSessionTests/SessionMediaTests}` | `swift test` on the host |
+| Settings, diagnostics, headers, scan gate, onboarding | `ios/OpenCodeKit/Tests/OpenCodeSettingsTests` | `swift test` on the host |
+| Model/agent switches, autocomplete/mentions, folder browser | `ios/OpenCodeKit/Tests/{OpenCodeServerTests/CatalogClientTests,OpenCodeServerTests/ServerHeaderTransportTests,OpenCodeComposerTests/ComposerAutocompleteTests,OpenCodeSessionTests/SessionSelectionTests,OpenCodeSessionTests/FolderBrowserTests}` | `swift test` on the host |
 | Prompt/create/wait routes and bounded wait loop | `ios/OpenCodeKit/Tests/OpenCodeServerTests/{ComposerClientTests,SessionWaitLoopTests}.swift` | `swift test` on the host |
 | Platform checks (UserDefaults, endpoint encoding, launch mapping) | `ios/OpenCodeTests` | `xcodebuild test` on the simulator |
 | Launch, connection, pairing and failure UI | `ios/OpenCodeUITests` | `xcodebuild test` on the simulator |
 | Keychain round-trip | `ios/OpenCodeUITests/KeychainProbeTests` | `xcodebuild test`; the hostless unit bundle has no keychain entitlement, so the probe runs in the app process behind `-uiTestKeychainProbe` |
+| Settings, injected QR, model/agent, mentions, folder selection, screenshots | `ios/OpenCodeUITests/{SettingsUITests,ComposerContextUITests,SettingsScreenshotUITests}` | `xcodebuild test`; fixtures only, no camera or socket |
 
 The Xcode unit target is hostless and does not link TCA; see `TOOLCHAIN.md` for why, and for the keychain
 entitlement note that puts the round-trip in the UI tests.
@@ -226,8 +250,8 @@ message or file content.
   and retried on launch, foreground and navigation. `saveIfNewer` compares timestamp then revision, so an old
   transfer never replaces newer typing after returning to the session. There is no dismissal timer.
 - Long input grows to 168 pt, then scrolls internally with the caret/selection visible.
-- Model/agent/mode pickers, autocomplete, mentions and attachments are deliberately absent until P11/P10; do not
-  add a control that looks functional before those boundaries exist.
+- Model/agent/mode pickers, autocomplete, mentions and attachments are P10/P11 surfaces and now exist; the
+  P9 send path applies the chosen model/agent before the prompt and snapshots them into the outbound record.
 
 Composer surfaces: `ios/OpenCode/Composer/*`, `OpenCodeKit/Sources/OpenCodeComposer`, the send/inbox/dock
 parts of `OpenCodeKit/Sources/OpenCodeSession`, and the Home New Session entry. Screenshots:
@@ -269,6 +293,44 @@ Media surfaces: `ios/OpenCode/Media/*`, `ios/OpenCode/Composer/{ComposerViews,Ca
 `OpenCodeKit/Sources/OpenCodeMedia/*`, and the viewer/file/browser parts of `OpenCodeSession`. Screenshots:
 `docs/ios-migration/screens/p10-*`.
 
+## Settings and composer context (P11)
+
+- `SettingsFeature` (`OpenCodeKit/Sources/OpenCodeSettings`) owns the Settings stack, typed preferences,
+  server form, diagnostics facts/report, onboarding steps and the scan gate. Credentials and the saved
+  server list remain the app shell's: Settings delegates save/forget and keeps the form open until the
+  shell reports a result. A failed write is shown, never presented as saved.
+- Preference keys are the audited ones: `appearance-color-scheme`, `return-key-sends`,
+  `file-viewer-wraps-lines`, `experimental-in-app-browser`, `onboarding-completed`. A delayed restore
+  fills only untouched fields.
+- Only the In-App Browser experiment is surfaced. Disabling it closes an open browser through
+  `SessionFeature.browserExperimentChanged`. Do not add inert switches for features owned by P12/P13.
+- Custom headers are token-character names with no line breaks; `Authorization`, `Proxy-Authorization`,
+  `Host`, framing, connection and upgrade fields are refused. The saved form is validated before the
+  shell writes. `authenticationScopeMaterial` includes sendable headers, so a header change starts a new
+  authenticated media-cache scope. The existing redirect rule keeps headers on their origin.
+- Diagnostics are built from `DiagnosticFacts` only: version/build, phase/failure kind/status and counts.
+  There is no free-form error text. Collection is user initiated and Copy uses the pasteboard dependency.
+- `PairingScannerClient` is the camera boundary. Production uses AVFoundation metadata output; tests and
+  simulator journeys inject decoded payloads through the same client. The scanner never parses, confirms
+  or redeems; the shell's existing pending confirmation and pairing redemption stay authoritative.
+- The shipped What's New catalogue is generated from the audited Kotlin entry files and English
+  resources (`WhatsNewCatalogue`, 182 entries). IDs and days are permanent. Try It routes to a new session
+  or Settings where implemented; all other destinations render an explicit unavailable line.
+- `ComposerFeature` owns `selectedModel`, `selectedAgent`, autocomplete state and mention chips. The
+  catalogue is loaded per server+directory; file results carry a generation and are ignored when the
+  server, directory or query changed. Marked IME text closes suggestions rather than committing.
+- `SessionFeature.startComposerSend` applies the agent then model once, immediately before the prompt,
+  for ordinary and first sends; queued delivery does not change the run's model. A refused switch fails
+  the send. Model, agent and chips are persisted in the draft, failed send and outbound record.
+- `ComposerMentionBuilder` locates chip tokens in the draft, drops edited tokens, and emits the audited
+  `agents`, `skills` and `files` mention shapes with UTF-16 ranges and `file://` URIs.
+- `FolderBrowserFeature` reads `fs/list` on demand, keeps remote paths opaque and changes a new session's
+  project without clearing the draft. It is a `@Presents` child of the session.
+- Surfaces: `ios/OpenCode/Settings/*`, `ios/OpenCode/Session/FolderBrowserView.swift`,
+  `ios/OpenCode/Composer/{ComposerTextInput,ComposerViews}.swift`, `OpenCodeSettings`,
+  `OpenCodeComposer/ComposerAutocomplete.swift`, `OpenCodeSession/FolderBrowserFeature.swift`.
+  Screenshots: `docs/ios-migration/screens/p11-*`.
+
 ## Test conventions
 
 - Swift Testing for reducers, dependency clients, transport decoding, persistence and formatting.
@@ -280,10 +342,11 @@ Media surfaces: `ios/OpenCode/Media/*`, `ios/OpenCode/Composer/{ComposerViews,Ca
 
 ## Where the work stands
 
-`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P9 are merged into `ios`
-(P9 as `e42cb455`). P10 is implemented on `ios-media` (draft PR into `ios`). The transcript's state
+`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P10 are merged into `ios`
+(P10 as `0ec10ba4`). P11 is implemented on `ios-settings` (draft PR into `ios`). The transcript's state
 boundaries are P7's refresh identity plus P8's per-session `TranscriptState`; the composer sits above both and
-borrows the same settlement read; media viewers and the browser are `@Presents` children of the session.
+borrows the same settlement read; media viewers and the browser are `@Presents` children of the session;
+Settings is a full-screen child of the app shell.
 
 What P6 added, in one paragraph: `HomeFeature` replaces the project-only connected destination with the
 authenticated Home — projects, the drawer's pinned/recent session lists, 50-session paging, local and
@@ -346,7 +409,7 @@ Useful entry points:
 - `MediaPerformanceUITests` (corrections): media-heavy scroll 129–132 frames, p50 16.7 ms, p95 34.6–35.8 ms,
   peak 29.7 MB; large image open/close 5.06 s loop average; typing with an attachment 6.5 ms average /
   32.0 ms max.
-- Deferred: foldered server-file browser and picker videos (P11/P14), Ask/page context (P14), math/Mermaid
+- Deferred: picker videos (P14), Ask/page context (P14), math/Mermaid
   and cross-block selection (P14), physical camera/permissions/playback/sharing (P14).
 
 ### P9 evidence
@@ -359,7 +422,7 @@ Useful entry points:
 - Screenshots: `docs/ios-migration/screens/p9-{composer,composer-quote,quote,request-dock,queued}[-dark].png`.
 - Simulator typing trace: long static transcript 6.6 ms average / 24.3 ms max across 34 changes with no
   Markdown reparse; streaming 9.1 ms average / 14.8 ms max across 17 changes.
-- Deferred: model/agent/mode pickers and autocomplete (P11), attachments and cross-block selection (P10/P14),
+- Deferred: cross-block selection (P14), physical IME/hardware-keyboard/VoiceOver checks (P12); model/agent pickers, autocomplete and mentions are P11.
   physical IME/hardware-keyboard/VoiceOver checks (P14).
 
 ### P7 evidence
@@ -387,11 +450,11 @@ Useful entry points:
 
 | Item | Phase | Acceptance check |
 | --- | --- | --- |
-| Camera QR pairing | P11 | Device scan of a valid `opencode pair` code reaches the confirmation and redeems once; denied camera is a typed outcome. Simulator unverified. |
-| Custom headers | P11 | Keychain round-trip; headers apply only to their server's origins; an invalid header is refused without locking out. |
-| Copied error report | P11 | Copy contains typed facts only; redaction test fails on credentials/addresses/pairing codes/message text. |
-| Haptics feel | P14 | Eleven haptics felt and distinguished on hardware; simulator unverified. |
-| Local-network prompt / real socket | P14 | Denied prompt → no fixture request and unreachable copy; allowed → fixture request; real background/foreground socket reconnect. |
+| Camera QR pairing | **P11 simulator done; P12 device** | Injected payloads reach confirmation once; physical scan and denied camera are in [P12_DEVICE_CHECKLIST.md](P12_DEVICE_CHECKLIST.md). |
+| Custom headers | **P11 done for logic; P12 Keychain** | Token/newline/forbidden validation; headers stay on their origins; a failed save keeps the old server. |
+| Copied error report | **P11 done** | Typed facts only; the privacy test rejects synthetic credentials, headers, addresses, pairing codes and content markers. |
+| Haptics feel | P12 | Eleven haptics felt and distinguished on hardware; simulator unverified; see the device checklist. |
+| Local-network prompt / real socket | P12 | Denied prompt → no fixture request and unreachable copy; allowed → fixture request; real background/foreground socket reconnect; see the device checklist. |
 | Production identifiers (bundle/team/App Group/Keychain) | P12/P14 | Owner-supplied identity builds and signs; credentials persist across relaunch; no historical values copied. |
 | Push notifications | P12 | Relay + credentials exist and the feature defaults off; without them, blocked/unverified. |
 | Composer and quote intent | P9 | P8 renders transcript rows and quote cards; P9 consumes selection as a quote and owns drafts/sends. |

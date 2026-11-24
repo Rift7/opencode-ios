@@ -146,6 +146,34 @@ public enum SharedKeys {
     storage: .userDefaults
   )
 
+  /// Settings › Experimental's In-App Browser switch. Off by default; the audited key is stable.
+  public static let experimentalInAppBrowser = SharedKey<Bool>(
+    name: "experimental-in-app-browser",
+    defaultValue: false,
+    storage: .userDefaults
+  )
+
+  /// The file viewer's Wrap Lines choice, kept across files and launches.
+  public static let fileViewerWrapsLines = SharedKey<Bool>(
+    name: "file-viewer-wraps-lines",
+    defaultValue: false,
+    storage: .userDefaults
+  )
+
+  /// The selected appearance: `system`, `light` or `dark`.
+  public static let appearanceColorScheme = SharedKey<String>(
+    name: "appearance-color-scheme",
+    defaultValue: "system",
+    storage: .userDefaults
+  )
+
+  /// A person who has completed the first-run welcome.
+  public static let onboardingCompleted = SharedKey<Bool>(
+    name: "onboarding-completed",
+    defaultValue: false,
+    storage: .userDefaults
+  )
+
   public static let pairedServers = SharedKey<Data?>(
     name: "paired-servers",
     defaultValue: nil,
@@ -156,6 +184,10 @@ public enum SharedKeys {
   public static let names: [String] = [
     returnKeySends.name,
     sidebarShown.name,
+    experimentalInAppBrowser.name,
+    fileViewerWrapsLines.name,
+    appearanceColorScheme.name,
+    onboardingCompleted.name,
     lastViewedSession.name,
     pairedServers.name,
   ]

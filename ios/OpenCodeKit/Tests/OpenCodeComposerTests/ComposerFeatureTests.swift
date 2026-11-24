@@ -531,6 +531,26 @@ struct ComposerFeatureTests {
     #expect(prompt.metadata?.comments?.first?.type == "quote")
     #expect(prompt.metadata?.displayText == "Explain this")
   }
+
+  @Test("marked text closes suggestions instead of committing a query")
+  func markedTextClosesAutocomplete() async {
+    let store = TestStore(
+      initialState: ComposerFeature.State(serverID: "server", target: .session(id: "s1"))
+    ) {
+      ComposerFeature()
+    } withDependencies: {
+      $0.composerDrafts = .testValue
+      $0.clock = .testValue
+      $0.dateClient = DateClient { Date(timeIntervalSince1970: 1_700_000_000) }
+      $0.haptics = .testValue
+    }
+    store.exhaustivity = .off
+    await store.send(.textChanged("@re"))
+    #expect(store.state.autocomplete.trigger?.query == "re")
+    await store.send(.caretChanged(text: "@re", caret: 3, isComposing: true))
+    #expect(store.state.autocomplete.trigger == nil)
+    #expect(store.state.autocomplete.suggestions.isEmpty)
+  }
 }
 
 private actor Gate {

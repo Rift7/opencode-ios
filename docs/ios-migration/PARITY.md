@@ -85,7 +85,7 @@ cancellation identities → error states. The full extraction is in `docs/ios-mi
 | Home, drawer, projects, Catch Up | `feature/drawer/.../{HomeFeature,HomeFeatureDrawerState,HomeFeatureSessionPages,HomeFeatureSessions}.kt`, `catchup/CatchUpFeature.kt` | `HomeFeature.swift`, `HomeView.swift`, `CatchUpStack.swift` | `OpenCodeKit/Sources/OpenCodeDrawer`, `ios/OpenCode/Drawer/HomeView.swift` | **done for P6 scope** — see the Home section below |
 | Session, subagents, background work | `feature/session/.../SessionFeature.kt` | `SessionFeature.swift`, `SessionView.swift` | `.../OpenCodeSession`, `ios/OpenCode/Session/SessionView.swift` | **done for P7 scope** — see the Session section below; transcript and composer remain P8/P9 |
 | Transcript | `feature/transcript/.../TranscriptEntry.kt`, `list/`, `markdown/` | `TranscriptEntry.swift`, `TranscriptListViewController.swift` (historical) | `.../OpenCodeTranscript`, `ios/OpenCode/Transcript` | **done for P8 scope** — see the Transcript section below |
-| Composer, pending inputs | `feature/composer/.../ComposerTextInput.kt`, `ComposerPersistence*.kt`, `RequestDockFeature.kt`, `QueuedMessagesSheet.kt` | `ComposerTextInput.swift`, `RequestReviewView.swift`, `QueuedMessagesSheet.swift` | `.../OpenCodeComposer`, `ios/OpenCode/Composer` | **done for P9 scope** — see the Composer section below; model/agent/mentions deferred to P11; attachments are P10 |
+| Composer, pending inputs | `feature/composer/.../ComposerTextInput.kt`, `ComposerPersistence*.kt`, `RequestDockFeature.kt`, `QueuedMessagesSheet.kt` | `ComposerTextInput.swift`, `RequestReviewView.swift`, `QueuedMessagesSheet.swift` | `.../OpenCodeComposer`, `ios/OpenCode/Composer` | **done for P9 scope** — see the Composer section below; model/agent/mentions are P11; attachments are P10 |
 | Media, agent files, browser | `feature/media/.../` | `Media/`, `Browser/` | `.../OpenCodeMedia`, `ios/OpenCode/Media` | **done for P10 scope** — imports/uploads, viewers, server file reads, annotation, browser gate, bounded caches; folder-browser UI and picker videos deferred |
 | Settings, experiments, diagnostics | `feature/settings/.../SettingsFeature.kt` | `SettingsView.swift`, `DiagnosticsView.swift` | `.../OpenCodeSettings` | not started |
 | Notifications, share, Live Activities | `feature/system/.../` | `System/`, `OpenCodeShare/`, `OpenCodeWidgets/` | `.../OpenCodeSystem` | not started |
@@ -172,7 +172,7 @@ cancellation identities → error states. The full extraction is in `docs/ios-mi
 | Subagent page composer | `SessionPageStack.kt`, `SessionFeature` | `SessionFeature.swift` (description only) | `SessionFeature` page targets, `ComposerFeature.switchTarget` | done — child pages keep their own drafts/quotes and send to the child session ID; a completed send resolves its original target when another page is visible; `subagentDraftOwnership`, `sendCompletesOnAnotherPage` |
 | Dismissal and replacement | `SessionView`, `AppFeature` session removal | `SessionFeature.swift` (description only) | `AppFeature` pending dismissal and draft transfers, `SessionFeature.flushForDismiss` | done — explicit flush completion with session identity and request ID; the composer re-saves newer text/quotes/failed/outbound content before reporting saved; a failed save keeps the session; replacement/switch/disconnect/interactive dismissal transfer the draft outside the child lifetime; a failed transfer is retained under its key, surfaced as `draftKept`, and retried on launch/foreground/navigation; `saveIfNewer` fences by timestamp then revision; fourteen `AppDismissalTests` |
 | Long input | `ComposerTextInput.kt` | `ComposerTextInput.swift` (description only) | `ios/OpenCode/Composer/ComposerTextInput.swift` | done — grows to 168 pt then scrolls internally with the caret/selection visible; shrinking restores the non-scrolling layout; UI long-draft accessibility journey |
-| Model/agent/mode, autocomplete, mentions and commands | `ModelPicker*`, `AgentPicker`, `AutocompleteFeature.kt`, `ComposerAutocomplete*` | not recoverable | — | deferred to P11 (pickers/mentions) and P10 (files); the composer deliberately has no inert controls for them |
+| Model/agent/mode, autocomplete, mentions and commands | `ModelPicker*`, `AgentPicker`, `AutocompleteFeature.kt`, `ComposerAutocomplete*` | not recoverable | `ComposerAutocomplete.swift`, `ComposerViews.swift`, `SessionFeature.startComposerSend` | **done for P11** — model/agent/reasoning picker, skill/agent/file/command suggestions, UTF-16 mention ranges and durable selection; session mentions remain deferred |
 | Attachments, photos, files and camera | `ComposerAttachmentsFeature.kt`, `AttachmentPicker.kt`, `ComposerPhotoViewer.kt` | `Media/` (description only) | `OpenCodeMedia`, `ios/OpenCode/Composer` | **done for P10** — Photos/Files/Camera/Paste, staged copies, progress/retry/removal, persisted attachment references, inline/path prompt encoding, preview and annotation; picker videos deferred |
 
 ## Media (P10)
@@ -261,3 +261,42 @@ Recorded here so they are not mistaken for missing work.
 | Server: client requests | `.../OpenCodeClientTests.swift` | done |
 | Bounded channel | `OpenCodeCoreTests/BoundedChannelTests.swift` | done; one pre-existing timing-sensitive expectation flaked once and passed on rerun |
 | UI (XCUITest) | `OpenCodeUITests/{LaunchSmokeTests,ConnectionLifecycleUITests,KeychainProbeTests,SavedServerProbeTests,HomeUITests,HomeScreenshotUITests,HomeScrollTraceUITests,SessionUITests,SessionScreenshotUITests,TranscriptUITests,TranscriptScreenshotUITests,TranscriptScrollTraceUITests,ComposerUITests,ComposerScreenshotUITests,MediaUITests,MediaScreenshotUITests,MediaPerformanceUITests}.swift` | done — 70 tests; P10 adds eight media journeys (gallery, tool mosaic, file preview, browser gate, paste preview/remove, pasted-image send, annotation return, Dynamic Type/dark, relaunch recovery), 16 light/dark screenshots and three performance traces |
+
+
+## Settings, catalogue, pairing and composer context (P11)
+
+| Behaviour | Android source (`dev = 7358160e`) | Recovered iOS evidence | New path | Status |
+| --- | --- | --- | --- | --- |
+| Settings stack, typed defaults and persistence | `SettingsFeature.kt`, `HomeSettingsFeature.kt`, `SharedKeys.kt` | `SettingsFeature.swift` (description only) | `OpenCodeSettings/SettingsFeature.swift` | done — full-screen stack; six typed keys; failed writes surfaced; delayed restore cannot overwrite an edit |
+| Appearance and supported preferences | `AppearanceSettingsView.kt`, `SessionsSettingsView.kt` | settings captures (secondary) | `SettingsView.swift`, `OpenCodeApp.swift` | done for System/Light/Dark and the audited Return/Wrap keys; language/themes/sidebar/voice preferences are not inherited |
+| Experimental switches | `ExperimentalSettingsView.kt`, `ExperimentalFeature.kt` | `ExperimentalSettingsView.swift` (description only) | `SettingsView.swift`, `SharedKeys.experimentalInAppBrowser` | done for In-App Browser, off by default; other experiments have no iOS owner and are not displayed |
+| Server editing and custom headers | `AppFeature.kt`, `OpenCodeServer.kt` | manual server form (description only) | `SettingsFeature`, `ServerEditForm`, `OpenCodeServer.Header` | done — name/value/forbidden-header validation, Keychain write only after success, prior config retained on failure, headers origin-bound and cache-scope-aware |
+| Diagnostics and copied report | `ProblemReport.kt`, `DiagnosticsJournal.kt` | copy report (description only) | `DiagnosticFacts`, `DiagnosticReport` | done — allow-listed typed facts, user-initiated, fixed order; adversarial privacy test |
+| Onboarding/help | `WelcomeFeature.kt`, `WelcomeView.kt` | welcome captures (secondary) | `SettingsView.onboardingPage/helpPage` | done — three-step guide and help without credentials or hardware |
+| QR pairing presentation | `PairingScanner.kt`, `ServerCameraClient.kt`, `QRCameraPreview.kt` | scanner description only | `PairingScannerClient`, `QRCameraScanner`, `PairingCaptureView` | done in simulator through the same boundary; physical camera and permissions are P12 |
+| Shipped What's New catalogue | `whatsnew/entries/*.kt` (182 files), `WhatsNewEntries.kt` | row/page capture only | `WhatsNewCatalogue.swift`, `WhatsNewView` | done — IDs/days/copy reconstructed; seen state retained; Try It works or is explicitly unavailable |
+| Model catalogue and reasoning variants | `LiveCatalog.kt`, `Models.kt`, `ModelPicker*` | `ModelPicker` description only | `ModelCatalog.swift`, `CatalogOperations.swift`, picker sheet | done in fixtures — `/api/model`, optional `/api/model/default`, `/api/agent`, variant ordering and short names |
+| Agent/mode selection | `AgentPicker.kt`, `LiveCatalog.kt` | description only | `ServerAgent`, agent picker | done — choosable primary/all, server-default choice |
+| Apply selection before send | `ComposerFeature.send`, `SessionFeatureDelivery.kt` | not recoverable | `SessionFeature.startComposerSend` | done — agent then model once before the prompt; queued sends do not switch; refusal fails the send; configuration snapshotted in the outbound record |
+| File/agent/skill/command autocomplete | `AutocompleteFeature.kt`, `AutocompleteModels.kt` | description only | `ComposerAutocomplete.swift`, `ComposerViews.swift` | done — UTF-16 triggers, bounded rows, generation fences, IME composition guard |
+| Mentions and prompt encoding | `ComposerAutocomplete*.kt`, `OpenCodeAutocompleteMentions` | not recoverable | `ComposerMentionBuilder`, `PromptBody` mention fields | done for agents/skills/files; session mentions deferred |
+| Remote folder browser | `FolderBrowserFeature.kt`, `DraftProjects.kt`, `LiveFiles.kt` | description only | `FolderBrowserFeature.swift`, `FolderBrowserView.swift` | done — on-demand `fs/list`, remote-only paths, loading/retry/empty/error, back/cancel and draft-preserving selection |
+
+### P11 freshness
+
+- Settings and experimental registry last changed at `bc68c787` (2026-11-16); server form/headers at
+  `9b4e1d9c` (2026-11-20); diagnostics at `24c96b93` (2026-11-18); catalogue/autocomplete/folder
+  browser at `f79a895e` (2026-11-14). All precede the behaviour baseline `7358160e` (2026-11-21), so
+  current `dev` is the adopted source.
+- Physical behaviour (camera, permission prompts, Keychain on a signed build, IME and haptics) has no
+  simulator proof and is listed in `P12_DEVICE_CHECKLIST.md`.
+
+
+| Settings, diagnostics, onboarding and pairing presentation | `OpenCodeSettingsTests/SettingsFeatureTests.swift` | done — 13 cases: defaults, restore race, failed write, experiment change, header policy, invalid form, save failure, diagnostics privacy, offline onboarding, scan once, camera denial, cache scope, payload decode |
+| Model/agent selection payload and refusal | `OpenCodeSessionTests/SessionSelectionTests.swift` | done — agent then model then prompt order; refused switch posts nothing; configuration preserved |
+| Autocomplete and mentions | `OpenCodeComposerTests/ComposerAutocompleteTests.swift` | done — 8 tests: trigger boundaries, committed chips, bounded rows, UTF-16 apply, wire ranges/URI, stale token drop, prompt fields |
+| Remote folder browser | `OpenCodeSessionTests/FolderBrowserTests.swift` | done — 5 tests: on-demand reads, cached back, typed failure/retry, ancestors, draft-preserving selection |
+| Catalogue client routes | `OpenCodeServerTests/CatalogClientTests.swift` | done — model/default decode/filter, optional default, model/agent switch bodies, agent/skill/command/find envelopes |
+| Custom-header transport | `OpenCodeServerTests/ServerHeaderTransportTests.swift` | done — edited headers reach the wire, removed/forbidden/malformed ones do not, and credentials remain usable |
+| What's New catalogue | `OpenCodeDrawerTests/WhatsNewCatalogueTests.swift` | done — 182 entries, unique IDs, newest-first, copy present, honest destinations |
+| P11 UI | `OpenCodeUITests/{SettingsUITests,ComposerContextUITests,SettingsScreenshotUITests}.swift` | done — 9 journeys and 12 light/dark screenshots |

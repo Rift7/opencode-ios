@@ -29,6 +29,13 @@ public struct OpenCodeServer: Sendable, Equatable, Codable {
       self.value = value
     }
 
+    public enum Problem: Equatable, Sendable {
+      case emptyName
+      case invalidName
+      case invalidValue
+      case forbiddenName
+    }
+
     /// An HTTP field name: one or more token characters (RFC 9110 §5.6.2).
     public var hasValidName: Bool {
       !name.isEmpty && name.allSatisfy { Self.tokenCharacters.contains($0) }
@@ -39,6 +46,27 @@ public struct OpenCodeServer: Sendable, Equatable, Codable {
     public var hasValidValue: Bool {
       !value.unicodeScalars.contains { Self.newlines.contains($0.value) }
     }
+
+    /// Headers the transport or URL loading owns. Letting a saved header set them could change
+    /// framing, routing or authentication behind the request builder's back.
+    public var isForbidden: Bool {
+      Self.forbiddenNames.contains(name.lowercased())
+    }
+
+    public var problem: Problem? {
+      if name.isEmpty { return .emptyName }
+      if !hasValidName { return .invalidName }
+      if isForbidden { return .forbiddenName }
+      if !hasValidValue { return .invalidValue }
+      return nil
+    }
+
+    public var isSendable: Bool { problem == nil }
+
+    public static let forbiddenNames: Set<String> = [
+      "authorization", "proxy-authorization", "host", "content-length", "transfer-encoding",
+      "connection", "keep-alive", "proxy-connection", "upgrade", "te", "trailer",
+    ]
 
     private static let tokenCharacters = Set(
       "!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -121,7 +149,7 @@ public struct OpenCodeServer: Sendable, Equatable, Codable {
   /// skipped rather than failing the request: one bad saved header must not lock the person out.
   public var wireHeaders: [String: String] {
     var result: [String: String] = [:]
-    for header in headers where header.hasValidName && header.hasValidValue {
+    for header in headers where header.isSendable {
       result[header.name] = header.value
     }
     if let authorization = basicAuthorization {
@@ -135,6 +163,18 @@ public struct OpenCodeServer: Sendable, Equatable, Codable {
     guard !password.isEmpty else { return nil }
     let text = "\(username):\(password)"
     return "Basic " + Data(text.utf8).base64EncodedString()
+  }
+
+  /// Everything that can change which bytes this origin serves. Authenticated caches hash this,
+  /// so editing an authentication-affecting custom header starts a new scope; a username or
+  /// password change alone is not enough.
+  public var authenticationScopeMaterial: String {
+    let headerMaterial = headers
+      .filter(\.isSendable)
+      .map { "\($0.name.lowercased()):\($0.value)" }
+      .sorted()
+      .joined(separator: "\u{1F}")
+    return "\(persistenceID)|\(username)|\(password)|\(headerMaterial)"
   }
 
   /// The same server under a changed address set.
