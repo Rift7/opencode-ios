@@ -24,6 +24,7 @@
 | P10 branch | `ios-media`, created from `origin/ios` after `git fetch origin` |
 | P10 implementation head | `188167c7` (code, tests, screenshots and docs) |
 | P10 correction head | `b7967f5f` (durable release, upload ownership, staging namespace, bounded downloads, scoped/validated cache) |
+| P10 evidence head | `0dcd0eb0` (verification record and final UI/package results) |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
 `git fetch origin` moved `origin/ios` to `e42cb455`; PR #8 (`ios: add the native composer, drafts, sends, queue,

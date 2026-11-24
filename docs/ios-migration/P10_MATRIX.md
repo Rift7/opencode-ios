@@ -2,7 +2,8 @@
 
 Phase 10 of the iOS migration, against the behaviour baseline `7358160e` and the P10 base
 `origin/ios = e42cb455` (PR #8 merged; corrected P9 tree `1fd90423` equals merged tree `62d44987`).
-The P10 implementation head is `188167c7`; the correction head is `b7967f5f`. Every "done" row has a test in this repository. "Unverified"
+The P10 implementation head is `188167c7`; the correction head is `b7967f5f`; the evidence head is
+`0dcd0eb0`. Every "done" row has a test in this repository. "Unverified"
 rows run only on hardware or a live V2 server.
 
 ## Imports and staging
