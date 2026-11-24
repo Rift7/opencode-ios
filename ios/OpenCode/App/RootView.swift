@@ -5,6 +5,9 @@ import OpenCodeDrawer
 import OpenCodeServer
 import OpenCodeSession
 import SwiftUI
+#if canImport(UIKit)
+  import UIKit
+#endif
 
 enum AppCopy {
   static func text(_ key: String) -> String {
@@ -90,6 +93,13 @@ struct RootView: View {
         SessionView(store: sessionStore)
       }
     }
+    #if canImport(UIKit)
+      .onReceive(
+        NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)
+      ) { _ in
+        store.send(.memoryWarning)
+      }
+    #endif
   }
 
   @ViewBuilder

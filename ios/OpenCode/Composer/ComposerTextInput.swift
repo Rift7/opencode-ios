@@ -1,4 +1,5 @@
 import OpenCodeCore
+import OpenCodeMedia
 import SwiftUI
 import UIKit
 
@@ -12,6 +13,9 @@ struct ComposerTextInput: UIViewRepresentable {
   let placeholder: String
   let isEnabled: Bool
   let onSend: () -> Void
+  var onPasteImages: ([Data]) -> Void = { _ in }
+  var onPasteFiles: ([URL]) -> Void = { _ in }
+  var onPasteText: (String) -> Void = { _ in }
 
   func makeCoordinator() -> Coordinator {
     Coordinator(parent: self)
@@ -38,6 +42,7 @@ struct ComposerTextInput: UIViewRepresentable {
     context.coordinator.textView = view
     context.coordinator.placeholder = placeholder
     view.placeholder = placeholder
+    view.pasteHandler = context.coordinator
     return view
   }
 
@@ -54,7 +59,7 @@ struct ComposerTextInput: UIViewRepresentable {
     context.coordinator.updateHeight(view, binding: $height)
   }
 
-  final class Coordinator: NSObject, UITextViewDelegate {
+  final class Coordinator: NSObject, UITextViewDelegate, ComposerPasteHandling {
     var parent: ComposerTextInput
     weak var textView: ComposerTextView?
     var placeholder = ""
@@ -169,11 +174,41 @@ struct ComposerTextInput: UIViewRepresentable {
       parent.onSend()
       return false
     }
+
+    func paste(from view: ComposerTextView) -> Bool {
+      let pasteboard = UIPasteboard.general
+      if pasteboard.hasImages, let images = pasteboard.images {
+        let data = images.compactMap { $0.jpegData(compressionQuality: 0.9) }
+        if !data.isEmpty {
+          parent.onPasteImages(data)
+          return true
+        }
+      }
+      if let urls = pasteboard.urls {
+        let files = urls.filter(\.isFileURL)
+        if !files.isEmpty {
+          parent.onPasteFiles(files)
+          return true
+        }
+      }
+      if pasteboard.hasStrings, let text = pasteboard.string,
+        MediaLimits.isLongPaste(text)
+      {
+        parent.onPasteText(text)
+        return true
+      }
+      return false
+    }
   }
+}
+
+protocol ComposerPasteHandling: AnyObject {
+  func paste(from view: ComposerTextView) -> Bool
 }
 
 /// Tracks Shift+Return so the hardware keyboard can insert a newline while plain Return sends.
 final class ComposerTextView: UITextView {
+  weak var pasteHandler: ComposerPasteHandling?
   var placeholder: String? {
     didSet {
       placeholderLabel.text = placeholder
@@ -216,5 +251,10 @@ final class ComposerTextView: UITextView {
       returnHasShift = key.modifierFlags.contains(.shift)
     }
     super.pressesBegan(presses, with: event)
+  }
+
+  override func paste(_ sender: Any?) {
+    if pasteHandler?.paste(from: self) == true { return }
+    super.paste(sender)
   }
 }

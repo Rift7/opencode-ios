@@ -1,5 +1,6 @@
 import Foundation
 import OpenCodeCore
+import OpenCodeMedia
 import OpenCodeServer
 
 /// Where a composer's draft belongs. A new-session draft is scoped by its project so leaving and
@@ -53,6 +54,20 @@ public struct ComposerQuote: Codable, Identifiable, Equatable, Sendable {
   }
 }
 
+public struct ComposerAttachmentPreview: Identifiable, Equatable, Sendable {
+  public var id: String { attachment.id }
+  public var attachment: MediaAttachment
+  public var data: Data
+  /// A pasted text's contents; nil for images.
+  public var text: String?
+
+  public init(attachment: MediaAttachment, data: Data, text: String? = nil) {
+    self.attachment = attachment
+    self.data = data
+    self.text = text
+  }
+}
+
 /// The composer's destination. `newSession.id` is the client-made session ID used for the first
 /// create, so a retry cannot create a second session.
 public enum ComposerTarget: Codable, Equatable, Hashable, Sendable {
@@ -91,6 +106,9 @@ public enum ComposerTarget: Codable, Equatable, Hashable, Sendable {
 public struct ComposerDraft: Codable, Equatable, Sendable {
   public var text: String
   public var quotes: [ComposerQuote]
+  /// Staged photos, pastes and files. Their local paths are app-owned references; picker URLs are
+  /// never persisted.
+  public var attachments: [MediaAttachment]
   public var projectDirectory: String?
   /// A first send created this session, but the send or the app stopped before the screen learned.
   public var createdSessionID: String?
@@ -105,6 +123,7 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
   public init(
     text: String = "",
     quotes: [ComposerQuote] = [],
+    attachments: [MediaAttachment] = [],
     projectDirectory: String? = nil,
     createdSessionID: String? = nil,
     failedSends: [FailedComposerSend] = [],
@@ -114,6 +133,7 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
   ) {
     self.text = text
     self.quotes = quotes
+    self.attachments = attachments
     self.projectDirectory = projectDirectory
     self.createdSessionID = createdSessionID
     self.failedSends = failedSends
@@ -123,13 +143,15 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
   }
 
   private enum CodingKeys: String, CodingKey {
-    case text, quotes, projectDirectory, createdSessionID, failedSends, outbound, revision, updatedAt
+    case text, quotes, attachments, projectDirectory, createdSessionID, failedSends, outbound
+    case revision, updatedAt
   }
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     text = try container.decode(String.self, forKey: .text)
     quotes = try container.decodeIfPresent([ComposerQuote].self, forKey: .quotes) ?? []
+    attachments = try container.decodeIfPresent([MediaAttachment].self, forKey: .attachments) ?? []
     projectDirectory = try container.decodeIfPresent(String.self, forKey: .projectDirectory)
     createdSessionID = try container.decodeIfPresent(String.self, forKey: .createdSessionID)
     failedSends = try container.decodeIfPresent([FailedComposerSend].self, forKey: .failedSends) ?? []
@@ -143,6 +165,7 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
     var container = encoder.container(keyedBy: CodingKeys.self)
     try container.encode(text, forKey: .text)
     try container.encode(quotes, forKey: .quotes)
+    try container.encode(attachments, forKey: .attachments)
     try container.encodeIfPresent(projectDirectory, forKey: .projectDirectory)
     try container.encodeIfPresent(createdSessionID, forKey: .createdSessionID)
     try container.encode(failedSends, forKey: .failedSends)
@@ -163,6 +186,7 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
   public func sameContent(as other: ComposerDraft) -> Bool {
     text == other.text
       && quotes == other.quotes
+      && attachments == other.attachments
       && projectDirectory == other.projectDirectory
       && createdSessionID == other.createdSessionID
       && failedSends == other.failedSends
@@ -170,13 +194,13 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
   }
 
   public var isEmpty: Bool {
-    text.isEmpty && quotes.isEmpty && createdSessionID == nil && failedSends.isEmpty
-      && outbound.isEmpty
+    text.isEmpty && quotes.isEmpty && attachments.isEmpty && createdSessionID == nil
+      && failedSends.isEmpty && outbound.isEmpty
   }
 
   public func boundedProblem() -> ComposerDraftSave? {
-    let outboundAndFailed = failedSends.map { ($0.text, $0.quotes) }
-      + outbound.map { ($0.text, $0.quotes) }
+    let outboundAndFailed = failedSends.map { ($0.text, $0.quotes, $0.attachments) }
+      + outbound.map { ($0.text, $0.quotes, $0.attachments) }
     let textBytes = text.utf8.count
       + outboundAndFailed.reduce(0) { $0 + $1.0.utf8.count }
     let allQuotes = quotes + outboundAndFailed.flatMap { $0.1 }
@@ -191,6 +215,11 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
     {
       return .tooLarge
     }
+    let attachmentCount = attachments.count
+      + outboundAndFailed.reduce(0) { $0 + $1.2.count }
+    if attachmentCount > ComposerDraftBounds.maximumAttachments {
+      return .tooLarge
+    }
     return nil
   }
 }
@@ -200,6 +229,8 @@ public enum ComposerDraftBounds {
   public static let maximumTextBytes = 128 * 1024
   public static let maximumQuoteBytes = 64 * 1024
   public static let maximumQuotes = 200
+  /// The composer, its failed sends and its outbound record together.
+  public static let maximumAttachments = 32
 }
 
 public enum ComposerDraftLoad: Equatable, Sendable {
@@ -234,6 +265,9 @@ public enum ComposerProblem: String, Codable, Equatable, Sendable {
   case notConnected
   case busy
   case requestPending
+  case attachmentNotReady
+  case attachmentUnavailable
+  case tooManyAttachments
 }
 
 /// How a failed POST is treated. A definite rejection never reached the session's history; an
@@ -258,6 +292,7 @@ public struct FailedComposerSend: Codable, Identifiable, Equatable, Sendable {
   public var messageID: String
   public var text: String
   public var quotes: [ComposerQuote]
+  public var attachments: [MediaAttachment]
   public var delivery: Delivery
   public var target: ComposerTarget
   public var reason: ComposerProblem
@@ -267,6 +302,7 @@ public struct FailedComposerSend: Codable, Identifiable, Equatable, Sendable {
     messageID: String,
     text: String,
     quotes: [ComposerQuote],
+    attachments: [MediaAttachment] = [],
     delivery: Delivery,
     target: ComposerTarget,
     reason: ComposerProblem,
@@ -275,10 +311,27 @@ public struct FailedComposerSend: Codable, Identifiable, Equatable, Sendable {
     self.messageID = messageID
     self.text = text
     self.quotes = quotes
+    self.attachments = attachments
     self.delivery = delivery
     self.target = target
     self.reason = reason
     self.failure = failure
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case messageID, text, quotes, attachments, delivery, target, reason, failure
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    messageID = try container.decode(String.self, forKey: .messageID)
+    text = try container.decode(String.self, forKey: .text)
+    quotes = try container.decodeIfPresent([ComposerQuote].self, forKey: .quotes) ?? []
+    attachments = try container.decodeIfPresent([MediaAttachment].self, forKey: .attachments) ?? []
+    delivery = try container.decode(Delivery.self, forKey: .delivery)
+    target = try container.decode(ComposerTarget.self, forKey: .target)
+    reason = try container.decode(ComposerProblem.self, forKey: .reason)
+    failure = try container.decode(ComposerSendFailure.self, forKey: .failure)
   }
 
   public var send: ComposerSend {
@@ -287,6 +340,7 @@ public struct FailedComposerSend: Codable, Identifiable, Equatable, Sendable {
       messageID: messageID,
       text: text,
       quotes: quotes,
+      attachments: attachments,
       delivery: delivery,
       revision: 0
     )
@@ -301,6 +355,7 @@ public struct ComposerOutbound: Codable, Identifiable, Equatable, Sendable {
   public var messageID: String
   public var text: String
   public var quotes: [ComposerQuote]
+  public var attachments: [MediaAttachment]
   public var delivery: Delivery
   public var revision: Int
   public var createdAt: Date
@@ -310,6 +365,7 @@ public struct ComposerOutbound: Codable, Identifiable, Equatable, Sendable {
     messageID: String,
     text: String,
     quotes: [ComposerQuote],
+    attachments: [MediaAttachment] = [],
     delivery: Delivery,
     revision: Int,
     createdAt: Date = Date(timeIntervalSince1970: 0)
@@ -318,9 +374,27 @@ public struct ComposerOutbound: Codable, Identifiable, Equatable, Sendable {
     self.messageID = messageID
     self.text = text
     self.quotes = quotes
+    self.attachments = attachments
     self.delivery = delivery
     self.revision = revision
     self.createdAt = createdAt
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case target, messageID, text, quotes, attachments, delivery, revision, createdAt
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    target = try container.decode(ComposerTarget.self, forKey: .target)
+    messageID = try container.decode(String.self, forKey: .messageID)
+    text = try container.decode(String.self, forKey: .text)
+    quotes = try container.decodeIfPresent([ComposerQuote].self, forKey: .quotes) ?? []
+    attachments = try container.decodeIfPresent([MediaAttachment].self, forKey: .attachments) ?? []
+    delivery = try container.decode(Delivery.self, forKey: .delivery)
+    revision = try container.decode(Int.self, forKey: .revision)
+    createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
+      ?? Date(timeIntervalSince1970: 0)
   }
 
   public var send: ComposerSend {
@@ -329,6 +403,7 @@ public struct ComposerOutbound: Codable, Identifiable, Equatable, Sendable {
       messageID: messageID,
       text: text,
       quotes: quotes,
+      attachments: attachments,
       delivery: delivery,
       revision: revision
     )
@@ -342,6 +417,7 @@ public struct ComposerSend: Equatable, Sendable {
   public var messageID: String
   public var text: String
   public var quotes: [ComposerQuote]
+  public var attachments: [MediaAttachment]
   public var delivery: Delivery
   public var revision: Int
 
@@ -350,6 +426,7 @@ public struct ComposerSend: Equatable, Sendable {
     messageID: String,
     text: String,
     quotes: [ComposerQuote],
+    attachments: [MediaAttachment] = [],
     delivery: Delivery,
     revision: Int
   ) {
@@ -357,22 +434,42 @@ public struct ComposerSend: Equatable, Sendable {
     self.messageID = messageID
     self.text = text
     self.quotes = quotes
+    self.attachments = attachments
     self.delivery = delivery
     self.revision = revision
   }
 
   public var hasContent: Bool {
     !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !quotes.isEmpty
+      || !attachments.isEmpty
   }
 
-  /// The model-visible text and its metadata, using the audited quote contract: quoted lines in
-  /// the prompt and `{"type":"quote"}` entries in `metadata.comments`.
-  public var prompt: PromptBody {
+  /// The model-visible text and its metadata, using the audited quote and attachment contract:
+  /// quoted lines and file reference lines in the prompt, `data:` parts for inline files, path
+  /// attachments in `metadata.attachments`, and `{"type":"quote"}` entries in `metadata.comments`.
+  ///
+  /// `inlineData` holds the bytes of inline images and pastes, keyed by attachment id. A file that
+  /// is still uploading has no path reference and is not sent; the reducer refuses the send first.
+  public func prompt(inlineData: [String: Data] = [:]) -> PromptBody {
     let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let uploaded = attachments.compactMap(\.fileReference)
+    let inline = attachments.filter(\.kind.isInline)
     var parts: [String] = []
     if !typed.isEmpty { parts.append(typed) }
+    for reference in uploaded {
+      parts.append("Attached file: `\(reference.path)`")
+    }
     for quote in quotes { parts.append(Self.quoteBlock(quote)) }
     let modelText = parts.joined(separator: "\n")
+
+    let files = inline.compactMap { attachment -> PromptBody.File? in
+      guard let data = inlineData[attachment.id], !data.isEmpty else { return nil }
+      return PromptBody.File(
+        uri: "data:\(attachment.mime);base64,\(data.base64EncodedString())",
+        name: attachment.name
+      )
+    }
+
     let comments = quotes.compactMap { quote -> PromptBody.Metadata.Comment? in
       let comment = quote.comment?.trimmingCharacters(in: .whitespacesAndNewlines)
       return PromptBody.Metadata.Comment(
@@ -381,11 +478,30 @@ public struct ComposerSend: Equatable, Sendable {
         comment: (comment?.isEmpty ?? true) ? nil : comment
       )
     }
-    let metadata = comments.isEmpty
+    let metadata: PromptBody.Metadata? = (uploaded.isEmpty && comments.isEmpty)
       ? nil
-      : PromptBody.Metadata(displayText: typed, comments: comments)
-    return PromptBody(id: messageID, text: modelText, delivery: delivery, metadata: metadata)
+      : PromptBody.Metadata(
+        displayText: typed,
+        comments: comments.isEmpty ? nil : comments,
+        attachments: uploaded.isEmpty ? nil : uploaded
+      )
+    return PromptBody(
+      id: messageID,
+      text: modelText,
+      files: files.isEmpty ? nil : files,
+      delivery: delivery,
+      metadata: metadata
+    )
   }
+
+  /// The attachment ids whose bytes must be read before the prompt is built.
+  public var inlineAttachmentIDs: [String] {
+    attachments.filter(\.kind.isInline).map(\.id)
+  }
+
+  /// The prompt for a send with no inline bytes. Tests use it for plain and quote-only sends; the
+  /// session passes `prompt(inlineData:)` so images and pastes travel.
+  public var prompt: PromptBody { prompt() }
 
   public static func quoteBlock(_ quote: ComposerQuote) -> String {
     let lines = quote.text.split(separator: "\n", omittingEmptySubsequences: false)

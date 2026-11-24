@@ -164,13 +164,20 @@ public struct HTTPStream: Sendable {
 public struct HTTPTransport: Sendable {
   public var send: @Sendable (HTTPRequest) async throws -> HTTPResponse
   public var open: @Sendable (HTTPRequest) async throws -> HTTPStream
+  /// Sends a file as the request body without reading it all into memory. Progress is the number of
+  /// body bytes handed to the connection, reported off the transport's delegate queue.
+  public var upload:
+    @Sendable (HTTPRequest, URL, @escaping @Sendable (Int64) -> Void) async throws -> HTTPResponse
 
   public init(
     send: @escaping @Sendable (HTTPRequest) async throws -> HTTPResponse,
-    open: @escaping @Sendable (HTTPRequest) async throws -> HTTPStream
+    open: @escaping @Sendable (HTTPRequest) async throws -> HTTPStream,
+    upload: @escaping @Sendable (HTTPRequest, URL, @escaping @Sendable (Int64) -> Void) async throws ->
+      HTTPResponse = { _, _, _ in throw TransportError.invalidRequest }
   ) {
     self.send = send
     self.open = open
+    self.upload = upload
   }
 }
 
@@ -178,12 +185,13 @@ extension HTTPTransport: DependencyKey {
   /// The live value is the only place a `URLSession` is created for features.
   public static var liveValue: HTTPTransport {
     let live = URLSessionTransport()
-    return HTTPTransport(send: live.send, open: live.open)
+    return HTTPTransport(send: live.send, open: live.open, upload: live.upload)
   }
 
   public static let testValue = HTTPTransport(
     send: { _ in throw TransportError.blocked },
-    open: { _ in throw TransportError.blocked }
+    open: { _ in throw TransportError.blocked },
+    upload: { _, _, _ in throw TransportError.blocked }
   )
 }
 

@@ -7,11 +7,23 @@ public struct ServerInfo: Sendable, Equatable, Codable {
   public var version: String
   public var pid: Int
   public var urls: [String]?
+  /// Where the server keeps temporary files. Uploads need `tmp`; a server without it predates the
+  /// write route and cannot accept attachments.
+  public var paths: Paths?
 
-  public init(version: String, pid: Int, urls: [String]? = nil) {
+  public struct Paths: Sendable, Equatable, Codable {
+    public var tmp: String?
+
+    public init(tmp: String? = nil) {
+      self.tmp = tmp
+    }
+  }
+
+  public init(version: String, pid: Int, urls: [String]? = nil, paths: Paths? = nil) {
     self.version = version
     self.pid = pid
     self.urls = urls
+    self.paths = paths
   }
 
   /// See `OpenCodeClient.health`: `server.url` is the address that answered. A password, or a single
@@ -124,6 +136,18 @@ public struct OpenCodeClient: Sendable {
     @Sendable (OpenCodeServer, String, String?) async throws -> TranscriptPage
   /// One message's rows, ordered oldest first.
   public var message: @Sendable (OpenCodeServer, String, String) async throws -> [TranscriptItem]
+  /// `GET /api/experimental/media/{hash}`: an authenticated content-addressed blob.
+  public var mediaBlob: @Sendable (OpenCodeServer, String) async throws -> Data
+  /// `POST /api/experimental/fs/write`: streams a local file into the server's temporary directory.
+  /// The same path is reused on a retry; the returned path is the server's absolute file path.
+  public var uploadFile:
+    @Sendable (OpenCodeServer, String?, URL, String, @escaping @Sendable (Int64) -> Void)
+      async throws -> String
+  /// `GET /api/fs/list`: folders and files inside a server directory.
+  public var listDirectory: @Sendable (OpenCodeServer, String?) async throws -> DirectoryListing
+  /// `GET /api/fs/read/{relative}`: one server file, bounded by the caller.
+  public var readFile:
+    @Sendable (OpenCodeServer, String, String, Int64) async throws -> Data
   /// Admits one prompt under a client-made message ID, so a retry cannot create a second copy.
   public var sendPrompt: @Sendable (OpenCodeServer, String, PromptBody) async throws -> Void
   /// Creates a session in `directory`; `id` makes the create idempotent.
@@ -205,6 +229,20 @@ public struct OpenCodeClient: Sendable {
     message: @escaping @Sendable (OpenCodeServer, String, String) async throws -> [TranscriptItem] = {
       _, _, _ in []
     },
+    mediaBlob: @escaping @Sendable (OpenCodeServer, String) async throws -> Data = { _, _ in
+      throw OpenCodeClientError(.unsupported)
+    },
+    uploadFile: @escaping @Sendable (
+      OpenCodeServer, String?, URL, String, @escaping @Sendable (Int64) -> Void
+    ) async throws -> String = { _, _, _, _, _ in
+      throw OpenCodeClientError(.unsupported)
+    },
+    listDirectory: @escaping @Sendable (OpenCodeServer, String?) async throws -> DirectoryListing = {
+      _, _ in throw OpenCodeClientError(.unsupported)
+    },
+    readFile: @escaping @Sendable (OpenCodeServer, String, String, Int64) async throws -> Data = {
+      _, _, _, _ in throw OpenCodeClientError(.unsupported)
+    },
     sendPrompt: @escaping @Sendable (OpenCodeServer, String, PromptBody) async throws -> Void = {
       _, _, _ in throw OpenCodeClientError(.unsupported)
     },
@@ -248,6 +286,10 @@ public struct OpenCodeClient: Sendable {
     self.transcript = transcript
     self.transcriptHistory = transcriptHistory
     self.message = message
+    self.mediaBlob = mediaBlob
+    self.uploadFile = uploadFile
+    self.listDirectory = listDirectory
+    self.readFile = readFile
     self.sendPrompt = sendPrompt
     self.createSession = createSession
     self.cancelPendingInput = cancelPendingInput
@@ -567,9 +609,44 @@ private struct Runtime: Sendable {
           policy: policy
         )
       },
-      sendPrompt: { server, sessionID, body in
-        try await Operations.sendPrompt(
+      mediaBlob: { server, hash in
+        try await Operations.mediaBlob(
           server,
+          hash: hash,
+          environment: environment,
+          policy: policy
+        )
+      },
+      uploadFile: { server, directory, fileURL, name, onProgress in
+        try await Operations.uploadFile(
+          server,
+          directory: directory,
+          fileURL: fileURL,
+          name: name,
+          environment: environment,
+          progress: onProgress
+        )
+      },
+      listDirectory: { server, path in
+        try await Operations.listDirectory(
+          server,
+          path: path,
+          environment: environment,
+          policy: policy
+        )
+      },
+      readFile: { server, directory, relativePath, maximumBytes in
+        try await Operations.readFile(
+          server,
+          directory: directory,
+          relativePath: relativePath,
+          maximumBytes: maximumBytes,
+          environment: environment,
+          policy: policy
+        )
+      },
+      sendPrompt: { server, sessionID, body in
+        try await Operations.sendPrompt(          server,
           sessionID: sessionID,
           body: body,
           environment: environment,

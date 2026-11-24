@@ -1,6 +1,178 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "composer.add_attachment": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Add attachment" } } }
+    },
+    "composer.attachments": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Attachments" } } }
+    },
+    "composer.camera": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Camera" } } }
+    },
+    "composer.files": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Files" } } }
+    },
+    "composer.photos": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Photos" } } }
+    },
+    "composer.paste": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Paste" } } }
+    },
+    "composer.attachment_importing": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Adding attachment" } } }
+    },
+    "composer.attachment_uploading": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Uploading %1$d%%" } } }
+    },
+    "composer.attachment_failed": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Couldn’t upload" } } }
+    },
+    "composer.attachment_remove": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Remove attachment" } } }
+    },
+    "composer.attachment_retry": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Retry upload" } } }
+    },
+    "composer.attachment_not_ready": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Wait for the attachment to finish uploading." } } }
+    },
+    "composer.attachment_unavailable": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "This attachment couldn’t be uploaded. Retry it or remove it." } } }
+    },
+    "composer.camera_unavailable": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "The camera isn’t available." } } }
+    },
+    "composer.camera_denied": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Camera access is off. You can turn it on in Settings." } } }
+    },
+    "composer.camera_settings": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Open Settings" } } }
+    },
+    "media.viewer_close": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Close" } } }
+    },
+    "media.viewer_annotate": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Annotate" } } }
+    },
+    "media.viewer_retry": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Try Again" } } }
+    },
+    "media.viewer_unavailable": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Media unavailable" } } }
+    },
+    "media.annotation_title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Draw on Image" } } }
+    },
+    "media.annotation_add": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Add" } } }
+    },
+    "media.annotation_undo": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Undo" } } }
+    },
+    "media.annotation_discard_title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Discard drawing?" } } }
+    },
+    "media.annotation_discard": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Discard Drawing" } } }
+    },
+    "media.annotation_keep": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Keep Drawing" } } }
+    },
+    "media.annotation_failed": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Couldn’t add the drawing." } } }
+    },
+    "media.file_title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "File" } } }
+    },
+    "media.file_copy_path": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Copy Path" } } }
+    },
+    "media.file_share": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Share" } } }
+    },
+    "media.file_unsupported": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "This file can’t be shown here." } } }
+    },
+    "media.file_truncated": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Showing the beginning of this file." } } }
+    },
+    "media.image": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Image" } } }
+    },
+    "media.page_of": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Page %1$d of %2$d" } } }
+    },
+    "browser.title": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Browser" } } }
+    },
+    "browser.back": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Back" } } }
+    },
+    "browser.forward": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Forward" } } }
+    },
+    "browser.reload": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Reload" } } }
+    },
+    "browser.close": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Close" } } }
+    },
+    "browser.open_safari": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Open in Safari" } } }
+    },
+    "browser.load_failed": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Couldn’t load this page." } } }
+    },
+    "browser.scroll_top": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Scroll to the top of the page" } } }
+    },
+    "tool.more_links": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "More Links" } } }
+    },
     "app.name": {
       "extractionState": "manual",
       "localizations": {
@@ -264,6 +436,18 @@
           }
         }
       }
+    },
+    "composer.problem.too_many_attachments": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "You can attach at most 16 items." } } }
+    },
+    "composer.problem.too_large_attachment": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "This file is too large to attach." } } }
+    },
+    "composer.problem.uploads_unsupported": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "This server doesn’t accept file uploads." } } }
     },
     "composer.problem.verify": {
       "extractionState": "manual",
@@ -2288,6 +2472,10 @@
           }
         }
       }
+    },
+    "session.background.stop_subagent": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Stop subagent" } } }
     },
     "session.background_summary": {
       "extractionState": "manual",

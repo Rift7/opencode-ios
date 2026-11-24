@@ -1,9 +1,12 @@
 import ComposableArchitecture
 import OpenCodeComposer
 import OpenCodeCore
+import OpenCodeMedia
 import OpenCodeServer
 import OpenCodeSession
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The chat composer. Quote chips, the native text bridge and the sending controls share one
 /// surface; a docked request replaces the answer bar without touching the chat draft.
@@ -11,16 +14,26 @@ struct ComposerPanel: View {
   let store: StoreOf<SessionFeature>
   @State private var height: CGFloat = 36
   @State private var commentingQuote: ComposerQuote?
+  @State private var photoItems: [PhotosPickerItem] = []
+  @State private var showsFileImporter = false
+  @State private var showsCamera = false
+  @State private var showsAttachmentActions = false
 
   private var composer: ComposerFeature.State { store.composer }
 
   var body: some View {
     VStack(alignment: .leading, spacing: OpenCodeSpacing.s8) {
+      if !composer.attachments.isEmpty || composer.isImportingAttachments {
+        attachmentsStrip
+      }
       if !composer.quotes.isEmpty {
         quoteChips
       }
       if let problem = composer.problem {
         problemLine(problem)
+      }
+      if let attachmentProblem = composer.attachmentProblem {
+        attachmentProblemLine(attachmentProblem)
       }
       if !composer.failedSends.isEmpty {
         failedSends
@@ -49,15 +62,125 @@ struct ComposerPanel: View {
     }
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier("composer")
+    .fileImporter(
+      isPresented: $showsFileImporter,
+      allowedContentTypes: [.data, .content],
+      allowsMultipleSelection: true
+    ) { result in
+      if case .success(let urls) = result {
+        store.send(.composer(.filesPicked(urls)))
+      }
+    }
+    .fullScreenCover(isPresented: $showsCamera) {
+      CameraCaptureSheet { data in
+        showsCamera = false
+        store.send(.composer(.cameraCaptured(data)))
+      } onCancel: {
+        showsCamera = false
+      }
+    }
     .sheet(item: $commentingQuote) { quote in
       QuoteCommentSheet(quote: quote) { comment in
         store.send(.composer(.quoteCommentChanged(id: quote.id, comment: comment)))
       }
     }
+    .sheet(
+      item: Binding(
+        get: { composer.preview },
+        set: { if $0 == nil { store.send(.composer(.attachmentPreviewDismissed)) } }
+      )
+    ) { preview in
+      ComposerAttachmentPreviewSheet(
+        preview: preview,
+        onAnnotate: { data in
+          store.send(.composer(.drawingAdded(data)))
+          store.send(.composer(.attachmentPreviewDismissed))
+        },
+        onRemove: {
+          store.send(.composer(.attachmentRemoveTapped(preview.attachment.id)))
+          store.send(.composer(.attachmentPreviewDismissed))
+        },
+        onDismiss: { store.send(.composer(.attachmentPreviewDismissed)) }
+      )
+    }
+    .onChange(of: photoItems) { _, items in
+      guard !items.isEmpty else { return }
+      Task {
+        var data: [Data] = []
+        for item in items {
+          if let loaded = try? await item.loadTransferable(type: Data.self) {
+            data.append(loaded)
+          }
+        }
+        await MainActor.run {
+          photoItems = []
+          store.send(.composer(.photosPicked(data)))
+        }
+      }
+    }
+  }
+
+  private var attachmentsStrip: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: OpenCodeSpacing.s8) {
+        ForEach(composer.attachments) { attachment in
+          ComposerAttachmentChip(
+            attachment: attachment,
+            serverID: composer.serverID,
+            onTap: { store.send(.composer(.attachmentPreviewTapped(attachment.id))) },
+            onRemove: { store.send(.composer(.attachmentRemoveTapped(attachment.id))) },
+            onRetry: { store.send(.composer(.attachmentRetryTapped(attachment.id))) }
+          )
+        }
+        if composer.isImportingAttachments {
+          ProgressView()
+            .controlSize(.small)
+            .frame(width: 44, height: 44)
+            .accessibilityLabel(AppCopy.text("composer.attachment_importing"))
+        }
+      }
+      .padding(.vertical, OpenCodeSpacing.s2)
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier("composer-attachments")
   }
 
   private var inputRow: some View {
     HStack(alignment: .bottom, spacing: OpenCodeSpacing.s8) {
+      Menu {
+        PhotosPicker(
+          selection: $photoItems,
+          maxSelectionCount: MediaLimits.maximumPhotos,
+          matching: .images,
+          photoLibrary: .shared()
+        ) {
+          Label(AppCopy.text("composer.photos"), systemImage: "photo.on.rectangle")
+        }
+        Button {
+          showsFileImporter = true
+        } label: {
+          Label(AppCopy.text("composer.files"), systemImage: "doc")
+        }
+        Button {
+          showsCamera = true
+        } label: {
+          Label(AppCopy.text("composer.camera"), systemImage: "camera")
+        }
+        Button {
+          store.send(.composer(.pasteTapped))
+        } label: {
+          Label(AppCopy.text("composer.paste"), systemImage: "doc.on.clipboard")
+        }
+      } label: {
+        Image(systemName: "plus")
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(OpenCodeColors.color(.textWeak))
+          .frame(width: 44, height: 44)
+          .contentShape(Rectangle())
+      }
+      .accessibilityLabel(AppCopy.text("composer.add_attachment"))
+      .accessibilityIdentifier("composer-add-attachment")
+
       ComposerTextInput(
         text: Binding(
           get: { composer.draft },
@@ -67,7 +190,10 @@ struct ComposerPanel: View {
         focusRequest: composer.focusRequest,
         placeholder: AppCopy.text("composer.placeholder"),
         isEnabled: true,
-        onSend: { store.send(.composer(.sendTapped)) }
+        onSend: { store.send(.composer(.sendTapped)) },
+        onPasteImages: { store.send(.composer(.pasteImages($0))) },
+        onPasteFiles: { store.send(.composer(.pasteFiles($0))) },
+        onPasteText: { store.send(.composer(.pasteText($0))) }
       )
       .frame(minHeight: 36, maxHeight: 168)
       .frame(height: height)
@@ -249,6 +375,213 @@ struct ComposerPanel: View {
     case .notConnected: AppCopy.text("composer.problem.offline")
     case .busy: AppCopy.text("composer.problem.busy")
     case .requestPending: AppCopy.text("composer.problem.request")
+    case .attachmentNotReady: AppCopy.text("composer.attachment_not_ready")
+    case .attachmentUnavailable: AppCopy.text("composer.attachment_unavailable")
+    case .tooManyAttachments: AppCopy.text("composer.problem.too_many_attachments")
+    }
+  }
+
+  private func attachmentProblemLine(_ problem: MediaAttachmentProblem) -> some View {
+    HStack(spacing: OpenCodeSpacing.s6) {
+      Image(systemName: "exclamationmark.triangle")
+      Text(attachmentProblemText(problem))
+        .font(OpenCodeFonts.font(.caption))
+      Spacer()
+      Button {
+        store.send(.composer(.attachmentProblemDismissed))
+      } label: {
+        Image(systemName: "xmark")
+          .font(.caption2)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(AppCopy.text("common.dismiss"))
+    }
+    .foregroundStyle(OpenCodeColors.color(.warning))
+    .accessibilityIdentifier("composer-attachment-problem")
+  }
+
+  private func attachmentProblemText(_ problem: MediaAttachmentProblem) -> String {
+    switch problem {
+    case .tooLarge: AppCopy.text("composer.problem.too_large_attachment")
+    case .cameraDenied: AppCopy.text("composer.camera_denied")
+    case .cameraUnavailable: AppCopy.text("composer.camera_unavailable")
+    case .uploadUnsupported: AppCopy.text("composer.problem.uploads_unsupported")
+    case .uploadFailed, .uploadInterrupted: AppCopy.text("composer.attachment_failed")
+    default: AppCopy.text("composer.attachment_unavailable")
+    }
+  }
+}
+
+private struct ComposerAttachmentChip: View {
+  let attachment: MediaAttachment
+  let serverID: String
+  let onTap: () -> Void
+  let onRemove: () -> Void
+  let onRetry: () -> Void
+
+  @Dependency(\.mediaFiles) private var files
+  @State private var localURL: URL?
+
+  var body: some View {
+    ZStack(alignment: .topTrailing) {
+      Button(action: onTap) {
+        content
+          .frame(width: 96, height: 76)
+          .background(
+            OpenCodeColors.color(.canvasWeak),
+            in: .rect(cornerRadius: OpenCodeRadius.control)
+          )
+          .overlay {
+            RoundedRectangle(cornerRadius: OpenCodeRadius.control)
+              .strokeBorder(OpenCodeColors.color(.border), lineWidth: 0.5)
+          }
+          .clipShape(.rect(cornerRadius: OpenCodeRadius.control))
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(attachment.name)
+      .accessibilityIdentifier("composer-attachment-\(attachment.id)")
+
+      Button(action: onRemove) {
+        Image(systemName: "xmark.circle.fill")
+          .font(.system(size: 18))
+          .foregroundStyle(.white, .black.opacity(0.6))
+          .frame(width: 32, height: 32)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(AppCopy.text("composer.attachment_remove"))
+    }
+    .task(id: attachment.storedName) {
+      localURL = nil
+      guard attachment.isImage else { return }
+      localURL = await files.store.url(serverID: serverID, storedName: attachment.storedName)
+    }
+  }
+
+  @ViewBuilder private var content: some View {
+    if attachment.isImage, let localURL {
+      MediaThumbnail(
+        source: .localFile(localURL),
+        server: nil,
+        maximumPixelSize: 320,
+        aspectRatio: aspectRatio,
+        label: attachment.name
+      )
+    } else {
+      VStack(alignment: .leading, spacing: OpenCodeSpacing.s4) {
+        HStack(spacing: OpenCodeSpacing.s4) {
+          Image(systemName: MediaFileType.symbolName(name: attachment.name, mime: attachment.mime))
+            .font(.caption)
+          Text(attachment.name)
+            .font(OpenCodeFonts.font(.caption2))
+            .lineLimit(2)
+        }
+        Text(MediaFileType.label(name: attachment.name, mime: attachment.mime))
+          .font(OpenCodeFonts.font(.caption2))
+          .foregroundStyle(OpenCodeColors.color(.textWeak))
+        switch attachment.transfer {
+        case .uploading:
+          ProgressView(value: attachment.progress)
+            .progressViewStyle(.linear)
+            .tint(OpenCodeColors.color(.accent))
+          Text(AppCopy.format("composer.attachment_uploading", Int(attachment.progress * 100)))
+            .font(OpenCodeFonts.font(.caption2))
+            .foregroundStyle(OpenCodeColors.color(.textWeak))
+        case .failed:
+          Button(action: onRetry) {
+            Label(AppCopy.text("composer.attachment_retry"), systemImage: "arrow.clockwise")
+              .font(OpenCodeFonts.font(.caption2))
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(OpenCodeColors.color(.danger))
+        case .uploaded, .inline:
+          Text(MediaFileType.byteCount(attachment.byteCount))
+            .font(OpenCodeFonts.font(.caption2))
+            .foregroundStyle(OpenCodeColors.color(.textWeak))
+        }
+      }
+      .padding(OpenCodeSpacing.s6)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+  }
+
+  private var aspectRatio: Double? {
+    guard let width = attachment.pixelWidth, let height = attachment.pixelHeight,
+      width > 0, height > 0
+    else { return nil }
+    return Double(width) / Double(height)
+  }
+}
+
+private struct ComposerAttachmentPreviewSheet: View {
+  let preview: ComposerAttachmentPreview
+  let onAnnotate: (Data) -> Void
+  let onRemove: () -> Void
+  let onDismiss: () -> Void
+
+  @State private var showsAnnotation = false
+
+  var body: some View {
+    NavigationStack {
+      Group {
+        if let text = preview.text {
+          ScrollView {
+            Text(text)
+              .font(OpenCodeFonts.font(.codeSmall))
+              .textSelection(.enabled)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .padding()
+          }
+        } else {
+          ScrollView([.vertical, .horizontal]) {
+            MediaThumbnail(
+              source: .data(preview.data),
+              server: nil,
+              maximumPixelSize: 2_560,
+              aspectRatio: nil,
+              label: preview.attachment.name
+            )
+          }
+        }
+      }
+      .navigationTitle(preview.attachment.name)
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button(AppCopy.text("media.viewer_close"), action: onDismiss)
+        }
+        ToolbarItem(placement: .destructiveAction) {
+          Button(role: .destructive, action: onRemove) {
+            Image(systemName: "trash")
+          }
+          .accessibilityLabel(AppCopy.text("composer.attachment_remove"))
+          .accessibilityIdentifier("composer-preview-remove")
+        }
+        ToolbarItem(placement: .primaryAction) {
+          if preview.attachment.isImage {
+            Button {
+              showsAnnotation = true
+            } label: {
+              Image(systemName: "pencil.tip.crop.circle")
+            }
+            .accessibilityLabel(AppCopy.text("media.viewer_annotate"))
+          }
+        }
+      }
+    }
+    .fullScreenCover(isPresented: $showsAnnotation) {
+      AnnotationEditor(
+        source: .data(preview.data),
+        server: nil,
+        imageLoaded: nil,
+        initialStrokes: []
+      ) { _ in
+      } onSave: { data in
+        showsAnnotation = false
+        onAnnotate(data)
+      } onCancel: {
+        showsAnnotation = false
+      }
     }
   }
 }

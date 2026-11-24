@@ -10,6 +10,7 @@ let package = Package(
     .library(name: "OpenCodeApp", targets: ["OpenCodeApp"]),
     .library(name: "OpenCodeDrawer", targets: ["OpenCodeDrawer"]),
     .library(name: "OpenCodeTranscript", targets: ["OpenCodeTranscript"]),
+    .library(name: "OpenCodeMedia", targets: ["OpenCodeMedia"]),
     .library(name: "OpenCodeComposer", targets: ["OpenCodeComposer"]),
     .library(name: "OpenCodeSession", targets: ["OpenCodeSession"]),
     .library(name: "OpenCodeTestSupport", targets: ["OpenCodeTestSupport"]),
@@ -44,10 +45,19 @@ let package = Package(
       dependencies: ["OpenCodeCore", "OpenCodeServer"]
     ),
     .target(
+      name: "OpenCodeMedia",
+      dependencies: [
+        "OpenCodeCore",
+        "OpenCodeServer",
+        .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+      ]
+    ),
+    .target(
       name: "OpenCodeComposer",
       dependencies: [
         "OpenCodeCore",
         "OpenCodeServer",
+        "OpenCodeMedia",
         .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
       ]
     ),
@@ -57,6 +67,7 @@ let package = Package(
         "OpenCodeCore",
         "OpenCodeServer",
         "OpenCodeTranscript",
+        "OpenCodeMedia",
         "OpenCodeComposer",
         .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
       ]
@@ -67,6 +78,7 @@ let package = Package(
         "OpenCodeCore",
         "OpenCodeServer",
         "OpenCodeDrawer",
+        "OpenCodeMedia",
         "OpenCodeSession",
         .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
       ]
@@ -85,7 +97,11 @@ let package = Package(
     ),
     .testTarget(
       name: "OpenCodeComposerTests",
-      dependencies: ["OpenCodeComposer", "OpenCodeCore", "OpenCodeServer", "OpenCodeTestSupport"]
+      dependencies: ["OpenCodeComposer", "OpenCodeMedia", "OpenCodeCore", "OpenCodeServer", "OpenCodeTestSupport"]
+    ),
+    .testTarget(
+      name: "OpenCodeMediaTests",
+      dependencies: ["OpenCodeMedia", "OpenCodeCore", "OpenCodeServer", "OpenCodeTestSupport"]
     ),
     .testTarget(
       name: "OpenCodeSessionTests",

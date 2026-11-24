@@ -2,6 +2,7 @@ import ComposableArchitecture
 import Foundation
 import OpenCodeComposer
 import OpenCodeCore
+import OpenCodeMedia
 import OpenCodeServer
 import OpenCodeTranscript
 
@@ -29,7 +30,9 @@ public struct SessionFeature: Sendable {
     public var isPinned: Bool
     public var transcripts: [String: TranscriptState]
     public var pendingLink: URL?
-    public var inspectedFile: TranscriptFile?
+    @Presents public var mediaViewer: MediaViewerFeature.State?
+    @Presents public var fileViewer: FileViewerFeature.State?
+    @Presents public var browser: BrowserFeature.State?
     public var composer: ComposerFeature.State
     public var requestDock: RequestDockState
 
@@ -68,7 +71,9 @@ public struct SessionFeature: Sendable {
       self.isPinned = isPinned
       self.transcripts = [:]
       self.pendingLink = nil
-      self.inspectedFile = nil
+      self.mediaViewer = nil
+      self.fileViewer = nil
+      self.browser = nil
       self.requestDock = RequestDockState()
       self.refresh = nil
       self.recovery = nil
@@ -86,6 +91,8 @@ public struct SessionFeature: Sendable {
         target = .session(id: session?.id ?? selection.sessionID)
       }
       self.composer = ComposerFeature.State(serverID: server.persistenceID, target: target)
+      self.composer.server = server
+      self.composer.uploadDirectory = session?.directory ?? target.directory
       if session == nil, case .newSession = selection.intent {
         self.isLoading = false
       }
@@ -118,7 +125,9 @@ public struct SessionFeature: Sendable {
         && lhs.isPinned == rhs.isPinned
         && lhs.transcripts == rhs.transcripts
         && lhs.pendingLink == rhs.pendingLink
-        && lhs.inspectedFile == rhs.inspectedFile
+        && lhs.mediaViewer == rhs.mediaViewer
+        && lhs.fileViewer == rhs.fileViewer
+        && lhs.browser == rhs.browser
         && lhs.recovery == rhs.recovery
         && lhs.composer == rhs.composer
         && lhs.requestDock == rhs.requestDock
@@ -246,7 +255,10 @@ public struct SessionFeature: Sendable {
 
     case backgroundTapped
     case backgroundDismissed
+    case backgroundSubagentStopTapped(String)
+    case backgroundSubagentStopFinished(String, failed: Bool)
     case shellOutputTapped(shellID: String)
+    case shellOutputCopyTapped
     case shellOutputAppeared
     case shellOutputDisappeared
     case shellOutputTick
@@ -286,6 +298,13 @@ public struct SessionFeature: Sendable {
     case transcriptFileTapped(TranscriptFile)
     case transcriptFileDismissed
     case transcriptFileCopyTapped
+    case transcriptImagesTapped([TranscriptImage], Int)
+    case mediaViewer(PresentationAction<MediaViewerFeature.Action>)
+    case fileViewer(PresentationAction<FileViewerFeature.Action>)
+    case browser(PresentationAction<BrowserFeature.Action>)
+    case mediaViewerClosed
+    case fileViewerClosed
+    case browserClosed
 
     case noticeDismissed
     case delegate(Delegate)
@@ -329,6 +348,10 @@ public struct SessionFeature: Sendable {
   @Dependency(\.pasteboard) private var pasteboard
   @Dependency(\.linkOpener) private var linkOpener
   @Dependency(\.uuidClient) private var uuid
+  @Dependency(\.mediaFiles) private var mediaFiles
+  @Dependency(\.mediaReferences) private var mediaReferences
+  @Dependency(\.mediaImages) private var mediaImages
+  @Dependency(\.mediaExperiments) private var mediaExperiments
 
   public init() {}
 
@@ -585,7 +608,8 @@ public struct SessionFeature: Sendable {
         return .merge(
           abandon,
           requestRefresh(.resume, state: &state),
-          .send(.composer(.switchTarget(.session(id: state.root?.id ?? state.selection.sessionID))))
+          .send(.composer(.switchTarget(.session(id: state.root?.id ?? state.selection.sessionID)))),
+          state.root.map { .send(.composer(.uploadDirectoryChanged($0.directory))) } ?? .none
         )
 
       case .interruptTapped:
@@ -959,6 +983,54 @@ public struct SessionFeature: Sendable {
         }
         return .none
 
+      case .backgroundSubagentStopTapped(let sessionID):
+        guard !state.background.stoppingIDs.contains(sessionID) else { return .none }
+        haptics.play(.tap)
+        state.background.stoppingIDs.insert(sessionID)
+        let jobs = subagentJobIDs(sessionID, state: state)
+        let interrupts = state.family?.activeSessionIDs.contains(sessionID) == true
+        let client = client
+        let server = state.server
+        return .run { send in
+          var failed = false
+          if interrupts {
+            do {
+              _ = try await client.interruptSession(server, sessionID)
+            } catch is CancellationError {
+              return
+            } catch {
+              failed = true
+            }
+          }
+          for jobID in jobs {
+            do {
+              try await client.cancelJob(server, jobID)
+            } catch is CancellationError {
+              return
+            } catch {
+              failed = true
+            }
+          }
+          await send(.backgroundSubagentStopFinished(sessionID, failed: failed))
+        }
+
+      case .backgroundSubagentStopFinished(let sessionID, let failed):
+        state.background.stoppingIDs.remove(sessionID)
+        if failed {
+          haptics.play(.error)
+          state.background.problem = .unknown
+        } else {
+          let cancelled = Set(subagentJobIDs(sessionID, state: state))
+          state.background.jobs.removeAll { cancelled.contains($0.id) }
+        }
+        return .none
+
+      case .shellOutputCopyTapped:
+        guard let output = state.background.output, !output.output.isEmpty else { return .none }
+        pasteboard.setString(output.output)
+        haptics.play(.confirm)
+        return .none
+
       case .backgroundProblemDismissed:
         state.background.problem = nil
         return .none
@@ -1030,6 +1102,21 @@ public struct SessionFeature: Sendable {
       case .transcriptLinkConfirmed:
         guard let url = state.pendingLink else { return .none }
         state.pendingLink = nil
+        if mediaExperiments.inAppBrowser(),
+          case .inAppBrowser(let browserURL) = BrowserLinkPolicy.route(
+            url: url.absoluteString,
+            inAppBrowser: true,
+            allowsLoopback: mediaExperiments.browserAllowsLoopback()
+          ),
+          let url = URL(string: browserURL)
+        {
+          state.browser = BrowserFeature.State(
+            id: uuid.uuid().uuidString.lowercased(),
+            url: url.absoluteString,
+            allowsLoopback: mediaExperiments.browserAllowsLoopback()
+          )
+          return .none
+        }
         let open = linkOpener.open
         return .run { _ in _ = await open(url) }
 
@@ -1045,17 +1132,78 @@ public struct SessionFeature: Sendable {
         return .none
 
       case .transcriptFileTapped(let file):
-        state.inspectedFile = file
-        return .none
+        state.fileViewer = FileViewerFeature.State(
+          file: file,
+          server: state.server,
+          directory: state.activeSession?.directory
+        )
+        return .send(.fileViewer(.presented(.task)))
 
       case .transcriptFileDismissed:
-        state.inspectedFile = nil
+        state.fileViewer = nil
         return .none
 
       case .transcriptFileCopyTapped:
-        guard let path = state.inspectedFile?.path, !path.isEmpty else { return .none }
+        guard let path = state.fileViewer?.file.path, !path.isEmpty else { return .none }
         pasteboard.setString(path)
         haptics.play(.confirm)
+        return .none
+
+      case .transcriptImagesTapped(let images, let index):
+        let pages = images.enumerated().compactMap { offset, image -> MediaViewerPage? in
+          guard !image.isUnavailable else { return nil }
+          let source: MediaPageSource
+          if !image.data.isEmpty {
+            source = .inline(image.data)
+          } else if let hash = image.mediaHash, !hash.isEmpty {
+            source = .mediaHash(hash)
+          } else {
+            return nil
+          }
+          return MediaViewerPage(
+            id: image.id,
+            title: image.name ?? MediaCopy.text(.image),
+            detail: [image.mime, image.byteCount.map { MediaFileType.byteCount(Int64($0)) }]
+              .compactMap { $0 }.joined(separator: " · "),
+            kind: .image,
+            source: source,
+            byteCount: image.byteCount.map(Int64.init),
+            canAnnotate: true,
+            pixelWidth: image.pixelWidth,
+            pixelHeight: image.pixelHeight
+          )
+        }
+        guard !pages.isEmpty else { return .none }
+        let selected = pages.firstIndex { page in
+          images.indices.contains(index) && page.id == images[index].id
+        } ?? 0
+        state.mediaViewer = MediaViewerFeature.State(
+          pages: pages,
+          index: selected,
+          server: state.server
+        )
+        return .send(.mediaViewer(.presented(.task)))
+
+      case .mediaViewer(.presented(.delegate(.annotate(let data)))):
+        state.mediaViewer = nil
+        return .send(.composer(.photosPicked([data])))
+      case .mediaViewer:
+        return .none
+
+      case .fileViewer:
+        return .none
+
+      case .browser:
+        return .none
+
+      case .mediaViewerClosed:
+        state.mediaViewer = nil
+        return .none
+      case .fileViewerClosed:
+        state.fileViewer = nil
+        return .none
+      case .browserClosed:
+        state.browser = nil
         return .none
 
       case .noticeDismissed:
@@ -1068,6 +1216,15 @@ public struct SessionFeature: Sendable {
     }
     Scope(state: \.composer, action: \.composer) {
       ComposerFeature()
+    }
+    .ifLet(\.$mediaViewer, action: \.mediaViewer) {
+      MediaViewerFeature()
+    }
+    .ifLet(\.$fileViewer, action: \.fileViewer) {
+      FileViewerFeature()
+    }
+    .ifLet(\.$browser, action: \.browser) {
+      BrowserFeature()
     }
   }
 }
@@ -1748,6 +1905,7 @@ extension SessionFeature {
 
     let client = client
     let server = state.server
+    let files = mediaFiles
     AppLog(category: .send).event(
       .composerSent,
       [
@@ -1755,6 +1913,7 @@ extension SessionFeature {
         LogField("newSession", .flag(existingSessionID == nil)),
         LogField("characters", .count(send.text.count)),
         LogField("quotes", .count(send.quotes.count)),
+        LogField("attachments", .count(send.attachments.count)),
       ]
     )
     return .run { emit in
@@ -1873,8 +2032,30 @@ extension SessionFeature {
       // A create or reconciliation may finish after the screen abandoned this operation. Never issue
       // the prompt mutation in that case.
       guard !Task.isCancelled else { return }
+      var inlineData: [String: Data] = [:]
+      for attachment in actual.attachments where attachment.kind.isInline {
+        do {
+          inlineData[attachment.id] = try await files.store.read(
+            serverID: server.persistenceID,
+            storedName: attachment.storedName,
+            maximumBytes: MediaLimits.maximumInlineBytes
+          )
+        } catch is CancellationError {
+          return
+        } catch {
+          await emit(
+            .composerSendResult(
+              operationID: operationID,
+              messageID: actual.messageID,
+              result: .failed(created: created, failure: .definite)
+            )
+          )
+          return
+        }
+      }
+      guard !Task.isCancelled else { return }
       do {
-        try await client.sendPrompt(server, sessionID, actual.prompt)
+        try await client.sendPrompt(server, sessionID, actual.prompt(inlineData: inlineData))
         await emit(
           .composerSendResult(
             operationID: operationID,
@@ -2117,6 +2298,8 @@ extension SessionFeature {
     state.pages = []
     state.isLoading = false
     state.loadProblem = nil
+    state.composer.server = state.server
+    state.composer.uploadDirectory = session.directory
   }
 
   private func showOptimistic(
@@ -2125,18 +2308,47 @@ extension SessionFeature {
     sessionID: String,
     state: inout State
   ) {
-    guard !send.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !send.quotes.isEmpty
-    else { return }
+    guard send.hasContent else { return }
     var transcript = state.transcripts[sessionID] ?? TranscriptState(sessionID: sessionID)
     guard !transcript.items.contains(where: { $0.id == messageID }) else { return }
-    transcript.items.append(
-      .userText(
-        id: messageID,
-        text: send.text,
-        source: nil,
-        quotes: send.quotes.map(\.wire)
+    let images = send.attachments.enumerated().compactMap { index, attachment -> TranscriptImage? in
+      guard attachment.isImage else { return nil }
+      return TranscriptImage(
+        id: "\(messageID)-img-\(index)",
+        data: Data(),
+        name: attachment.name,
+        mime: attachment.mime,
+        byteCount: Int(attachment.byteCount),
+        pixelWidth: attachment.pixelWidth,
+        pixelHeight: attachment.pixelHeight
       )
-    )
+    }
+    let files = send.attachments.enumerated().compactMap { index, attachment -> TranscriptFile? in
+      guard !attachment.isImage else { return nil }
+      return TranscriptFile(
+        id: "\(messageID)-file-\(index)",
+        name: attachment.name,
+        mime: attachment.mime,
+        path: attachment.fileReference?.path,
+        byteCount: Int(attachment.byteCount)
+      )
+    }
+    if !images.isEmpty {
+      transcript.items.append(.userImages(id: "\(messageID)-images", images: images))
+    }
+    if !files.isEmpty {
+      transcript.items.append(.userFiles(id: "\(messageID)-files", files: files))
+    }
+    if !send.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !send.quotes.isEmpty {
+      transcript.items.append(
+        .userText(
+          id: messageID,
+          text: send.text,
+          source: nil,
+          quotes: send.quotes.map(\.wire)
+        )
+      )
+    }
     state.transcripts[sessionID] = transcript
   }
 
@@ -2369,6 +2581,25 @@ extension RefreshReason {
 extension SessionFeature {
   // MARK: Family pages
 
+  /// Jobs owned by [sessionID] or any session below it. A subagent job belongs to the child it runs.
+  private func subagentJobIDs(_ sessionID: String, state: State) -> [String] {
+    var parents: [String: String] = [:]
+    for member in state.family?.sessions ?? [] {
+      if let parent = member.parentID { parents[member.id] = parent }
+    }
+    func isBelow(_ owner: String) -> Bool {
+      var current: String? = owner
+      var visited = Set<String>()
+      while let value = current, !visited.contains(value) {
+        if value == sessionID { return true }
+        visited.insert(value)
+        current = parents[value]
+      }
+      return false
+    }
+    return state.background.jobs.filter { isBelow($0.ownerSessionID) }.map(\.id)
+  }
+
   private func openSubagent(_ sessionID: String, state: inout State) -> Effect<Action> {
     guard let family = state.family, let session = family.session(sessionID),
       sessionID != state.activeSessionID
@@ -2392,7 +2623,9 @@ extension SessionFeature {
     return .merge(
       abandon,
       requestRefresh(.resume, state: &state),
-      .send(.composer(.switchTarget(.session(id: session.id))))
+      .send(.composer(.switchTarget(.session(id: session.id)))),
+      .send(.composer(.uploadDirectoryChanged(session.directory))),
+      .send(.composer(.serverChanged(state.server)))
     )
   }
 
@@ -2403,10 +2636,12 @@ extension SessionFeature {
     state.isLoading = true
     let abandon = abandonRefresh(&state)
     let target = activeTarget(state: state)
+    let directory = state.activeSession?.directory
     return .merge(
       abandon,
       requestRefresh(.resume, state: &state),
-      target.map { .send(.composer(.switchTarget($0))) } ?? .none
+      target.map { .send(.composer(.switchTarget($0))) } ?? .none,
+      directory.map { .send(.composer(.uploadDirectoryChanged($0))) } ?? .none
     )
   }
 

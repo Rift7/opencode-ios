@@ -18,7 +18,7 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | **P7** | **Session, subagents, background work, request review** | **done on `ios-session`** (draft PR) | `STATUS.md` Phase 7, `PARITY.md` Session, `SessionFeatureTests`, request-model and family tests, 5 UI tests, screenshots |
 | P8 | Transcript | done — merged as `2823c06e` (PR #7); merged tree `1147dca8` equals reviewed head `5ea6ea65` | `STATUS.md` Phase 8, `PARITY.md` Transcript, 26 grouping/Markdown + 19 session + 11 decoding tests, 9 UI journeys, 2 scroll traces, 6 screenshots |
 | **P9** | **Composer, drafts, sends, queue, request dock, quotes** | **done on `ios-composer`** (draft PR, base `ios`) | `STATUS.md` Phase 9, `PARITY.md` Composer, 26 composer + 22 session + 9 server tests, 11 UI journeys, typing traces, 10 screenshots |
-| P10 | Media | not started | folders only; P9 attachment and cross-block quote boundaries recorded |
+| P10 | Media | **done on `ios-media`** (draft PR, base `ios`) | `STATUS.md` Phase 10, `P10_MATRIX.md`, `PARITY.md` Media, 532 package tests, 8 media journeys, 16 screenshots, three performance traces |
 | P11 | Settings, experiments, diagnostics, onboarding | not started | folders only; P9 model/agent/mentions deferral recorded |
 | P12 | System integrations | not started | folders only |
 | P13 | Voice (Experimental, off) | not started | folders only |
@@ -68,7 +68,7 @@ leaving the parent to clear the presented state.
   topology, `@Presents` children and page stack belong to P5–P7 and are not started.
 - **Platform decisions.** Implementation decisions D-1…D-69 are recorded. `P-3` (composer text input) is
   resolved by D-64: a focused `UITextView` bridge for selection, marked text and hardware Return. Plan questions
-  still open: `P-2` (transcript motion), `P-4` (photo picking, P10), `P-5` (glass), `P-9` (push). `P-7`
+  still open: `P-2` (transcript motion), `P-5` (glass), `P-9` (push). `P-4` (photo picking) is resolved by D-78. `P-7`
   (identifiers) is partially resolved: the Keychain service is application-defined and configurable (D-15), and
   production naming must be settled before real credentials are stored — it is not a blocker for core work.
   `DECISIONS.md` maps the two ID namespaces.
@@ -91,12 +91,14 @@ rather than adding a second read queue; transcript windows and settlement extend
 The transcript target is `OpenCodeTranscript`; the UI lives in `ios/OpenCode/Transcript` (D-63).
 
 P9 started from `origin/ios` at `2823c06e` after PR #7 merged; its tree `1147dca8` equaled the reviewed
-`5ea6ea65`. The task branch is `ios-composer`.
+`5ea6ea65`. The task branch is `ios-composer`; it merged as `e42cb455` (PR #8).
+
+P10 started from `origin/ios` at `e42cb455`; the merged P9 tree `62d44987` equals the corrected review head
+`1fd90423`. The task branch is `ios-media`.
 
 1. P9 owns composer editing, drafts, sends, the queued-input sheet, the request dock and quote-to-composer.
-2. `/api/experimental/session/{id}/wait` is now implemented in the send path with one retry owner.
-3. P10 owns media, file opening, image/tool mosaics, the browser, math typesetting and Mermaid, plus the
+2. P10 owns media, file opening, image/tool mosaics, the browser, math typesetting and Mermaid, plus the
    deferred composer attachment boundary.
-4. P11 owns model/agent/mode pickers, autocomplete, mentions and commands.
+3. P11 owns model/agent/mode pickers, autocomplete, mentions, commands, settings and the file browser.
 5. Production identifiers, device VoiceOver/IME/selection, hardware keyboard and the local-network prompt still
    need the documented checks; they remain unverified.

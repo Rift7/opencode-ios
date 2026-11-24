@@ -19,7 +19,16 @@
 | P9 implementation head | `f694adaa` (evidence and code; the review head follows this doc commit) |
 | P9 review-correction head | `5aa0f40e` (draft PR #8 update: durable outbound, page targets, destination-first migration, fenced dismissal, long-input scrolling) |
 | P9 second review-correction head | `fc0141e1` (draft PR #8 update: durable retry identity, retained departing drafts, content-fenced Done) |
+| P9 merged head | `e42cb455` (PR #8 squash merge); merged tree `62d44987` equals the corrected P9 tree `1fd90423` |
+| P10 base | `e42cb455` (`origin/ios`, PR #8 merged) |
+| P10 branch | `ios-media`, created from `origin/ios` after `git fetch origin` |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
+
+`git fetch origin` moved `origin/ios` to `e42cb455`; PR #8 (`ios: add the native composer, drafts, sends, queue,
+request dock and quotes`) is **MERGED** into `ios`. The merge commit tree is `62d44987`, byte-identical to the
+reviewed P9 correction `1fd90423`; `git diff 1fd90423 e42cb455 -- ios docs/ios-migration` is empty. The squash
+merge does not preserve ancestry, so tree equality is the hand-off check.
+
 
 `git fetch origin` moved `origin/ios` from `3b34932c` to `7966dcfe`. PR #5 (`ios: add the native Home,
 drawer, projects and Catch Up`) is **MERGED** into `ios`. Its merge commit tree is `25b6d297`, byte-
@@ -39,8 +48,8 @@ is the hand-off check.
 | 6 | Home, drawer, projects, Catch Up, What's New | complete — `7966dcfe` (PR #5, tree `25b6d297`) |
 | 7 | Session, subagents, background work, request review | complete — `92a7c677` (PR #6); merged tree `e8e1db5b` equals reviewed `56c10086` |
 | 8 | Transcript | complete — merged as `2823c06e` (PR #7); merged tree `1147dca8` equals reviewed head `5ea6ea65` |
-| 9 | Composer | **complete on `ios-composer`** (draft PR, base `ios`) |
-| 10 | Media | not started |
+| 9 | Composer | complete on `ios` — PR #8 merged as `e42cb455`; merged tree `62d44987` equals reviewed `1fd90423` |
+| 10 | Media | **complete on `ios-media`** (draft PR, base `ios`) |
 | 11 | Settings, experiments, diagnostics, onboarding | not started |
 | 12 | System integrations | not started |
 | 13 | Voice (Experimental, off) | not started |
@@ -238,6 +247,9 @@ created from that commit; no branch was reset or overwritten.
 | Streaming while scrolling | `connected-transcript-stream`: one prompt, 600 live text deltas at 20 ms, 3 iterations | `testStreamingTranscriptScroll` | 43/146/146/146 frames; p50 16.7 ms throughout; first iteration p95 33.3 ms / max 36.2 ms including initial layout, later iterations p95/max 16.7 ms; deceleration 2.421 s; peak physical memory 25.97 MB |
 | Growth following | `connected-transcript-growth`: one stable Markdown row, 2,000 deltas with headings/lists | `testFollowingSurvivesTailGrowthAndBrowsingHoldsItsAnchor` | tail stays on screen through growth; after the reader scrolls away the anchor moves <12 pt while streaming continues and Jump to Latest appears |
 | Device/runtime | iPhone 18 Pro Max simulator, iOS 27.2 (24B8117), debug build | `xcodebuild -only-testing:OpenCodeUITests/TranscriptScrollTraceUITests` | Simulator evidence; not a device claim |
+| Media-heavy transcript scroll (P10) | `connected-media-long`: 30 turns × (text + two 320×200/200×320 inline images + reply) | `MediaPerformanceUITests.testMediaHeavyTranscriptScroll`, 3 iterations, fast up/up/down, `CADisplayLink` probe | 4 traces per iteration: 123–133 frames; p50 16.7 ms; p95 34.8–37.7 ms; max 42.4–66.8 ms; scroll deceleration 2.327 s (RSD 6.4%); peak physical memory 27.4 MB |
+| Large-image viewer open/close (P10) | `connected-media-large`: one 3,000×2,000 inline PNG | `testLargeImageViewerOpen`, 3 iterations, `XCTClockMetric` + memory | Loop average 5.167 s (includes open, close and two existence waits in the UI test), RSD 0.18%; peak physical memory 24.4 MB |
+| Typing with an attachment (P10) | `connected-media` + pasted synthetic image; ~72 changes | `testTypingWhileAnAttachmentIsImporting`, reads the DEBUG typing probe | 7.3 ms average / 48.9 ms max over 72 changes; import had completed before typing, so this is the steady-state composer cost |
 
 The long-transcript run shows single deferred frames (33–36 ms) during the measured swipes; p95 stays at one
 display interval. Streaming's first iteration includes the initial row/layout work; later iterations stay at
@@ -249,6 +261,15 @@ display interval. Streaming's first iteration includes the initial row/layout wo
 `TranscriptScreenshotUITests` captured light and dark surfaces on the same simulator and fixture
 (`connected`, plus `connected-transcript-long` for Jump to Latest) on 2026-11-22. All names, messages and
 paths are synthetic. The October iOS screenshots remain historical evidence only.
+
+### P10 screenshot provenance
+
+`MediaScreenshotUITests` captured `p10-{transcript-media,image-viewer,tool-mosaic,file-viewer,browser,
+composer-attachment,attachment-preview,annotation}[-dark].png` from the `connected-media` fixture on the
+iPhone 18 Pro Max simulator (iOS 27.2) on 2026-11-23. Images, names, file paths and the pasted image are
+synthetic. The browser screenshot is a loopback HTML fixture (`127.0.0.1`, synthetic text) served by the UI
+test runner; the browser surface itself is enabled only by DEBUG launch arguments. No external page was
+fetched.
 
 ### P8 scope boundaries and limitations
 
@@ -387,10 +408,54 @@ dock and queued sheet show fixture-only questions and messages.
   a scripted transport. No live session was mutated.
 - Physical iPhone, VoiceOver reading order, real keyboard, haptics and memory pressure remain unverified.
 
+## Phase 10 — what landed
+
+| Area | New path | Gate |
+| --- | --- | --- |
+| Attachment models, bounds, MIME and hash rules | `ios/OpenCodeKit/Sources/OpenCodeMedia/{MediaModels,MediaCopy}.swift` | `MediaImportTests`, `MediaAttachmentTests` |
+| App-owned staging, bounded copies, security-scoped cleanup, atomic writes, abandoned/partial cleanup | `.../MediaFileStore.swift` | write/copy/oversize/cleanup tests; no picker URL is persisted |
+| Photo, image, document and paste import with JPEG 1568 px re-encode | `.../MediaImport.swift` | valid, oversized, corrupt, text-sniffed, paste tests |
+| Authenticated media blob loader, 48 MiB memory / 256 MiB disk / per-server 404 | `.../MediaReferences.swift` | coalescing, disk-hit-after-purge, 404-per-server, trim tests |
+| Decoded image cache (64 MiB) and bounded thumbnail decode | `.../MediaImages.swift` | decode bounds; memory warning drops it |
+| Image viewer, gallery, zoom/pan, swipe dismiss, video/audio, PDF and text pages | `.../MediaViewerFeature.swift`, `ios/OpenCode/Media/MediaViewerView.swift` | `MediaUITests` image/tool journeys, `MediaPerformanceUITests` |
+| Annotation model, renderer and editor | `.../MediaAnnotation.swift`, `ios/OpenCode/Media/AnnotationEditor.swift` | annotation flattening test; composer Add journey |
+| Server path resolution, code preview/highlighting and file viewer | `.../FileViewerFeature.swift`, `.../CodePreview.swift`, `ios/OpenCode/Media/FileViewerView.swift` | path-target tests, file-viewer reducer test, server-file UI journey |
+| Browser policy, experiment gate, bounded WKWebView, fallback | `.../BrowserPolicy.swift`, `.../BrowserFeature.swift`, `ios/OpenCode/Media/BrowserSheet.swift` | policy/gating tests, browser UI gate journey |
+| Transcript image tiles, tool mosaic, file cards and viewer routes | `ios/OpenCode/Transcript/TranscriptRows.swift`, `OpenCodeSession/SessionFeature.swift` | image gallery/file viewer reducer tests; UI journeys |
+| Composer + menu, Photos/Files/Camera/Paste, chips, preview and annotation return | `ios/OpenCode/Composer/{ComposerViews,CameraCaptureSheet,ComposerTextInput}.swift`, `OpenCodeComposer/ComposerFeature.swift` | composer attachment tests, relaunch, paste, preview, annotation and send journeys |
+| Background subagent stop, shell Copy/Share | `OpenCodeSession/SessionFeature.swift`, `ios/OpenCode/Session/SessionView.swift` | `SessionMediaTests.subagentStop`; shell toolbar |
+| Cache limit, memory warning and launch cleanup | `MediaReferenceCache`, `AppFeature.memoryWarning`, `MediaScratch` | trim test; app launch cleans scratch and partial files |
+
+### P10 acceptance matrix (summary; full detail in `P10_MATRIX.md`)
+
+| Contract | Status | Evidence or limit |
+| --- | --- | --- |
+| Photo import | done for images via `PhotosPicker` | picker videos are not imported; Files can attach a video and server videos play |
+| Camera import | done through the system capture UI | deliberate native adaptation of the audited custom camera; physical camera unverified |
+| Document import | done with the system file importer and an app-owned copy | iCloud/file-provider latency and eviction unverified on device |
+| Paste | images, files and long text; >1,000 chars or >12 lines becomes Pasted Text | ordinary typing is never converted |
+| Staging/validation/upload | 20 MB images, 100 MB files, actual MIME sniff, progress, retry, unsupported server | live `/api/info` + `/api/experimental/fs/write` not run against a real V2 server |
+| Durable ownership | attachments in draft, failed and outbound records; interrupted uploads restore as failed with source | unit-tested; no crash-in-the-middle device run |
+| Prompt encoding | inline JPEG/paste `data:` parts, path reference lines, `metadata.attachments` | `ComposerAttachmentTests.promptEncoding` |
+| Transcript images/tool mosaics | native tiles and gallery; tool mosaic opens the same viewer | fixture UI journeys |
+| Viewers | image/zoom, video/audio, PDF, code/text, file | UI journeys; playback interruptions unverified |
+| Server files | `fs/list` and bounded `fs/read` through the client; preview; remote-only paths | folder-browser UI is not surfaced (P11 file autocomplete); read flows tested |
+| Annotation | draw, undo, flatten and add to the originating composer; cancel keeps the draft | UI Add journey and renderer test |
+| Browser | Experimental, off by default; public pages only; non-persistent store; handoff and fallback | gate journey; no credentials, no script bridge, no file access |
+| Math/Mermaid | explicit final source fallback | no renderer dependency added; not labelled as rendered |
+| Cross-block selection | deferred with owner and check | per-block selection and reply Copy remain |
+| Cache pressure | 256 MiB media blobs, disk trim oldest finished blobs, 48 MiB memory, 64 MiB decoded | trim and decode bounds tests; device memory warning unverified |
+| Background subagent stop | interrupt active child and cancel its subtree's jobs | synthetic reducer test; live jobs unverified |
+
 ## Verified in this phase
 
 | Command | Result |
 | --- | --- |
+| `swift test --package-path ios/OpenCodeKit` (P10) | **532 tests pass**: 198 server, 67 core, 75 app, 38 drawer, 70 session, 36 composer, 26 transcript, 22 media; live and loopback opt-outs unchanged |
+| `ios/scripts/verify.sh` (P10) | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **70 UI tests pass** (grouped runs: 11 + 7 + 15 + 3 + 8 + 6 + 2 + 9; includes the fixed relaunch journey); package run hit the recorded intermittent Home deletion test (`a late delete result cannot reverse a targeted confirmation`, 4 assertions), and a focused `HomeFeatureTests` rerun plus the following full `swift test` were green (532 tests). The flake is not claimed fixed. |
+| `xcodebuild … -only-testing:OpenCodeUITests/MediaUITests` | 8 journeys pass: transcript image gallery, tool mosaic, server file preview, browser gate, paste preview/remove, pasted-image send, annotation return, Dynamic Type/dark, relaunch recovery |
+| `xcodebuild … -only-testing:OpenCodeUITests/MediaScreenshotUITests` | 16 light/dark screenshots captured: transcript media, image viewer, tool mosaic, file viewer, browser, composer attachment, attachment preview, annotation |
+| `xcodebuild … -only-testing:OpenCodeUITests/MediaPerformanceUITests` | media-heavy scroll trace, large-image open/close metric and typing-while-attached trace; results below |
 | `swift test --package-path ios/OpenCodeKit` (P8) | **421 tests pass**: 185 server, 67 core, 61 app, 38 drawer, 44 session, 26 transcript; live and loopback opt-outs unchanged |
 | `ios/scripts/verify.sh` (P8) | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **46 UI tests pass**; package suites pass (exit 0) |
 | `swift test --package-path ios/OpenCodeKit` (P9) | **492 tests pass**: 194 server, 67 core, 75 app, 38 drawer, 66 session, 26 transcript, 26 composer; live and loopback opt-outs unchanged |
@@ -428,8 +493,24 @@ The 421 package tests are the sum of the six target runs the package runner prin
   Every positive send, retry, queue and dock journey used the deterministic fixture; live session mutation
   was not authorized and did not run.
 - **P9 model/agent/mentions/commands**: not built (see the P11 row below).
+- **P10 physical device**: no hardware run. Camera, photo-library prompts, file-provider download/eviction,
+  video/audio interruptions, share sheet, mobile-network upload and real memory warnings remain unverified.
+- **P10 live server**: no compatible V2 server with `paths.tmp`, `/api/experimental/fs/write` and
+  `/api/experimental/media/{hash}` was available. Uploads, blobs and file reads used the fixture client or a
+  scripted transport; no live mutation or remote file read ran.
+- **P10 upload transport**: the route shape, progress callback and unsupported outcome are tested; the real
+  `URLSession.upload(fromFile:)` delegate path has no loopback assertion because the local fixture server reads
+  only what arrives with the headers. Treat physical uploads as unverified.
+- **P10 browser UI test**: no external page is fetched. The browser journey serves a loopback HTML fixture from
+  the UI test runner, enabled by DEBUG launch arguments; the production policy still refuses loopback.
+- **P10 photo-picker video**: `PhotosPicker` is filtered to images; a video can be attached through Files and
+  server video playback is covered, but picking a video in Photos is not implemented.
+- **P10 file browser UI**: `fs/list` is implemented and tested, but the session has no folder-browser screen;
+  file cards open their referenced file directly. P11 file autocomplete owns the browse surface.
+- **P10 math/Mermaid**: source fallback is final for this phase; no renderer was added.
+- **P10 cross-block selection**: per-block selection and reply Copy remain; the cross-block handoff is not built.
 - **Pre-existing Home deletion timing failure**: the intermittent Home deletion test remains a known
-  unrelated issue from earlier phases. It was not reproduced or changed in P9 and is not claimed fixed.
+  unrelated issue from earlier phases. It was not reproduced or changed in P10 and is not claimed fixed.
 
 ## Deferred P8 items — later phase and acceptance check
 
@@ -437,9 +518,9 @@ The 421 package tests are the sum of the six target runs the package runner prin
 | --- | --- | --- |
 | Composer editing, drafts, sends, queued-input sheet, steer menu and quote-to-composer | **P9 — done** | Draft survives termination; a failed send retries with a new message id; the P7 inbox remains the only input source; a quote arrives from the transcript selection |
 | `/api/experimental/session/{id}/wait` loop | **P9 — done** | The send path waits for idle through the audited route without nesting retries |
-| Image/media viewer, tool image mosaic, full-screen viewer and file opening | P10 | Cached media, no automatic remote fetch, safe routing; a tool image opens the viewer |
-| Math typesetting and Mermaid diagrams | P10 | A maintained renderer is evaluated and pinned, or the source fallback is recorded as final |
-| Cross-block selection as one document | P10/P14 | A reply selects across blocks with native handles; the current per-block selection is replaced only with measured need |
+| Image/media viewer, tool image mosaic, full-screen viewer and file opening | **P10 — done** | Cached media, no automatic remote fetch, safe routing; a tool image opens the viewer |
+| Math typesetting and Mermaid diagrams | **P10 — source fallback final** | No maintained renderer was adopted; source is shown as code and never labelled rendered |
+| Cross-block selection as one document | P14 | A reply selects across blocks with native handles; the current per-block selection is replaced only with measured need |
 | Physical VoiceOver, selection and scroll checks | P14 | Each transcript row reads in order; selection handles and copy work on device |
 
 ## Deferred P9 items — later phase and acceptance check
@@ -448,14 +529,26 @@ The 421 package tests are the sum of the six target runs the package runner prin
 | --- | --- | --- |
 | Model, agent/mode and reasoning-variant pickers | P11 | `GET /api/model`, `/api/model/default` and `/api/agent` decode; the chosen model/agent is applied once before the next send; a refused pick leaves the composer draft intact |
 | Autocomplete for files, agents, skills and slash commands; mentions | P11/P10 | Filtering is next-frame; a chosen mention survives draft restore; the prompt carries the audited `agents`, `skills`, `files` and `mentions` shapes; file results never read local disk |
-| Attachment picker, camera, photo/file uploads and inline pasted text | P10 | Size/type validation, progress, cancellation and failed-upload recovery; no inert + control exists before the boundary |
-| Cross-block selection for quoting a whole reply | P10/P14 | One reply selects across blocks with native handles and the selection becomes one quote without losing the composer draft |
+| Attachment picker, camera, photo/file uploads and inline pasted text | **P10 — done** | Size/type validation, progress, cancellation and failed-upload recovery; the + control exists and works |
+| Cross-block selection for quoting a whole reply | P14 | One reply selects across blocks with native handles and the selection becomes one quote without losing the composer draft |
 | IME marked text, hardware Shift+Return and VoiceOver on device | P14 | A pinyin/Japanese composition is not committed by an external draft sync; Shift+Return inserts a newline and plain Return sends; each composer control reads and activates in order |
+| Folder browser for server files; picker videos | P11/P14 | The file autocomplete lists `fs/list` results without local reads; a Photos video becomes a staged upload with a poster and duration |
+
+## Deferred P10 items — later phase and acceptance check
+
+| Deferred item | Later phase | Acceptance check |
+| --- | --- | --- |
+| Session folder browser over `fs/list` | P11 | A folder row lists only server entries; no local path is opened; back/cancel keeps the draft |
+| Photos-picker video import | P14 | A picked video stages a bounded file plus a poster/duration, uploads once and plays locally or from the server |
+| Web page Ask / page-context prompt | P14 | Ask sends a bounded page block and selection in the audited prompt metadata, without credentials |
+| Math typesetting and Mermaid diagrams | P14 | A maintained renderer is evaluated with offline, licence and untrusted-content gates; otherwise the source fallback stays final |
+| Cross-block reply selection | P14 | One reply selects across blocks with native handles and becomes one quote without losing composition |
+| Orphan sweep for staging folders no draft names | P14 | Launch cleanup removes staging folders unreferenced by drafts, failed sends and outbound records; a viewer-held file is not removed |
+| Physical camera, photo permission, file providers, playback and sharing | P14 | Synthetic checks on hardware; denied/unavailable paths typed; share sheet receives the intended file/text |
 
 ## Next
 
-1. P10: media, agent files, the browser, richer math/Mermaid rendering, the deferred attachment boundary and
-   cross-block quote selection.
-2. P11: settings, shipped What's New catalogue, custom headers, camera pairing, model/agent pickers and
-   autocomplete.
-3. P14: physical-device IME, hardware keyboard, VoiceOver, haptics, memory pressure and live-server checks.
+1. P11: settings and experiments (including the in-app browser switch), shipped What's New catalogue, custom
+   headers, camera QR pairing, model/agent pickers, autocomplete, mentions and the folder browser.
+2. P12: system integrations (share extension/App Group, widgets, notifications).
+3. P14: physical-device media checks, cross-block selection, math/Mermaid decision, orphan sweep and hardening.

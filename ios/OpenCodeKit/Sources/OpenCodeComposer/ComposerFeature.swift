@@ -1,6 +1,7 @@
 import ComposableArchitecture
 import Foundation
 import OpenCodeCore
+import OpenCodeMedia
 import OpenCodeServer
 
 /// The composer's own state: text, quotes, send eligibility, persistence and recoverable failures.
@@ -11,14 +12,24 @@ public struct ComposerFeature: Sendable {
   @ObservableState
   public struct State: Equatable, Sendable {
     public let serverID: String
+    /// The server this composer uploads to. A draft restored by a test or a preview may not have one;
+    /// uploads then report the typed unsupported outcome rather than inventing an address.
+    public var server: OpenCodeServer?
     public var target: ComposerTarget
     public var draft: String
     public var quotes: [ComposerQuote]
+    public var attachments: [MediaAttachment]
     public var delivery: Delivery
     public var focusRequest: Int
     public var isFocused: Bool
     public var isSending: Bool
     public var isRestoring: Bool
+    public var isImportingAttachments: Bool
+    public var importingCount: Int
+    public var attachmentProblem: MediaAttachmentProblem?
+    public var preview: ComposerAttachmentPreview?
+    /// The session folder uploads are scoped to. A New Session uses its project directory.
+    public var uploadDirectory: String?
     public var problem: ComposerProblem?
     public var failedSends: [FailedComposerSend]
     /// Persisted before dispatch. At most one operation is in flight; an unresolved record restored
@@ -58,14 +69,21 @@ public struct ComposerFeature: Sendable {
       quotes: [ComposerQuote] = []
     ) {
       self.serverID = serverID
+      self.server = nil
       self.target = target
       self.draft = draft
       self.quotes = quotes
+      self.attachments = []
       self.delivery = .steer
       self.focusRequest = 0
       self.isFocused = false
       self.isSending = false
       self.isRestoring = false
+      self.isImportingAttachments = false
+      self.importingCount = 0
+      self.attachmentProblem = nil
+      self.preview = nil
+      self.uploadDirectory = target.directory
       self.problem = nil
       self.failedSends = []
       self.outbound = []
@@ -95,12 +113,17 @@ public struct ComposerFeature: Sendable {
     }
 
     public var canSend: Bool {
-      !isSending && outbound.isEmpty
-        && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !quotes.isEmpty)
+      let hasTypedContent = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || !quotes.isEmpty
+      let hasAttachments = !attachments.isEmpty
+      return !isSending && outbound.isEmpty && !isImportingAttachments
+        && (hasTypedContent || hasAttachments)
+        && attachments.allSatisfy(\.isReady)
     }
 
     public var isEmpty: Bool {
-      draft.isEmpty && quotes.isEmpty && failedSends.isEmpty && outbound.isEmpty
+      draft.isEmpty && quotes.isEmpty && attachments.isEmpty && failedSends.isEmpty
+        && outbound.isEmpty
     }
 
     /// The complete durable composer record, including outbound ownership and failed sends.
@@ -108,6 +131,7 @@ public struct ComposerFeature: Sendable {
       ComposerDraft(
         text: draft,
         quotes: quotes,
+        attachments: attachments,
         projectDirectory: target.directory,
         createdSessionID: target.isNewSession ? nil : target.sessionID,
         failedSends: failedSends,
@@ -127,6 +151,27 @@ public struct ComposerFeature: Sendable {
     case quoteInserted(text: String)
     case quoteCommentChanged(id: String, comment: String)
     case quoteRemoved(id: String)
+    /// Picked or captured material. Image data is re-encoded off the main actor; file URLs are
+    /// copied into app-owned staging before a picker grant can expire.
+    case photosPicked([Data])
+    case filesPicked([URL])
+    case cameraCaptured(Data)
+    case pasteImages([Data])
+    case pasteFiles([URL])
+    case pasteText(String)
+    case pasteTapped
+    case importFinished(id: String, target: ComposerTarget, result: Result<MediaAttachment, MediaAttachmentProblem>)
+    case attachmentRemoveTapped(String)
+    case attachmentRetryTapped(String)
+    case attachmentUploadProgress(id: String, sent: Int64)
+    case attachmentUploadFinished(id: String, result: Result<String, MediaAttachmentProblem>)
+    case attachmentProblemDismissed
+    case attachmentPreviewTapped(String)
+    case attachmentPreviewLoaded(id: String, data: Data)
+    case attachmentPreviewDismissed
+    case drawingAdded(Data)
+    case uploadDirectoryChanged(String?)
+    case serverChanged(OpenCodeServer)
     case sendTapped
     case queueTapped
     case outboundPersisted(messageID: String)
@@ -191,6 +236,9 @@ public struct ComposerFeature: Sendable {
   enum CancelID: Hashable {
     case save
     case restore
+    case importAttachments
+    case upload(String)
+    case preview(String)
   }
 
   @Dependency(\.clock) private var clock
@@ -198,6 +246,10 @@ public struct ComposerFeature: Sendable {
   @Dependency(\.uuidClient) private var uuid
   @Dependency(\.haptics) private var haptics
   @Dependency(\.composerDrafts) private var drafts
+  @Dependency(\.mediaImporter) private var mediaImporter
+  @Dependency(\.mediaFiles) private var mediaFiles
+  @Dependency(\.pasteboard) private var pasteboard
+  @Dependency(\.openCodeClient) private var client
 
   public init() {}
 
@@ -258,7 +310,167 @@ public struct ComposerFeature: Sendable {
         state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         return scheduleSave(state: &state)
 
+      case .photosPicked(let images):
+        return importSources(
+          images.map { .imageData($0) },
+          limit: MediaLimits.maximumPhotos,
+          state: &state
+        )
+
+      case .filesPicked(let urls):
+        return importSources(
+          urls.map { .file($0, name: $0.lastPathComponent) },
+          limit: MediaLimits.maximumPhotos,
+          state: &state
+        )
+
+      case .cameraCaptured(let data):
+        return importSources([.imageData(data)], limit: 1, state: &state)
+
+      case .pasteImages(let images):
+        return importSources(
+          images.map { .imageData($0) },
+          limit: MediaLimits.maximumImagePastes,
+          state: &state
+        )
+
+      case .pasteFiles(let urls):
+        return importSources(
+          urls.map { .file($0, name: $0.lastPathComponent) },
+          limit: MediaLimits.maximumImagePastes,
+          state: &state
+        )
+
+      case .pasteText(let text):
+        guard MediaLimits.isLongPaste(text) else {
+          guard !text.isEmpty else { return .none }
+          state.draft += text
+          state.revision += 1
+          state.contentRevision += 1
+          state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+          state.isRestoring = false
+          return scheduleSave(state: &state)
+        }
+        return importSources([.pastedText(text)], limit: 1, state: &state)
+
+      case .pasteTapped:
+        let images = pasteboard.images()
+        if !images.isEmpty {
+          return importSources(
+            images.map { .imageData($0) },
+            limit: MediaLimits.maximumImagePastes,
+            state: &state
+          )
+        }
+        let files = pasteboard.fileURLs()
+        if !files.isEmpty {
+          return importSources(
+            files.map { .file($0, name: $0.lastPathComponent) },
+            limit: MediaLimits.maximumImagePastes,
+            state: &state
+          )
+        }
+        guard let text = pasteboard.string(), !text.isEmpty else { return .none }
+        if MediaLimits.isLongPaste(text) {
+          return importSources([.pastedText(text)], limit: 1, state: &state)
+        }
+        state.draft += text
+        state.revision += 1
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+        state.isRestoring = false
+        return scheduleSave(state: &state)
+
+      case .importFinished(let id, let target, let result):
+        guard target == state.target else { return .none }
+        return importFinished(id: id, result: result, state: &state)
+
+      case .attachmentRemoveTapped(let id):
+        return removeAttachment(id, state: &state)
+
+      case .attachmentRetryTapped(let id):
+        guard let index = state.attachments.firstIndex(where: { $0.id == id }),
+          case .failed = state.attachments[index].transfer
+        else { return .none }
+        state.attachments[index].transfer = .uploading(sent: 0)
+        state.attachmentProblem = nil
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+        return .merge(
+          startUpload(state.attachments[index], state: state),
+          scheduleSave(state: &state)
+        )
+
+      case .attachmentUploadProgress(let id, let sent):
+        guard let index = state.attachments.firstIndex(where: { $0.id == id }),
+          case .uploading(let previous) = state.attachments[index].transfer,
+          sent > previous
+        else { return .none }
+        state.attachments[index].transfer = .uploading(sent: sent)
+        return .none
+
+      case .attachmentUploadFinished(let id, let result):
+        return uploadFinished(id: id, result: result, state: &state)
+
+      case .attachmentProblemDismissed:
+        state.attachmentProblem = nil
+        return .none
+
+      case .attachmentPreviewTapped(let id):
+        guard let attachment = state.attachments.first(where: { $0.id == id }) else { return .none }
+        guard attachment.kind != .file || attachment.isImage else { return .none }
+        let files = mediaFiles
+        let serverID = state.serverID
+        let storedName = attachment.storedName
+        return .run { send in
+          do {
+            let data = try await files.store.read(
+              serverID: serverID,
+              storedName: storedName,
+              maximumBytes: MediaLimits.maximumInlineBytes
+            )
+            await send(.attachmentPreviewLoaded(id: id, data: data))
+          } catch is CancellationError {
+            return
+          } catch {
+            await send(.attachmentPreviewLoaded(id: id, data: Data()))
+          }
+        }
+        .cancellable(id: CancelID.preview(id), cancelInFlight: true)
+
+      case .attachmentPreviewLoaded(let id, let data):
+        guard let attachment = state.attachments.first(where: { $0.id == id }) else { return .none }
+        let text = attachment.kind == .pastedText
+          ? String(data: data, encoding: .utf8)
+          : nil
+        state.preview = ComposerAttachmentPreview(attachment: attachment, data: data, text: text)
+        return .none
+
+      case .attachmentPreviewDismissed:
+        state.preview = nil
+        return .none
+
+      case .drawingAdded(let data):
+        state.preview = nil
+        return importSources([.imageData(data)], limit: 1, state: &state)
+
+      case .uploadDirectoryChanged(let directory):
+        state.uploadDirectory = directory
+        return .none
+
+      case .serverChanged(let server):
+        state.server = server
+        return .none
+
       case .sendTapped:
+        guard !state.attachments.contains(where: { $0.isUploading }) else {
+          state.problem = .attachmentNotReady
+          return .none
+        }
+        guard state.attachments.allSatisfy(\.isReady) else {
+          state.problem = .attachmentUnavailable
+          return .none
+        }
         guard state.canSend, let send = makeSend(delivery: .steer, state: state) else {
           return .none
         }
@@ -266,6 +478,10 @@ public struct ComposerFeature: Sendable {
         return begin(send, retryFailure: nil, state: &state)
 
       case .queueTapped:
+        guard state.attachments.allSatisfy(\.isReady) else {
+          state.problem = .attachmentNotReady
+          return .none
+        }
         guard state.canSend, let send = makeSend(delivery: .queue, state: state) else {
           return .none
         }
@@ -277,6 +493,7 @@ public struct ComposerFeature: Sendable {
 
       case .sendAccepted(let messageID):
         guard state.outbound.contains(where: { $0.messageID == messageID }) else { return .none }
+        let accepted = state.outbound.first(where: { $0.messageID == messageID })?.attachments ?? []
         state.isSending = false
         if state.pendingDispatch?.send.messageID == messageID {
           state.pendingDispatch = nil
@@ -287,7 +504,11 @@ public struct ComposerFeature: Sendable {
         state.problem = nil
         state.contentRevision += 1
         state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
-        return scheduleSave(state: &state)
+        var effects: [Effect<Action>] = [scheduleSave(state: &state)]
+        for attachment in accepted {
+          effects.append(releaseIfUnreferenced(attachment, state: state))
+        }
+        return .merge(effects)
 
       case .sendUnverified(let messageID):
         guard let outbound = state.outbound.first(where: { $0.messageID == messageID }) else {
@@ -305,6 +526,7 @@ public struct ComposerFeature: Sendable {
             messageID: outbound.messageID,
             text: outbound.text,
             quotes: outbound.quotes,
+            attachments: outbound.attachments,
             delivery: outbound.delivery,
             target: outbound.target,
             reason: .couldNotVerifySend,
@@ -333,9 +555,12 @@ public struct ComposerFeature: Sendable {
         state.problem = failure == .ambiguous ? .couldNotVerifySend : .couldNotSend
         haptics.play(.error)
         state.outbound.removeAll { $0.messageID == outbound.messageID }
-        if state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, state.quotes.isEmpty {
+        if state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, state.quotes.isEmpty,
+          state.attachments.isEmpty
+        {
           state.draft = outbound.text
           state.quotes = outbound.quotes
+          state.attachments = outbound.attachments
           state.revision += 1
           state.focusRequest += 1
         } else {
@@ -344,6 +569,7 @@ public struct ComposerFeature: Sendable {
               messageID: messageID,
               text: outbound.text,
               quotes: outbound.quotes,
+              attachments: outbound.attachments,
               delivery: outbound.delivery,
               target: outbound.target,
               reason: state.problem ?? .couldNotSend,
@@ -374,6 +600,7 @@ public struct ComposerFeature: Sendable {
           messageID: retryID,
           text: failed.text,
           quotes: failed.quotes,
+          attachments: failed.attachments,
           delivery: failed.delivery,
           revision: state.revision
         )
@@ -401,6 +628,7 @@ public struct ComposerFeature: Sendable {
           : failed.text + "\n\n" + state.draft
         state.draft = text
         state.quotes = failed.quotes + state.quotes
+        state.attachments = failed.attachments + state.attachments
         state.revision += 1
         state.contentRevision += 1
         state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
@@ -511,14 +739,199 @@ public struct ComposerFeature: Sendable {
     }
   }
 
+  private func importSources(
+    _ sources: [MediaImportSource],
+    limit: Int,
+    state: inout State
+  ) -> Effect<Action> {
+    guard !sources.isEmpty else { return .none }
+    let available = max(
+      0,
+      MediaLimits.maximumAttachments - state.attachments.count - state.importingCount
+    )
+    let kept = Array(sources.prefix(min(limit, available)))
+    guard !kept.isEmpty else {
+      state.attachmentProblem = .tooLarge
+      haptics.play(.warning)
+      return .none
+    }
+    if kept.count < sources.count { state.attachmentProblem = .tooLarge }
+    state.importingCount += kept.count
+    state.isImportingAttachments = true
+    let importer = mediaImporter
+    let serverID = state.serverID
+    let uuid = uuid
+    let target = state.target
+    return .run { send in
+      for source in kept {
+        let id = uuid.uuid().uuidString.lowercased()
+        do {
+          let attachment: MediaAttachment
+          switch source {
+          case .imageData(let data):
+            attachment = try await importer.importImage(data, serverID, id)
+          case .file(let url, let name):
+            attachment = try await importer.importFile(url, name, serverID, id)
+          case .pastedText(let text):
+            attachment = try await importer.importPastedText(text, serverID, id)
+          }
+          await send(.importFinished(id: id, target: target, result: .success(attachment)))
+        } catch is CancellationError {
+          return
+        } catch let problem as MediaAttachmentProblem {
+          await send(.importFinished(id: id, target: target, result: .failure(problem)))
+        } catch {
+          await send(.importFinished(id: id, target: target, result: .failure(.unreadable)))
+        }
+      }
+    }
+  }
+
+  private func importFinished(
+    id: String,
+    result: Result<MediaAttachment, MediaAttachmentProblem>,
+    state: inout State
+  ) -> Effect<Action> {
+    state.importingCount = max(0, state.importingCount - 1)
+    state.isImportingAttachments = state.importingCount > 0
+    switch result {
+    case .success(let attachment):
+      guard state.attachments.count < MediaLimits.maximumAttachments else {
+        state.attachmentProblem = .tooLarge
+        haptics.play(.warning)
+        let files = mediaFiles
+        let serverID = state.serverID
+        return .run { _ in
+          await files.store.remove(serverID: serverID, storedName: attachment.storedName)
+        }
+      }
+      guard !state.attachments.contains(where: { $0.id == id || $0.storedName == attachment.storedName })
+      else { return .none }
+      state.attachments.append(attachment)
+      state.revision += 1
+      state.contentRevision += 1
+      state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+      state.attachmentProblem = nil
+      haptics.play(.selection)
+      var effects: [Effect<Action>] = [scheduleSave(state: &state)]
+      if attachment.kind == .file {
+        effects.append(startUpload(attachment, state: state))
+      }
+      return .merge(effects)
+    case .failure(let problem):
+      state.attachmentProblem = problem
+      haptics.play(.error)
+      return .none
+    }
+  }
+
+  private func startUpload(_ attachment: MediaAttachment, state: State) -> Effect<Action> {
+    guard let server = state.server else {
+      return .send(.attachmentUploadFinished(id: attachment.id, result: .failure(.uploadUnsupported)))
+    }
+    let client = client
+    let files = mediaFiles
+    let serverID = state.serverID
+    let directory = state.uploadDirectory
+    let storedName = attachment.storedName
+    let name = attachment.name
+    let id = attachment.id
+    return .run { send in
+      let url = await files.store.url(serverID: serverID, storedName: storedName)
+      do {
+        let path = try await client.uploadFile(server, directory, url, name) { sent in
+          Task { await send(.attachmentUploadProgress(id: id, sent: sent)) }
+        }
+        await send(.attachmentUploadFinished(id: id, result: .success(path)))
+      } catch is CancellationError {
+        return
+      } catch let error as OpenCodeClientError {
+        let problem: MediaAttachmentProblem = error.isUnsupported
+          ? .uploadUnsupported
+          : .uploadFailed
+        await send(.attachmentUploadFinished(id: id, result: .failure(problem)))
+      } catch {
+        await send(.attachmentUploadFinished(id: id, result: .failure(.uploadFailed)))
+      }
+    }
+    .cancellable(id: CancelID.upload(id), cancelInFlight: true)
+  }
+
+  private func uploadFinished(
+    id: String,
+    result: Result<String, MediaAttachmentProblem>,
+    state: inout State
+  ) -> Effect<Action> {
+    guard let index = state.attachments.firstIndex(where: { $0.id == id }) else { return .none }
+    switch result {
+    case .success(let path):
+      state.attachments[index].transfer = .uploaded(path: path)
+      state.attachmentProblem = nil
+      haptics.play(.confirm)
+      let storedName = state.attachments[index].storedName
+      let serverID = state.serverID
+      let files = mediaFiles
+      return .merge(
+        scheduleSave(state: &state),
+        .run { _ in
+          await files.store.remove(serverID: serverID, storedName: storedName)
+        }
+      )
+    case .failure(let problem):
+      state.attachments[index].transfer = .failed(problem)
+      state.attachmentProblem = problem
+      haptics.play(.error)
+      return scheduleSave(state: &state)
+    }
+  }
+
+  private func removeAttachment(_ id: String, state: inout State) -> Effect<Action> {
+    guard let index = state.attachments.firstIndex(where: { $0.id == id }) else { return .none }
+    let attachment = state.attachments.remove(at: index)
+    state.attachmentProblem = nil
+    state.revision += 1
+    state.contentRevision += 1
+    state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+    haptics.play(.selection)
+    var effects: [Effect<Action>] = [
+      .cancel(id: CancelID.upload(id)),
+      releaseIfUnreferenced(attachment, state: state),
+      scheduleSave(state: &state),
+    ]
+    return .merge(effects)
+  }
+
+  /// A staged file leaves only when no draft, failed send or outbound record still names it.
+  private func releaseIfUnreferenced(
+    _ attachment: MediaAttachment,
+    state: State
+  ) -> Effect<Action> {
+    let stillOwned = state.attachments.contains(where: { $0.storedName == attachment.storedName })
+      || state.failedSends.contains(where: { failed in
+        failed.attachments.contains(where: { $0.storedName == attachment.storedName })
+      })
+      || state.outbound.contains(where: { outbound in
+        outbound.attachments.contains(where: { $0.storedName == attachment.storedName })
+      })
+    guard !stillOwned else { return .none }
+    let files = mediaFiles
+    let serverID = state.serverID
+    let storedName = attachment.storedName
+    return .run { _ in
+      await files.store.remove(serverID: serverID, storedName: storedName)
+    }
+  }
+
   private func makeSend(delivery: Delivery, state: State) -> ComposerSend? {
     let text = state.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty || !state.quotes.isEmpty else { return nil }
+    guard !text.isEmpty || !state.quotes.isEmpty || !state.attachments.isEmpty else { return nil }
+    guard state.attachments.allSatisfy(\.isReady) else { return nil }
     return ComposerSend(
       target: state.target,
       messageID: uuid.uuid().uuidString.lowercased(),
       text: text,
       quotes: state.quotes,
+      attachments: state.attachments,
       delivery: delivery,
       revision: state.revision
     )
@@ -546,6 +959,7 @@ public struct ComposerFeature: Sendable {
         messageID: send.messageID,
         text: send.text,
         quotes: send.quotes,
+        attachments: send.attachments,
         delivery: send.delivery,
         revision: send.revision,
         createdAt: date.now()
@@ -567,6 +981,8 @@ public struct ComposerFeature: Sendable {
     if state.revision == pending.send.revision {
       state.draft = ""
       state.quotes = []
+      state.attachments = []
+      state.preview = nil
       state.revision += 1
       state.contentRevision += 1
       state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
@@ -577,6 +993,7 @@ public struct ComposerFeature: Sendable {
         messageID: pending.send.messageID,
         text: pending.send.text,
         quotes: pending.send.quotes,
+        attachments: pending.send.attachments,
         delivery: pending.send.delivery,
         target: pending.send.target,
         reason: failure == .ambiguous ? .couldNotVerifySend : .couldNotSend,
@@ -615,10 +1032,12 @@ public struct ComposerFeature: Sendable {
     let failure = pending?.restoreFailure ?? .definite
     if failure != .ambiguous,
       state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-      state.quotes.isEmpty
+      state.quotes.isEmpty,
+      state.attachments.isEmpty
     {
       state.draft = outbound.text
       state.quotes = outbound.quotes
+      state.attachments = outbound.attachments
       state.revision += 1
       state.focusRequest += 1
     } else {
@@ -627,6 +1046,7 @@ public struct ComposerFeature: Sendable {
           messageID: pending?.restoreMessageID ?? outbound.messageID,
           text: outbound.text,
           quotes: outbound.quotes,
+          attachments: outbound.attachments,
           delivery: outbound.delivery,
           target: outbound.target,
           reason: problem,
@@ -708,6 +1128,7 @@ public struct ComposerFeature: Sendable {
       messageID: send.messageID,
       text: send.text,
       quotes: send.quotes,
+      attachments: send.attachments,
       delivery: send.delivery,
       revision: send.revision,
       createdAt: date.now()
@@ -734,10 +1155,12 @@ public struct ComposerFeature: Sendable {
     let failure = pending.restoreFailure ?? .definite
     if failure != .ambiguous,
       state.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-      state.quotes.isEmpty
+      state.quotes.isEmpty,
+      state.attachments.isEmpty
     {
       state.draft = outbound.text
       state.quotes = outbound.quotes
+      state.attachments = outbound.attachments
       state.revision += 1
       state.focusRequest += 1
     } else {
@@ -746,6 +1169,7 @@ public struct ComposerFeature: Sendable {
           messageID: pending.restoreMessageID ?? outbound.messageID,
           text: outbound.text,
           quotes: outbound.quotes,
+          attachments: outbound.attachments,
           delivery: outbound.delivery,
           target: outbound.target,
           reason: problem,
@@ -847,6 +1271,13 @@ public struct ComposerFeature: Sendable {
   private func apply(_ draft: ComposerDraft, state: inout State) -> Effect<Action> {
     state.draft = draft.text
     state.quotes = draft.quotes
+    state.attachments = draft.attachments.map { attachment in
+      var restored = attachment
+      if case .uploading = restored.transfer {
+        restored.transfer = .failed(.uploadInterrupted)
+      }
+      return restored
+    }
     state.failedSends = draft.failedSends
     state.outbound = []
     state.retryDispatch = nil
@@ -858,6 +1289,7 @@ public struct ComposerFeature: Sendable {
           messageID: first.messageID,
           text: first.text,
           quotes: first.quotes,
+          attachments: first.attachments,
           delivery: first.delivery,
           target: first.target,
           reason: .couldNotVerifySend,
@@ -875,6 +1307,7 @@ public struct ComposerFeature: Sendable {
             messageID: extra.messageID,
             text: extra.text,
             quotes: extra.quotes,
+            attachments: extra.attachments,
             delivery: extra.delivery,
             target: extra.target,
             reason: .couldNotVerifySend,
@@ -991,14 +1424,19 @@ public struct ComposerFeature: Sendable {
     let oldDraft = snapshot(state)
     state.parkedDrafts[oldKey] = oldDraft
     state.target = target
+    state.uploadDirectory = target.directory ?? state.uploadDirectory
     state.draft = ""
     state.quotes = []
+    state.attachments = []
+    state.preview = nil
     state.failedSends = []
     state.outbound = []
     state.revision = 0
     state.contentRevision = 0
     state.contentUpdatedAt = Date(timeIntervalSince1970: 0)
     state.isSending = false
+    state.isImportingAttachments = false
+    state.importingCount = 0
     state.pendingDispatch = nil
     state.retryDispatch = nil
     state.dispatchGeneration = nil
@@ -1057,6 +1495,7 @@ public struct ComposerFeature: Sendable {
             messageID: outbound.messageID,
             text: outbound.text,
             quotes: outbound.quotes,
+            attachments: outbound.attachments,
             delivery: outbound.delivery,
             target: outbound.target,
             reason: failure == .ambiguous ? .couldNotVerifySend : .couldNotSend,
@@ -1134,6 +1573,7 @@ public struct ComposerFeature: Sendable {
     ComposerDraft(
       text: state.draft,
       quotes: state.quotes,
+      attachments: state.attachments,
       projectDirectory: state.target.directory,
       createdSessionID: state.target.isNewSession ? nil : state.target.sessionID,
       failedSends: state.failedSends,
