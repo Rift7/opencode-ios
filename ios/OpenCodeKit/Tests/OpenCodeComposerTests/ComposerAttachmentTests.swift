@@ -12,18 +12,47 @@ import Testing
 struct ComposerAttachmentTests {
   actor Backend {
     var drafts: [String: ComposerDraft] = [:]
+    var saveResult: ComposerDraftSave = .saved
+    var transferResult: ComposerDraftSave = .saved
     func load(_ key: ComposerDraftKey) -> ComposerDraftLoad {
       drafts[key.storageKey].map(ComposerDraftLoad.found) ?? .missing
     }
     func save(_ draft: ComposerDraft, key: ComposerDraftKey) -> ComposerDraftSave {
-      drafts[key.storageKey] = draft
-      return .saved
+      if case .saved = saveResult { drafts[key.storageKey] = draft }
+      return saveResult
     }
+    func setSaveResult(_ result: ComposerDraftSave) { saveResult = result }
+    func setTransferResult(_ result: ComposerDraftSave) { transferResult = result }
     func remove(_ key: ComposerDraftKey) -> ComposerDraftSave {
       drafts[key.storageKey] = nil
       return .saved
     }
     func stored(_ key: ComposerDraftKey) -> ComposerDraft? { drafts[key.storageKey] }
+
+    func referencedStoredNames(serverID: String) -> Set<String> {
+      let prefix = "\(serverID)|"
+      var names: Set<String> = []
+      for (key, draft) in drafts where key.hasPrefix(prefix) {
+        for a in draft.attachments where !a.transfer.isUploaded { names.insert(a.storedName) }
+        for f in draft.failedSends {
+          for a in f.attachments where !a.transfer.isUploaded { names.insert(a.storedName) }
+        }
+        for o in draft.outbound {
+          for a in o.attachments where !a.transfer.isUploaded { names.insert(a.storedName) }
+        }
+      }
+      return names
+    }
+
+    func applyTransfer(_ key: ComposerDraftKey, id: String, transfer: MediaTransfer) -> ComposerDraftSave {
+      guard case .saved = transferResult else { return transferResult }
+      guard var draft = drafts[key.storageKey],
+        let index = draft.attachments.firstIndex(where: { $0.id == id })
+      else { return .saved }
+      draft.attachments[index].transfer = transfer
+      drafts[key.storageKey] = draft
+      return .saved
+    }
   }
 
   func draftClient(_ backend: Backend) -> ComposerDraftClient {
@@ -31,6 +60,8 @@ struct ComposerAttachmentTests {
       load: { await backend.load($0) },
       save: { await backend.save($0, key: $1) },
       remove: { await backend.remove($0) },
+      applyAttachmentTransfer: { await backend.applyTransfer($0, id: $1, transfer: $2) },
+      referencedStoredNames: { .success(await backend.referencedStoredNames(serverID: $0)) },
       flush: {}
     )
   }
@@ -151,7 +182,7 @@ struct ComposerAttachmentTests {
       importPastedText: { _, _, _ in throw MediaAttachmentProblem.unreadable }
     )
     var client = OpenCodeClient.testValue
-    client.uploadFile = { _, _, _, _, progress in
+    client.uploadFile = { _, _, _, _, _, progress in
       let attempt = await attempts.next()
       progress(50)
       if attempt == 1 { throw OpenCodeClientError(.status(500)) }
@@ -168,7 +199,7 @@ struct ComposerAttachmentTests {
       $0.isImportingAttachments = false
       $0.importingCount = 0
     }
-    await store.receive(.attachmentUploadFinished(id: "00000000-0000-4000-8000-000000000001", result: .failure(.uploadFailed))) {
+    await store.receive(.attachmentUploadFinished(key: ComposerDraftKey(serverID: server().persistenceID, scope: .session("alpha")), id: "00000000-0000-4000-8000-000000000001", attempt: 1, result: .failure(.uploadFailed))) {
       $0.attachments[0].transfer = .failed(.uploadFailed)
       $0.attachmentProblem = .uploadFailed
     }
@@ -176,10 +207,10 @@ struct ComposerAttachmentTests {
     await store.send(.attachmentRetryTapped("00000000-0000-4000-8000-000000000001")) {
       $0.attachments[0].transfer = .uploading(sent: 0)
       $0.attachmentProblem = nil
-      $0.contentRevision = 2
+      $0.contentRevision = 3
       $0.contentUpdatedAt = Date(timeIntervalSince1970: 1_700_000_000)
     }
-    await store.receive(.attachmentUploadFinished(id: "00000000-0000-4000-8000-000000000001", result: .success("/tmp/uploads/a/report.pdf"))) {
+    await store.receive(.attachmentUploadFinished(key: ComposerDraftKey(serverID: server().persistenceID, scope: .session("alpha")), id: "00000000-0000-4000-8000-000000000001", attempt: 2, result: .success("/tmp/uploads/a/report.pdf"))) {
       $0.attachments[0].transfer = .uploaded(path: "/tmp/uploads/a/report.pdf")
       $0.attachmentProblem = nil
     }
@@ -260,6 +291,11 @@ struct ComposerAttachmentTests {
       $0.contentRevision = 1
       $0.contentUpdatedAt = Date(timeIntervalSince1970: 1_700_000_000)
     }
+    var attempts = 0
+    while FileManager.default.fileExists(atPath: url.path), attempts < 50 {
+      try? await Task.sleep(for: .milliseconds(10))
+      attempts += 1
+    }
     #expect(!FileManager.default.fileExists(atPath: url.path))
   }
 
@@ -319,9 +355,9 @@ struct ComposerAttachmentTests {
   func removeDuringUpload() async throws {
     let gate = UploadGate()
     var client = OpenCodeClient.testValue
-    client.uploadFile = { _, _, _, _, progress in
+    client.uploadFile = { _, _, _, _, uploadID, progress in
       progress(10)
-      return try await gate.wait()
+      return try await gate.wait(uploadID: uploadID)
     }
     let importer = MediaImportClient(
       importImage: { _, _, _ in throw MediaAttachmentProblem.unreadable },
@@ -369,6 +405,353 @@ struct ComposerAttachmentTests {
     #expect(store.state.outbound.isEmpty)
   }
 
+  @Test("upload success retains the source when the draft save fails")
+  func uploadSuccessWithFailedSaveRetainsSource() async throws {
+    let environment = IsolatedTestEnvironment(testName: "composer-upload-save-fail")
+    defer { environment.cleanUp() }
+    let files = MediaFiles(store: MediaFileStore(root: try environment.directory("stage")))
+    let written = try await files.store.write(
+      Data("file".utf8),
+      name: "report.pdf",
+      serverID: server().persistenceID,
+      id: "00000000-0000-4000-8000-000000000001"
+    )
+    let staged = attachment(
+      id: "00000000-0000-4000-8000-000000000001",
+      kind: .file,
+      transfer: .uploading(sent: 0),
+      storedName: written.storedName
+    )
+    let importer = MediaImportClient(
+      importImage: { _, _, _ in throw MediaAttachmentProblem.unreadable },
+      importFile: { _, _, _, _ in staged },
+      importPastedText: { _, _, _ in throw MediaAttachmentProblem.unreadable }
+    )
+    let backend = Backend()
+    await backend.setSaveResult(.failure(.unavailable))
+    var client = OpenCodeClient.testValue
+    client.uploadFile = { _, _, _, _, _, _ in "/tmp/uploads/a/report.pdf" }
+    let store = makeStore(state(), backend: backend, importer: importer, files: files, client: client)
+    await store.send(.filesPicked([URL(fileURLWithPath: "/tmp/report.pdf")]))
+    await store.receive(.importFinished(
+      id: "00000000-0000-4000-8000-000000000001",
+      target: .session(id: "alpha"),
+      result: .success(staged)
+    )) {
+      $0.attachments = [staged]
+      $0.revision = 1
+      $0.contentRevision = 1
+      $0.isImportingAttachments = false
+      $0.importingCount = 0
+    }
+    await store.receive(.attachmentUploadFinished(
+      key: ComposerDraftKey(serverID: self.server().persistenceID, scope: .session("alpha")),
+      id: staged.id,
+      attempt: 1,
+      result: .success("/tmp/uploads/a/report.pdf")
+    ))
+    let url = await files.store.url(serverID: server().persistenceID, storedName: written.storedName)
+    try? await Task.sleep(for: .milliseconds(50))
+    #expect(FileManager.default.fileExists(atPath: url.path))
+    #expect(store.state.problem == .couldNotSave || store.state.problem == nil)
+    let persisted = await backend.stored(ComposerDraftKey(serverID: server().persistenceID, scope: .session("alpha")))
+    #expect(persisted?.attachments.first?.transfer.isUploaded != true)
+  }
+
+  @Test("a restart between upload completion and persistence restores a retryable attachment")
+  func restartBeforeUploadPersistence() async throws {
+    let environment = IsolatedTestEnvironment(testName: "composer-upload-restart")
+    defer { environment.cleanUp() }
+    let files = MediaFiles(store: MediaFileStore(root: try environment.directory("stage")))
+    let written = try await files.store.write(
+      Data("file".utf8),
+      name: "report.pdf",
+      serverID: server().persistenceID,
+      id: "f1"
+    )
+    let staged = attachment(id: "f1", kind: .file, transfer: .uploading(sent: 20), storedName: written.storedName)
+    let backend = Backend()
+    let key = ComposerDraftKey(serverID: server().persistenceID, scope: .session("alpha"))
+    await backend.save(ComposerDraft(text: "old", attachments: [staged], revision: 1), key: key)
+    var client = OpenCodeClient.testValue
+    client.uploadFile = { _, _, _, _, _, _ in "/tmp/uploads/f1/report.pdf" }
+    let store = makeStore(state(), backend: backend, files: files, client: client)
+    await store.send(.task)
+    await store.receive(.draftLoaded(token: 1, key: key, outcome: .found(
+      ComposerDraft(text: "old", attachments: [staged], revision: 1)
+    ))) {
+      $0.draft = "old"
+      $0.attachments = [self.attachment(id: "f1", kind: .file, transfer: .failed(.uploadInterrupted), storedName: written.storedName)]
+      $0.contentRevision = 1
+    }
+    let url = await files.store.url(serverID: server().persistenceID, storedName: written.storedName)
+    #expect(FileManager.default.fileExists(atPath: url.path))
+    #expect(store.state.attachments.first?.isReady == false)
+    await store.send(.attachmentRetryTapped("f1"))
+    var attempts = 0
+    while FileManager.default.fileExists(atPath: url.path), attempts < 50 {
+      try? await Task.sleep(for: .milliseconds(10))
+      attempts += 1
+    }
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+  }
+
+  @Test("a failed removal save leaves the staged file for restore")
+  func removalSaveFailureKeepsFile() async throws {
+    let environment = IsolatedTestEnvironment(testName: "composer-remove-save-fail")
+    defer { environment.cleanUp() }
+    let files = MediaFiles(store: MediaFileStore(root: try environment.directory("stage")))
+    let written = try await files.store.write(
+      Data("file".utf8),
+      name: "report.tmp",
+      serverID: server().persistenceID,
+      id: "f1"
+    )
+    var initial = state()
+    initial.attachments = [attachment(id: "f1", kind: .file, transfer: .uploaded(path: "/tmp/f1"), storedName: written.storedName)]
+    let backend = Backend()
+    await backend.setSaveResult(.failure(.unavailable))
+    let store = makeStore(initial, backend: backend, files: files)
+    await store.send(.attachmentRemoveTapped("f1"))
+    try? await Task.sleep(for: .milliseconds(50))
+    let url = await files.store.url(serverID: server().persistenceID, storedName: written.storedName)
+    #expect(FileManager.default.fileExists(atPath: url.path))
+  }
+
+  @Test("an unresolved outbound record keeps the staged source")
+  func unresolvedOutboundKeepsSource() async throws {
+    let environment = IsolatedTestEnvironment(testName: "composer-outbound-source")
+    defer { environment.cleanUp() }
+    let files = MediaFiles(store: MediaFileStore(root: try environment.directory("stage")))
+    let written = try await files.store.write(
+      Data("file".utf8),
+      name: "report.tmp",
+      serverID: server().persistenceID,
+      id: "f1"
+    )
+    let staged = attachment(id: "f1", kind: .file, transfer: .failed(.uploadFailed), storedName: written.storedName)
+    var initial = state()
+    initial.attachments = [staged]
+    initial.outbound = [
+      ComposerOutbound(
+        target: .session(id: "alpha"),
+        messageID: "m1",
+        text: "old",
+        quotes: [],
+        attachments: [staged],
+        delivery: .steer,
+        revision: 1
+      )
+    ]
+    let store = makeStore(initial, backend: Backend(), files: files)
+    await store.send(.attachmentRemoveTapped("f1"))
+    try? await Task.sleep(for: .milliseconds(50))
+    let url = await files.store.url(serverID: server().persistenceID, storedName: written.storedName)
+    #expect(FileManager.default.fileExists(atPath: url.path))
+  }
+
+  @Test("a viewer lease keeps the source until cleanup can run again")
+  func viewerLeaseKeepsSource() async throws {
+    let environment = IsolatedTestEnvironment(testName: "composer-viewer-lease")
+    defer { environment.cleanUp() }
+    let files = MediaFiles(store: MediaFileStore(root: try environment.directory("stage")))
+    let written = try await files.store.write(
+      Data("file".utf8),
+      name: "capture.partial",
+      serverID: server().persistenceID,
+      id: "f1"
+    )
+    let token = await files.store.lease(serverID: server().persistenceID, storedName: written.storedName)
+    var initial = state()
+    initial.attachments = [attachment(id: "f1", kind: .file, transfer: .uploaded(path: "/tmp/f1"), storedName: written.storedName)]
+    let store = makeStore(initial, backend: Backend(), files: files)
+    await store.send(.attachmentRemoveTapped("f1"))
+    try? await Task.sleep(for: .milliseconds(50))
+    let url = await files.store.url(serverID: server().persistenceID, storedName: written.storedName)
+    #expect(FileManager.default.fileExists(atPath: url.path))
+    await files.store.release(token)
+    await store.send(.flush)
+    var attempts = 0
+    while FileManager.default.fileExists(atPath: url.path), attempts < 50 {
+      try? await Task.sleep(for: .milliseconds(10))
+      attempts += 1
+    }
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+  }
+
+  @Test("an upload started on A completes while B is visible and A restores it")
+  func uploadCompletesWhileAnotherDraftIsVisible() async throws {
+    let environment = IsolatedTestEnvironment(testName: "composer-upload-navigation")
+    defer { environment.cleanUp() }
+    let files = MediaFiles(store: MediaFileStore(root: try environment.directory("stage")))
+    let written = try await files.store.write(
+      Data("file".utf8),
+      name: "report.pdf",
+      serverID: server().persistenceID,
+      id: "f1"
+    )
+    let staged = attachment(id: "f1", kind: .file, transfer: .uploading(sent: 0), storedName: written.storedName)
+    let importer = MediaImportClient(
+      importImage: { _, _, _ in throw MediaAttachmentProblem.unreadable },
+      importFile: { _, _, _, _ in staged },
+      importPastedText: { _, _, _ in throw MediaAttachmentProblem.unreadable }
+    )
+    let backend = Backend()
+    let beta = ComposerDraftKey(serverID: server().persistenceID, scope: .session("beta"))
+    await backend.save(ComposerDraft(text: "B draft", revision: 3), key: beta)
+    let gate = UploadGate()
+    var client = OpenCodeClient.testValue
+    client.uploadFile = { _, _, _, _, uploadID, progress in
+      progress(1)
+      return try await gate.wait(uploadID: uploadID)
+    }
+    let store = makeStore(state(), backend: backend, importer: importer, files: files, client: client)
+    await store.send(.filesPicked([URL(fileURLWithPath: "/tmp/report.pdf")]))
+    await store.receive(.importFinished(
+      id: "00000000-0000-4000-8000-000000000001",
+      target: .session(id: "alpha"),
+      result: .success(staged)
+    ))
+    await store.send(.switchTarget(.session(id: "beta")))
+    await store.receive(.draftLoaded(
+      token: 1,
+      key: beta,
+      outcome: .found(ComposerDraft(text: "B draft", revision: 3))
+    ))
+    #expect(store.state.target == .session(id: "beta"))
+    await gate.finish("/tmp/uploads/f1/report.pdf")
+    await store.receive(.attachmentUploadFinished(
+      key: ComposerDraftKey(serverID: self.server().persistenceID, scope: .session("alpha")),
+      id: "f1",
+      attempt: 1,
+      result: .success("/tmp/uploads/f1/report.pdf")
+    ))
+    try? await Task.sleep(for: .milliseconds(80))
+    let alpha = ComposerDraftKey(serverID: server().persistenceID, scope: .session("alpha"))
+    let persistedA = await backend.stored(alpha)
+    #expect(persistedA?.attachments.first?.fileReference?.path == "/tmp/uploads/f1/report.pdf")
+    let persistedB = await backend.stored(beta)
+    #expect(persistedB?.text == "B draft")
+    await store.send(.switchTarget(.session(id: "alpha")))
+    await store.finish()
+    await store.skipReceivedActions(strict: false)
+    #expect(store.state.attachments.first?.transfer == .uploaded(path: "/tmp/uploads/f1/report.pdf"))
+  }
+
+  @Test("an older upload completion cannot overwrite a newer retry")
+  func oldCompletionAfterRetryIsIgnored() async throws {
+    let environment = IsolatedTestEnvironment(testName: "composer-upload-attempt")
+    defer { environment.cleanUp() }
+    let files = MediaFiles(store: MediaFileStore(root: try environment.directory("stage")))
+    let written = try await files.store.write(
+      Data("file".utf8),
+      name: "report.pdf",
+      serverID: server().persistenceID,
+      id: "f1"
+    )
+    let staged = attachment(id: "f1", kind: .file, transfer: .uploading(sent: 0), storedName: written.storedName)
+    let importer = MediaImportClient(
+      importImage: { _, _, _ in throw MediaAttachmentProblem.unreadable },
+      importFile: { _, _, _, _ in staged },
+      importPastedText: { _, _, _ in throw MediaAttachmentProblem.unreadable }
+    )
+    let backend = Backend()
+    let alpha = ComposerDraftKey(serverID: server().persistenceID, scope: .session("alpha"))
+    let gate = UploadGate()
+    var client = OpenCodeClient.testValue
+    client.uploadFile = { _, _, _, _, uploadID, _ in
+      return try await gate.wait(uploadID: uploadID)
+    }
+    let store = makeStore(state(), backend: backend, importer: importer, files: files, client: client)
+    await store.send(.filesPicked([URL(fileURLWithPath: "/tmp/report.pdf")]))
+    await store.receive(.importFinished(
+      id: "00000000-0000-4000-8000-000000000001",
+      target: .session(id: "alpha"),
+      result: .success(staged)
+    ))
+    await store.send(.switchTarget(.session(id: "beta")))
+    await store.send(.switchTarget(.session(id: "alpha")))
+    await store.finish()
+    await store.skipReceivedActions(strict: false)
+    #expect(store.state.attachments.first?.transfer == .failed(.uploadInterrupted))
+    await store.send(.attachmentRetryTapped("f1"))
+    // A dependency may complete after cancellation. The older attempt must not win.
+    await store.send(.attachmentUploadFinished(
+      key: alpha,
+      id: "f1",
+      attempt: 1,
+      result: .success("/tmp/uploads/old/report.pdf")
+    ))
+    #expect(store.state.attachments.first?.transfer != .uploaded(path: "/tmp/uploads/old/report.pdf"))
+    await gate.finish(index: 1, "/tmp/uploads/new/report.pdf")
+    await store.receive(.attachmentUploadFinished(
+      key: alpha,
+      id: "f1",
+      attempt: 2,
+      result: .success("/tmp/uploads/new/report.pdf")
+    ))
+    #expect(store.state.attachments.first?.transfer == .uploaded(path: "/tmp/uploads/new/report.pdf"))
+    let persisted = await backend.stored(alpha)
+    #expect(persisted?.attachments.first?.fileReference?.path == "/tmp/uploads/new/report.pdf")
+  }
+
+  @Test("a hidden upload persistence failure keeps the source and retries on return")
+  func hiddenUploadPersistenceFailureRetries() async throws {
+    let environment = IsolatedTestEnvironment(testName: "composer-hidden-upload-failure")
+    defer { environment.cleanUp() }
+    let files = MediaFiles(store: MediaFileStore(root: try environment.directory("stage")))
+    let written = try await files.store.write(
+      Data("file".utf8),
+      name: "report.pdf",
+      serverID: server().persistenceID,
+      id: "f1"
+    )
+    let staged = attachment(id: "f1", kind: .file, transfer: .uploading(sent: 0), storedName: written.storedName)
+    let importer = MediaImportClient(
+      importImage: { _, _, _ in throw MediaAttachmentProblem.unreadable },
+      importFile: { _, _, _, _ in staged },
+      importPastedText: { _, _, _ in throw MediaAttachmentProblem.unreadable }
+    )
+    let backend = Backend()
+    let gate = UploadGate()
+    var client = OpenCodeClient.testValue
+    client.uploadFile = { _, _, _, _, uploadID, _ in
+      try await gate.wait(uploadID: uploadID)
+    }
+    let store = makeStore(state(), backend: backend, importer: importer, files: files, client: client)
+    let alpha = ComposerDraftKey(serverID: server().persistenceID, scope: .session("alpha"))
+    await store.send(.filesPicked([URL(fileURLWithPath: "/tmp/report.pdf")]))
+    await store.receive(.importFinished(
+      id: "00000000-0000-4000-8000-000000000001",
+      target: .session(id: "alpha"),
+      result: .success(staged)
+    ))
+    await store.send(.switchTarget(.session(id: "beta")))
+    await store.finish()
+    await store.skipReceivedActions(strict: false)
+    await backend.setTransferResult(.failure(.unavailable))
+    await gate.finish("/tmp/uploads/f1/report.pdf")
+    await store.receive(.attachmentDeferred(
+      ComposerFeature.State.AttachmentUploadID(key: alpha, attachmentID: "f1"),
+      .uploaded(path: "/tmp/uploads/f1/report.pdf")
+    ))
+    #expect(store.state.problem == .couldNotSave)
+    let url = await files.store.url(serverID: server().persistenceID, storedName: written.storedName)
+    #expect(FileManager.default.fileExists(atPath: url.path))
+    #expect(await backend.stored(alpha)?.attachments.first?.transfer.isUploaded == false)
+    await backend.setTransferResult(.saved)
+    await store.send(.switchTarget(.session(id: "alpha")))
+    await store.finish()
+    await store.skipReceivedActions(strict: false)
+    #expect(store.state.attachments.first?.transfer == .uploaded(path: "/tmp/uploads/f1/report.pdf"))
+    var attempts = 0
+    while FileManager.default.fileExists(atPath: url.path), attempts < 50 {
+      try? await Task.sleep(for: .milliseconds(10))
+      attempts += 1
+    }
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+  }
+
   @Test("the attachment limit refuses extras without dropping what is already staged")
   func attachmentLimit() async throws {
     let backend = Backend()
@@ -397,16 +780,25 @@ private actor Counter {
 }
 
 private actor UploadGate {
-  private var continuation: CheckedContinuation<String, any Error>?
+  private var pending: [CheckedContinuation<String, any Error>] = []
+  private(set) var uploadIDs: [String] = []
 
-  func wait() async throws -> String {
-    try await withCheckedThrowingContinuation { continuation in
-      self.continuation = continuation
+  func wait(uploadID: String) async throws -> String {
+    uploadIDs.append(uploadID)
+    return try await withCheckedThrowingContinuation { continuation in
+      pending.append(continuation)
     }
   }
 
   func finish(_ path: String) {
-    continuation?.resume(returning: path)
-    continuation = nil
+    guard !pending.isEmpty else { return }
+    pending.removeFirst().resume(returning: path)
   }
+
+  func finish(index: Int, _ path: String) {
+    guard pending.indices.contains(index) else { return }
+    pending.remove(at: index).resume(returning: path)
+  }
+
+  func count() -> Int { pending.count }
 }

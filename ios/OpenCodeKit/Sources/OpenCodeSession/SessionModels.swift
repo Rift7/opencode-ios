@@ -27,6 +27,7 @@ public enum SessionProblem: Equatable, Sendable {
       }
     case .invalidURL, .unsupported, .pairingExpired, .pairingUnsupported: return .unsupported
     case .undecodable(let feature): return .malformed(feature: feature)
+    case .responseTooLarge(let feature): return .malformed(feature: feature)
     case .incompatibleAPI(let feature): return .incompatibleAPI(feature: feature)
     case .unreachable: return isOffline ? .offline : .unreachable
     case .streamEnded, .streamServerFailure, .streamOversizedFrame, .streamOverflow: return .unknown

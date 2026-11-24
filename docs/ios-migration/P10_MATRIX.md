@@ -13,7 +13,7 @@ rows run only on hardware or a live V2 server.
 | Camera import, permission on invocation, denied/unavailable | `CameraCaptureSheet.swift`; `NSCameraUsageDescription` | done through the system capture UI; physical camera unverified |
 | Document import with security-scoped copy and cleanup | `ComposerViews.swift` `.fileImporter`; `MediaFileStore.copyFile` opens and always closes the scope | done; provider latency/eviction unverified |
 | Paste images/files/long text; ordinary typing untouched | `ComposerTextInput.paste`, `ComposerFeature.pasteTapped`, `MediaLimits.isLongPaste` | done — only an explicit paste or a >1,000-character / >12-line paste becomes an attachment |
-| Staged copy before a picker grant expires | `MediaImportClient`, `MediaFileStore`; no picker URL is persisted | done |
+| Staged copy before a picker grant expires | `MediaImportClient`, `MediaFileStore`; no picker URL is persisted; writes stage under `.staging` and move into place | done |
 | Type and size from actual bytes | `MediaFileType.mime` (4 KiB head), image decode and 20 MB source cap, 100 MB file cap | done |
 | Image re-encode: 1,568 px long edge, JPEG 0.8, EXIF dropped, never upscale | `MediaImageEncoding`, `MediaImportTests` | done |
 | Corrupt/unsupported/oversized/cancelled imports | `MediaImportTests`; reducer `.importFinished(.failure)` | done for malformed images, oversize, write failures; cancellation is a typed path but has no UI-injected cancellation test |
@@ -26,11 +26,11 @@ rows run only on hardware or a live V2 server.
 | Stable references in the P9 draft, failed-send and outbound records | `ComposerDraft.attachments`, `FailedComposerSend.attachments`, `ComposerOutbound.attachments`; `ComposerAttachmentTests` | done; legacy records decode with no attachments |
 | Caption, quotes and selections preserved while importing | attachments are additive; `ComposerDraft.sameContent` includes them | done |
 | Restart during import/upload/send | `.uploading` restores as `.failed(.uploadInterrupted)` with the local source; outbound restores as unverified per P9 | done in reducer tests; no kill-in-the-middle device run |
-| Removal/navigation/server switch during upload | cancel id per attachment; `importFinished` carries the target and is ignored after a switch; `removeDuringUpload` and `lateImportIsFenced` | done |
-| No duplicate upload or prompt on retry | one upload path per attachment reused across retries; prompt remains one admission per message ID (P9) | done for route/retry shape; live idempotency unverified |
+| Removal/navigation/server switch during upload | cancel id per key and attachment; uploads carry originating key + monotonic attempt; hidden results merge without overwriting newer edits; `removeDuringUpload`, `lateImportIsFenced`, `uploadCompletesWhileAnotherDraftIsVisible`, `oldCompletionAfterRetryIsIgnored` | done |
+| No duplicate upload or prompt on retry | one `<tmp>/uploads/<uploadID>/<name>` path per attachment reused across retries; prompt remains one admission per message ID (P9) | done for route/retry shape; live idempotency unverified |
 | Cancel before dispatch | upload effect checks cancellation before emitting; send path checks before the prompt mutation (P9) | done |
 | Actual prompt encoding | inline JPEG/paste `data:` parts; uploaded path reference lines; `metadata.attachments`; quotes as `metadata.comments` | `ComposerAttachmentTests.promptEncoding`; live server unverified |
-| File release only after confirmed ownership ends | `releaseIfUnreferenced` against draft, failed and outbound records; test removes a draft attachment while a failed send owns it | done |
+| File release only after confirmed ownership ends | `pendingReleases` waits for `.saveFinished(.saved)` and checks current, parked, failed, outbound, persisted and leased references; storage-backed tests cover failed save, restart, failed removal, outbound and viewer lease | done |
 | Upload capability discovery | `/api/info` `paths.tmp`; otherwise `.unsupported`; `MediaClientTests.uploadUnsupported` | done; real V2 server unavailable |
 
 ## Transcript and viewers
@@ -46,7 +46,7 @@ rows run only on hardware or a live V2 server.
 | Video/audio playback | authenticated download to a Caches scratch file, then AVPlayer | done; interruptions unverified |
 | PDF | authenticated download, `PDFView` | done |
 | Transcript position and composer content survive a viewer | viewer is a `@Presents` child; no transcript mutation | done; no explicit position test |
-| Authenticated media stays separate from external URLs | blobs only through `OpenCodeClient.mediaBlob`; Markdown images remain cards; external links confirm | done; redirect policy reuses the transport rule |
+| Authenticated media stays separate from external URLs | blobs only through `OpenCodeClient.mediaBlob` with a cumulative byte bound; Markdown images remain cards; external links confirm | done; redirect policy and loopback overflow tests |
 | Gallery from composer pending images | preview sheet + annotation | done |
 
 ## Server files and annotation
@@ -87,16 +87,19 @@ rows run only on hardware or a live V2 server.
 
 | Contract | Evidence | Status / limit |
 | --- | --- | --- |
-| Bounded media blob disk cache | 256 MiB, oldest finished `.blob` first, never a `.partial`; `MediaReferenceCacheTests.diskTrim` | done |
+| Bounded media blob disk cache | 256 MiB, oldest finished `.blob` first, never a `.partial`; authentication-scoped paths; `MediaReferenceCacheTests.diskTrim` | done |
+| Hash validation and scope invalidation | fetched and disk-loaded bytes must match SHA-256; corrupt disk entries are removed/refetched; credential change changes the scope token | done — scope, mismatch, corrupt-disk and credential-change tests |
 | Bounded memory and decoded image caches | 48 MiB/64 entries and 64 MiB/96 entries; memory warning clears/trims | done in tests; device warning unverified |
 | Draft/staged files are not cache entries | Application Support `ComposerAttachments`; cache trim never touches it | done |
 | Partition authenticated content | blob identity is content hash; 404s are per server persistence ID; server file reads are scoped to their location | done |
-| Failed/partial writes | atomic image/attachment writes; staging folder removed on failure; launch removes `.partial`/`.tmp` and scratch | done |
+| Failed/partial writes | atomic image/attachment writes; app-controlled `.staging` is removed on launch; imported `report.tmp`/`capture.partial` survive | done |
 | Orphan sweep | — | deferred to P14 (recipe and acceptance in STATUS) |
 
 ## Test inventory
 
-- Package: 532 tests — 198 server, 67 core, 75 app, 38 drawer, 70 session, 36 composer, 26 transcript,
-  22 media.
+- Package: 553 tests — 203 server, 67 core, 75 app, 38 drawer, 70 session, 44 composer, 26 transcript,
+  30 media.
 - UI: 70 tests, including 8 `MediaUITests`, 1 `MediaScreenshotUITests`, 3 `MediaPerformanceUITests`.
+  The correction full run passed 68/70; two P8 transcript timing journeys failed and passed on a focused
+  nine-test rerun (recorded, not fixed).
 - Screenshots: 16 P10 light/dark captures under `docs/ios-migration/screens/`.

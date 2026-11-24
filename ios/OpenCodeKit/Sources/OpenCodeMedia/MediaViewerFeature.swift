@@ -284,12 +284,20 @@ public struct MediaViewerFeature: Sendable {
             await send(.loaded(pageID: page.id, load: .failed(.unreadable)))
             return
           }
-          data = try await client.readFile(
-            server,
-            location,
-            path,
-            MediaLimits.maximumMediaBlobBytes
-          )
+          do {
+            data = try await client.readFile(
+              server,
+              location,
+              path,
+              MediaLimits.maximumMediaBlobBytes
+            )
+          } catch let error as OpenCodeClientError {
+            if case .responseTooLarge = error.failure {
+              await send(.loaded(pageID: page.id, load: .failed(.tooLarge)))
+              return
+            }
+            throw error
+          }
         }
         switch page.kind {
         case .text:

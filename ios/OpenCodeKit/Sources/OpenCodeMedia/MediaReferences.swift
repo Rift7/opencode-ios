@@ -1,11 +1,24 @@
 import ComposableArchitecture
 import CoreGraphics
+import CryptoKit
 import Foundation
 import OpenCodeCore
 import OpenCodeServer
 
-/// Content-addressed media blobs by hash, with an in-memory LRU and a bounded disk tier. A 404 is
-/// remembered per server in memory only. Concurrent reads of one blob coalesce into one request.
+/// Authentication scope for authenticated media. It hashes the saved-server identity with the
+/// credential value, so changing a token or password invalidates the scope without putting a raw
+/// credential in a filename, memory key or log.
+public enum MediaCacheScope {
+  public static func token(for server: OpenCodeServer) -> String {
+    let material = "\(server.persistenceID)|\(server.username)|\(server.password)"
+    let digest = SHA256.hash(data: Data(material.utf8))
+    return digest.map { String(format: "%02x", $0) }.joined().prefix(24).description
+  }
+}
+
+/// Content-addressed media blobs by hash, partitioned by authentication scope, with an in-memory
+/// LRU and a bounded disk tier. A 404 is remembered per scope in memory only. Concurrent reads of
+/// one blob coalesce into one request, and fetched or disk-loaded bytes must match their hash.
 public actor MediaReferenceCache {
   public enum Load: Equatable, Sendable {
     case loaded(Data)
@@ -61,12 +74,19 @@ public actor MediaReferenceCache {
     try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
   }
 
-  public func cachedData(hash: String) -> Data? {
-    let key = hash.lowercased()
-    guard MediaReference.isValidHash(key), var entry = memory[key] else { return nil }
+  public func cachedData(server: OpenCodeServer, hash: String) -> Data? {
+    let normalized = hash.lowercased()
+    let scope = MediaCacheScope.token(for: server)
+    let entryKey = key(scope: scope, hash: normalized)
+    guard MediaReference.isValidHash(normalized), var entry = memory[entryKey] else { return nil }
+    guard Self.matchesHash(entry.data, hash: normalized) else {
+      memory.removeValue(forKey: entryKey)
+      memoryBytes -= entry.data.count
+      return nil
+    }
     useCounter += 1
     entry.lastUsed = useCounter
-    memory[key] = entry
+    memory[entryKey] = entry
     return entry.data
   }
 
@@ -77,21 +97,28 @@ public actor MediaReferenceCache {
   public func load(server: OpenCodeServer, hash: String) async -> Load {
     let normalized = hash.lowercased()
     guard MediaReference.isValidHash(normalized) else { return .failed(.unreadable) }
-    if let entry = memory[normalized] {
+    let scope = MediaCacheScope.token(for: server)
+    let entryKey = key(scope: scope, hash: normalized)
+    if let entry = memory[entryKey] {
+      guard Self.matchesHash(entry.data, hash: normalized) else {
+        memory.removeValue(forKey: entryKey)
+        memoryBytes -= entry.data.count
+        return .failed(.unreadable)
+      }
       var touched = entry
       useCounter += 1
       touched.lastUsed = useCounter
-      memory[normalized] = touched
+      memory[entryKey] = touched
       return .loaded(entry.data)
     }
     if unavailable.contains(key(server: server, hash: normalized)) {
       return .unavailable
     }
-    if let disk = readDisk(hash: normalized) {
-      storeMemory(hash: normalized, data: disk)
+    if let disk = readDisk(scope: scope, hash: normalized) {
+      storeMemory(key: entryKey, data: disk)
       return .loaded(disk)
     }
-    let coalescingKey = "\(server.persistenceID)|\(normalized)"
+    let coalescingKey = "\(scope)|\(normalized)"
     if let task = inFlight[coalescingKey] {
       return await task.value
     }
@@ -100,6 +127,9 @@ public actor MediaReferenceCache {
         let data = try await fetch(server, normalized)
         if Int64(data.count) > bounds.blobBytes {
           return .failed(.tooLarge)
+        }
+        guard MediaReferenceCache.matchesHash(data, hash: normalized) else {
+          return .failed(.unreadable)
         }
         return .loaded(data)
       } catch is CancellationError {
@@ -116,8 +146,8 @@ public actor MediaReferenceCache {
     inFlight[coalescingKey] = nil
     switch result {
     case .loaded(let data):
-      storeMemory(hash: normalized, data: data)
-      writeDisk(hash: normalized, data: data)
+      storeMemory(key: entryKey, data: data)
+      writeDisk(scope: scope, hash: normalized, data: data)
     case .unavailable:
       unavailable.insert(key(server: server, hash: normalized))
     case .failed:
@@ -139,16 +169,25 @@ public actor MediaReferenceCache {
     trimDisk(keeping: nil)
   }
 
-  private func key(server: OpenCodeServer, hash: String) -> String {
-    "\(server.persistenceID)|\(hash.lowercased())"
+  private func key(scope: String, hash: String) -> String {
+    "\(scope)|\(hash.lowercased())"
   }
 
-  private func storeMemory(hash: String, data: Data) {
+  private func key(server: OpenCodeServer, hash: String) -> String {
+    key(scope: MediaCacheScope.token(for: server), hash: hash)
+  }
+
+  static func matchesHash(_ data: Data, hash: String) -> Bool {
+    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    return digest == hash.lowercased()
+  }
+
+  private func storeMemory(key: String, data: Data) {
     let bytes = data.count
     guard bytes <= bounds.memoryBytes else { return }
     useCounter += 1
-    if let previous = memory[hash] { memoryBytes -= previous.data.count }
-    memory[hash] = MemoryEntry(data: data, lastUsed: useCounter)
+    if let previous = memory[key] { memoryBytes -= previous.data.count }
+    memory[key] = MemoryEntry(data: data, lastUsed: useCounter)
     memoryBytes += bytes
     while memoryBytes > bounds.memoryBytes || memory.count > bounds.memoryEntries {
       guard let oldest = memory.min(by: { $0.value.lastUsed < $1.value.lastUsed }) else { break }
@@ -157,12 +196,13 @@ public actor MediaReferenceCache {
     }
   }
 
-  private func blobURL(_ hash: String) -> URL {
-    directory.appendingPathComponent("\(hash).blob")
+  private func blobURL(scope: String, hash: String) -> URL {
+    directory.appendingPathComponent(scope, isDirectory: true)
+      .appendingPathComponent("\(hash).blob")
   }
 
-  private func readDisk(hash: String) -> Data? {
-    let url = blobURL(hash)
+  private func readDisk(scope: String, hash: String) -> Data? {
+    let url = blobURL(scope: scope, hash: hash)
     let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
     guard values?.isRegularFile == true, let size = values?.fileSize,
       Int64(size) <= bounds.blobBytes
@@ -170,33 +210,41 @@ public actor MediaReferenceCache {
     guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
       Int64(data.count) <= bounds.blobBytes
     else { return nil }
+    guard Self.matchesHash(data, hash: hash) else {
+      try? fileManager.removeItem(at: url)
+      return nil
+    }
     return data
   }
 
-  private func writeDisk(hash: String, data: Data) {
-    let partial = directory.appendingPathComponent("\(hash).partial")
-    let destination = blobURL(hash)
+  private func writeDisk(scope: String, hash: String, data: Data) {
+    let folder = directory.appendingPathComponent(scope, isDirectory: true)
+    let partial = folder.appendingPathComponent("\(hash).partial")
+    let destination = blobURL(scope: scope, hash: hash)
     do {
+      try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
       try data.write(to: partial, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
       if fileManager.fileExists(atPath: destination.path) {
         try fileManager.removeItem(at: destination)
       }
       try fileManager.moveItem(at: partial, to: destination)
-      trimDisk(keeping: hash)
+      trimDisk(keeping: destination)
     } catch {
       try? fileManager.removeItem(at: partial)
     }
   }
 
-  /// Counts only finished `.blob` files, so an in-flight `.partial` is never charged or deleted.
-  private func trimDisk(keeping current: String?) {
-    guard let urls = try? fileManager.contentsOfDirectory(
+  /// Counts only finished `.blob` files across every scope, so a partial is never charged or
+  /// deleted before its rename. The globally bounded disk tier is shared by all scopes.
+  private func trimDisk(keeping current: URL?) {
+    guard let enumerator = fileManager.enumerator(
       at: directory,
-      includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+      includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
+      options: [.skipsHiddenFiles]
     ) else { return }
     var blobs: [(url: URL, size: Int64, date: Date)] = []
     var total: Int64 = 0
-    for url in urls where url.pathExtension == "blob" {
+    for case let url as URL in enumerator where url.pathExtension == "blob" {
       guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
         let size = values.fileSize
       else { continue }
@@ -206,7 +254,7 @@ public actor MediaReferenceCache {
     guard total > bounds.diskBytes else { return }
     blobs.sort { $0.date < $1.date }
     for blob in blobs where total > bounds.diskBytes {
-      if blob.url.deletingPathExtension().lastPathComponent == current { continue }
+      if blob.url == current { continue }
       try? fileManager.removeItem(at: blob.url)
       total -= blob.size
     }
@@ -217,14 +265,14 @@ public actor MediaReferenceCache {
 /// actor so the session, transcript tiles and the viewer share the same memory and disk tiers.
 public struct MediaReferences: Sendable {
   public var load: @Sendable (OpenCodeServer, String) async -> MediaReferenceCache.Load
-  public var cachedData: @Sendable (String) async -> Data?
+  public var cachedData: @Sendable (OpenCodeServer, String) async -> Data?
   public var isUnavailable: @Sendable (OpenCodeServer, String) async -> Bool
   public var purgeMemory: @Sendable () async -> Void
   public var trim: @Sendable () async -> Void
 
   public init(
     load: @escaping @Sendable (OpenCodeServer, String) async -> MediaReferenceCache.Load,
-    cachedData: @escaping @Sendable (String) async -> Data?,
+    cachedData: @escaping @Sendable (OpenCodeServer, String) async -> Data?,
     isUnavailable: @escaping @Sendable (OpenCodeServer, String) async -> Bool,
     purgeMemory: @escaping @Sendable () async -> Void,
     trim: @escaping @Sendable () async -> Void
@@ -248,7 +296,7 @@ public struct MediaReferences: Sendable {
   public static func make(cache: MediaReferenceCache) -> MediaReferences {
     MediaReferences(
       load: { server, hash in await cache.load(server: server, hash: hash) },
-      cachedData: { hash in await cache.cachedData(hash: hash) },
+      cachedData: { server, hash in await cache.cachedData(server: server, hash: hash) },
       isUnavailable: { server, hash in await cache.isUnavailable(server: server, hash: hash) },
       purgeMemory: { await cache.purgeMemory() },
       trim: { await cache.trim() }
@@ -264,7 +312,7 @@ extension MediaReferences: DependencyKey {
   public static let liveValue = MediaReferences.live()
   public static let testValue = MediaReferences(
     load: { _, _ in .failed(.uploadFailed) },
-    cachedData: { _ in nil },
+    cachedData: { _, _ in nil },
     isUnavailable: { _, _ in false },
     purgeMemory: {},
     trim: {}

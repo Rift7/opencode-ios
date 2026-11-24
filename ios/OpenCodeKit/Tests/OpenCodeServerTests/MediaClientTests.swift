@@ -60,8 +60,7 @@ struct MediaClientTests {
     blob: Data = Data([1, 2, 3]),
     uploadPath: String = "/tmp/uploads/x/report.pdf"
   ) -> HTTPTransport {
-    HTTPTransport(
-      send: { request in
+    let send: @Sendable (HTTPRequest) async throws -> HTTPResponse = { request in
         await recorder.record(request)
         switch request.url.path {
         case "/api/info":
@@ -95,8 +94,24 @@ struct MediaClientTests {
         default:
           return HTTPResponse(status: 404, headers: [:], body: Data(), finalURL: request.url)
         }
+
+    }
+    return HTTPTransport(
+      send: send,
+      open: { request in
+        let response = try await send(request)
+        let stream = AsyncThrowingStream<Data, any Error> { continuation in
+          if !response.body.isEmpty { continuation.yield(response.body) }
+          continuation.finish()
+        }
+        return HTTPStream(
+          status: response.status,
+          headers: response.headers,
+          finalURL: response.finalURL,
+          chunks: stream,
+          close: {}
+        )
       },
-      open: { _ in throw TransportError.blocked },
       upload: { request, _, progress in
         await recorder.recordUpload(request)
         progress(4)
@@ -143,7 +158,7 @@ struct MediaClientTests {
       policy: .once
     )
     let reported = Mutex<[Int64]>([])
-    let path = try await client.uploadFile(server(), "/work/app", file, "report.pdf") { sent in
+    let path = try await client.uploadFile(server(), "/work/app", file, "report.pdf", "stable-id") { sent in
       reported.withLock { $0.append(sent) }
     }
     #expect(path == "/tmp/uploads/x/report.pdf")
@@ -153,8 +168,14 @@ struct MediaClientTests {
     #expect(uploads.first?.method == "POST")
     #expect(uploads.first?.authorization == true)
     let query = try #require(uploads.first?.query.removingPercentEncoding)
-    #expect(query.contains("path=/tmp/uploads/"))
+    #expect(query.contains("path=/tmp/uploads/stable-id/report.pdf"))
     #expect(query.contains("location[directory]=/work/app"))
+
+    _ = try await client.uploadFile(server(), "/work/app", file, "report.pdf", "stable-id") { _ in }
+    let retried = await recorder.uploads
+    let firstPath = try #require(retried.first?.query.removingPercentEncoding)
+    let retryPath = try #require(retried.last?.query.removingPercentEncoding)
+    #expect(firstPath == retryPath)
   }
 
   @Test("a server without paths.tmp reports uploads as unsupported")
@@ -169,7 +190,7 @@ struct MediaClientTests {
       policy: .once
     )
     await #expect(throws: OpenCodeClientError.self) {
-      _ = try await client.uploadFile(server(), nil, file, "report.pdf") { _ in }
+      _ = try await client.uploadFile(server(), nil, file, "report.pdf", "stable-id") { _ in }
     }
   }
 

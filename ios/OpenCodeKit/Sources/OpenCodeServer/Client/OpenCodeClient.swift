@@ -141,7 +141,7 @@ public struct OpenCodeClient: Sendable {
   /// `POST /api/experimental/fs/write`: streams a local file into the server's temporary directory.
   /// The same path is reused on a retry; the returned path is the server's absolute file path.
   public var uploadFile:
-    @Sendable (OpenCodeServer, String?, URL, String, @escaping @Sendable (Int64) -> Void)
+    @Sendable (OpenCodeServer, String?, URL, String, String, @escaping @Sendable (Int64) -> Void)
       async throws -> String
   /// `GET /api/fs/list`: folders and files inside a server directory.
   public var listDirectory: @Sendable (OpenCodeServer, String?) async throws -> DirectoryListing
@@ -233,8 +233,8 @@ public struct OpenCodeClient: Sendable {
       throw OpenCodeClientError(.unsupported)
     },
     uploadFile: @escaping @Sendable (
-      OpenCodeServer, String?, URL, String, @escaping @Sendable (Int64) -> Void
-    ) async throws -> String = { _, _, _, _, _ in
+      OpenCodeServer, String?, URL, String, String, @escaping @Sendable (Int64) -> Void
+    ) async throws -> String = { _, _, _, _, _, _ in
       throw OpenCodeClientError(.unsupported)
     },
     listDirectory: @escaping @Sendable (OpenCodeServer, String?) async throws -> DirectoryListing = {
@@ -332,14 +332,16 @@ extension OpenCodeClient: DependencyKey {
     clock: ClockClient,
     policy: RetryPolicy = .once,
     environment: RetryEnvironment = .online(),
-    streamCapacity: Int = 128
+    streamCapacity: Int = 128,
+    mediaBlobLimit: Int64 = 25 * 1024 * 1024
   ) -> OpenCodeClient {
     Runtime(
       environment: ClientEnvironment(
         transport: transport,
         clock: clock,
         retryEnvironment: environment,
-        streamCapacity: streamCapacity
+        streamCapacity: streamCapacity,
+        mediaBlobLimit: mediaBlobLimit
       ),
       defaultPolicy: policy
     ).client
@@ -373,7 +375,8 @@ private struct DependencyReader: Sendable {
       transport: transport,
       clock: clock,
       retryEnvironment: networkPath.retryEnvironment,
-      streamCapacity: 128
+      streamCapacity: 128,
+      mediaBlobLimit: 25 * 1024 * 1024
     )
   }
 }
@@ -383,6 +386,7 @@ struct ClientEnvironment: Sendable {
   var clock: ClockClient
   var retryEnvironment: RetryEnvironment
   var streamCapacity: Int
+  var mediaBlobLimit: Int64
 }
 
 private struct Runtime: Sendable {
@@ -613,16 +617,18 @@ private struct Runtime: Sendable {
         try await Operations.mediaBlob(
           server,
           hash: hash,
+          maximumBytes: environment.mediaBlobLimit,
           environment: environment,
           policy: policy
         )
       },
-      uploadFile: { server, directory, fileURL, name, onProgress in
+      uploadFile: { server, directory, fileURL, name, uploadID, onProgress in
         try await Operations.uploadFile(
           server,
           directory: directory,
           fileURL: fileURL,
           name: name,
+          uploadID: uploadID,
           environment: environment,
           progress: onProgress
         )

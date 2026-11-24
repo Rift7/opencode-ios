@@ -1000,7 +1000,11 @@ Source bounds are 20 MB for an image (re-encoded to 1568 px JPEG 0.8 with EXIF r
 file, with MIME determined from the actual name, declared type and first 4 KiB.
 
 - Why Application Support: a draft's attachment is not cache and must survive a cache purge.
-- Gate: `MediaImportTests`, `MediaAttachmentTests.abandonedCleanup`, ownership tests in `ComposerAttachmentTests`.
+- Writes use an app-controlled `ComposerAttachments/.staging` directory and move into the final
+  attachment folder only after completion. Launch cleanup deletes only that namespace; an imported
+  `report.tmp` or `capture.partial` is a final file and is never inferred disposable from its name.
+- Gate: `MediaImportTests`, `MediaAttachmentTests.{abandonedCleanup,importedSuffixesSurviveScratchCleanup,cleanupKeepsRecordsAndLeases}`,
+  ownership tests in `ComposerAttachmentTests`.
 
 ### D-80 Uploads discover the writable temp path once and retry the same path
 `POST /api/experimental/fs/write` is reached only after `/api/info` reports `paths.tmp`. The request streams
@@ -1012,10 +1016,17 @@ The protocol exposes no resumable upload session: a tab termination or cancelled
 source copy is retained and the restored attachment becomes `.failed(.uploadInterrupted)` with Retry. A file
 already uploaded keeps its server path and its local copy is released.
 
+- Path identity is the attachment ID: `<tmp>/uploads/<uploadID>/<name>`. Every retry and every
+  restart retry uses that same ID; a retry overwrites rather than creating a second server file.
 - Ambiguity: the request may have reached the server before a failure. Retrying the same path is idempotent;
-  no prompt is issued until every attachment is ready.
-- Gate: `MediaClientTests.uploadRequest`, `uploadUnsupported`; `ComposerAttachmentTests.uploadFailureAndRetry`,
-  `removeDuringUpload`, `interruptedUploadRestoresAsFailure`.
+  no prompt is issued until every attachment is ready. No resumable session exists.
+- An upload operation carries its originating server/key, attachment and monotonic attempt. A hidden
+  completion merges into the parked/persisted draft with newer-content preservation; an older attempt
+  arriving after a retry is ignored. A hidden merge failure is surfaced and retried when the owner is
+  visible; the source is retained meanwhile.
+- Gate: `MediaClientTests.uploadRequest`, `uploadUnsupported`; `ComposerAttachmentTests.{uploadFailureAndRetry,
+  removeDuringUpload,interruptedUploadRestoresAsFailure,uploadCompletesWhileAnotherDraftIsVisible,
+  oldCompletionAfterRetryIsIgnored,hiddenUploadPersistenceFailureRetries}`.
 - Unverified: the real upload delegate path against a loopback server, because the test server reads only
   what arrives with the headers.
 
@@ -1027,7 +1038,14 @@ drops the memory tier and decoded images, then trims disk; staged attachment fil
 
 - Source: current `dev` `MediaReferenceClient.kt` and the adopted `media-cache-limit` branch behaviour
   (256 MiB disk cap, finished-blob trim, off-main work).
-- Gate: `MediaReferenceCacheTests`, `CodePreview`/decode bounds.
+- Authentication scope: memory keys and disk paths include a SHA-256 token over the server persistence
+  identity and credentials; no raw credential is stored in a filename or log. Changing credentials changes
+  the scope, so old bytes are not read under the new scope; old files remain until disk trim.
+- Hash validation: fetched bytes and disk-loaded bytes must match the requested lowercase SHA-256. A corrupt
+  disk entry is removed and refetched; a mismatched fetch is rejected and never cached. Cache-only and
+  decoded-image keys carry the same scope.
+- Gate: `MediaReferenceCacheTests` (coalescing, scope isolation, credential change, mismatch, corrupt disk,
+  trim), `CodePreview`/decode bounds.
 
 ### D-82 Viewers are native and remote playback is downloaded first
 Images are decoded off the main actor into a bounded cache and drawn in a UIScrollView zoom/pan surface; a
@@ -1104,3 +1122,38 @@ presentation; the share extension/App Group is still P12.
 A memory warning clears decoded images and the media memory tier, then trims the disk tier. App launch clears
 the viewer scratch directory and staging `.partial`/`.tmp` files. A draft's staged folders are not swept by a
 cache trim; sweeping folders no draft/failed/outbound record names is deferred to P14.
+
+### D-91 Staged sources are released only after a durable save
+`ComposerFeature.pendingReleases` is a set of staged names whose owner no longer needs the local file in
+memory. A release is attempted only after `.saveFinished(.saved)` and only when the name is absent from the
+current draft, every parked draft, failed sends, outbound records, upload operations and the persisted
+draft store (which includes other sessions and failed/outbound records), and when no `MediaFileStore` lease
+holds it. A failed save, an unreadable draft store, a persisted reference or a lease keeps the file.
+
+- Upload success, accepted-send cleanup and removal only queue a release; none deletes immediately.
+- A hidden upload is merged with `ComposerDraftStore.applyAttachmentTransfer`, which preserves newer text
+  and quotes; a merge failure is kept in `deferredUploads` and retried when the owning key is visible.
+- Leases cover preview reads and annotation sources, so a viewer cannot lose bytes during cleanup.
+- Gate: storage-backed tests for failed save, restart, failed removal, outbound ownership and viewer lease.
+
+### D-92 Bounded downloads consume the stream, not a completed body
+Media blobs and server file reads use `HTTPTransport.open` and a cumulative received-byte bound. A declared
+`Content-Length` over the bound is rejected before reading the body; otherwise every chunk is counted and the
+stream is closed immediately on overflow with `OpenCodeClientError.responseTooLarge(feature:)`. A missing or
+understated length cannot bypass the cumulative limit. Error bodies for status mapping are read only to a
+64 KiB prefix. Redirect and credential rules are the request's existing rules.
+
+- The media blob limit is injectable through `OpenCodeClient.live(mediaBlobLimit:)`; file reads pass their own
+  caller limit.
+- Gate: loopback tests for declared, chunked and understated bodies, connection close on overflow, and a
+  within-bound body.
+
+### D-93 Cache scope is authentication-bound, not hash-only
+Authenticated media is partitioned by `MediaCacheScope.token(for:)`: a SHA-256 over `persistenceID`,
+username and password, truncated for filenames. Memory keys, disk paths, negative 404 entries, coalescing
+keys and decoded-image keys use it. A credential change invalidates reads under the old scope without
+rewriting or exposing the credential. Content is still verified by SHA-256 before admission, so a server
+cannot substitute different bytes for a requested hash.
+
+- Gate: same-hash two-server isolation, second-scope mismatch, credential change, corrupt disk, fetch
+  mismatch, coalescing and normal disk hits.

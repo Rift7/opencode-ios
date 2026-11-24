@@ -37,6 +37,7 @@ extension Operations {
   static func mediaBlob(
     _ server: OpenCodeServer,
     hash: String,
+    maximumBytes: Int64,
     environment: ClientEnvironment,
     policy: RetryPolicy
   ) async throws -> Data {
@@ -49,7 +50,7 @@ extension Operations {
       path: "/api/experimental/media/\(hash)",
       headers: headers,
       timeout: 60,
-      maximumBytes: 25 * 1024 * 1024,
+      maximumBytes: maximumBytes,
       environment: environment,
       policy: policy,
       feature: "media"
@@ -123,6 +124,7 @@ extension Operations {
     directory: String?,
     fileURL: URL,
     name: String,
+    uploadID: String,
     environment: ClientEnvironment,
     progress: @escaping @Sendable (Int64) -> Void
   ) async throws -> String {
@@ -136,8 +138,12 @@ extension Operations {
     guard let tmp = info.paths?.tmp, !tmp.isEmpty else {
       throw OpenCodeClientError(.unsupported)
     }
+    // One stable path per attachment: a retry overwrites the same server file instead of
+    // creating a duplicate. The id is an app-made UUID, never a credential.
+    let remoteID = uploadID.filter { $0.isLetter || $0.isNumber || $0 == "-" }
+    let stableID = remoteID.isEmpty ? UUID().uuidString.lowercased() : remoteID
     let uploadPath = "/\(tmp.trimmingCharacters(in: CharacterSet(charactersIn: "/")))"
-      + "/uploads/\(UUID().uuidString.lowercased())/\(sanitizedUploadName(name))"
+      + "/uploads/\(stableID)/\(sanitizedUploadName(name))"
     var query: [(name: String, value: String)] = []
     if let directory { query.append(("location[directory]", directory)) }
     query.append(("path", uploadPath))
@@ -223,33 +229,78 @@ extension Operations {
       clock: environment.clock,
       environment: environment.retryEnvironment
     ) { _ in
-      let response: HTTPResponse
+      let stream: HTTPStream
       do {
-        response = try await environment.transport.send(outgoing)
+        stream = try await environment.transport.open(outgoing)
       } catch is CancellationError {
         throw CancellationError()
       } catch {
         throw OpenCodeClientError(.unreachable)
       }
-      guard (200...299).contains(response.status) else {
+      guard (200...299).contains(stream.status) else {
+        let body = await boundedPrefix(of: stream, maximumBytes: 64 * 1024)
+        stream.close()
         throw OpenCodeClientError(
-          .status(response.status),
+          .status(stream.status),
           isLocationMissing: OpenCodeClientError.isLocationMissing(
-            status: response.status,
-            body: response.body
+            status: stream.status,
+            body: body
           )
         )
       }
-      if let contentType = response.header("content-type")?.lowercased(),
+      if let contentType = stream.header("content-type")?.lowercased(),
         contentType.hasPrefix("text/html")
       {
+        stream.close()
         throw OpenCodeClientError(.incompatibleAPI(feature: feature))
       }
-      guard Int64(response.body.count) <= maximumBytes else {
-        throw OpenCodeClientError(.unsupported)
+      if let declared = stream.header("content-length").flatMap(Int64.init),
+        declared > maximumBytes
+      {
+        stream.close()
+        throw OpenCodeClientError(.responseTooLarge(feature: feature))
       }
-      return response.body
+      var data = Data()
+      var received: Int64 = 0
+      do {
+        for try await chunk in stream.chunks {
+          received += Int64(chunk.count)
+          if received > maximumBytes {
+            stream.close()
+            throw OpenCodeClientError(.responseTooLarge(feature: feature))
+          }
+          data.append(chunk)
+        }
+      } catch is CancellationError {
+        stream.close()
+        throw CancellationError()
+      } catch let error as OpenCodeClientError {
+        stream.close()
+        throw error
+      } catch {
+        stream.close()
+        throw OpenCodeClientError(.unreachable)
+      }
+      stream.close()
+      return data
     }
+  }
+
+  /// Reads a bounded prefix for an error body and stops consuming immediately. The stream is
+  /// closed by the caller.
+  private static func boundedPrefix(of stream: HTTPStream, maximumBytes: Int) async -> Data {
+    var data = Data()
+    do {
+      for try await chunk in stream.chunks {
+        let remaining = maximumBytes - data.count
+        if remaining <= 0 { break }
+        data.append(chunk.prefix(remaining))
+        if data.count >= maximumBytes { break }
+      }
+    } catch {
+      return data
+    }
+    return data
   }
 
   private static func sanitizedUploadName(_ name: String) -> String {

@@ -183,6 +183,12 @@ public struct FileViewerFeature: Sendable {
         return
       } catch let problem as MediaAttachmentProblem {
         await send(.loaded(.failed(problem)))
+      } catch let error as OpenCodeClientError {
+        if case .responseTooLarge = error.failure {
+          await send(.loaded(.failed(.tooLarge)))
+        } else {
+          await send(.loaded(.failed(.couldNotRead)))
+        }
       } catch {
         await send(.loaded(.failed(.couldNotRead)))
       }
@@ -209,6 +215,8 @@ public struct FileViewerFeature: Sendable {
       } catch let error as OpenCodeClientError {
         if case .status(404) = error.failure {
           await send(.loaded(.unavailable))
+        } else if case .responseTooLarge = error.failure {
+          await send(.loaded(.failed(.tooLarge)))
         } else {
           await send(.loaded(.failed(.couldNotRead)))
         }

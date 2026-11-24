@@ -248,9 +248,9 @@ created from that commit; no branch was reset or overwritten.
 | Streaming while scrolling | `connected-transcript-stream`: one prompt, 600 live text deltas at 20 ms, 3 iterations | `testStreamingTranscriptScroll` | 43/146/146/146 frames; p50 16.7 ms throughout; first iteration p95 33.3 ms / max 36.2 ms including initial layout, later iterations p95/max 16.7 ms; deceleration 2.421 s; peak physical memory 25.97 MB |
 | Growth following | `connected-transcript-growth`: one stable Markdown row, 2,000 deltas with headings/lists | `testFollowingSurvivesTailGrowthAndBrowsingHoldsItsAnchor` | tail stays on screen through growth; after the reader scrolls away the anchor moves <12 pt while streaming continues and Jump to Latest appears |
 | Device/runtime | iPhone 18 Pro Max simulator, iOS 27.2 (24B8117), debug build | `xcodebuild -only-testing:OpenCodeUITests/TranscriptScrollTraceUITests` | Simulator evidence; not a device claim |
-| Media-heavy transcript scroll (P10) | `connected-media-long`: 30 turns × (text + two 320×200/200×320 inline images + reply) | `MediaPerformanceUITests.testMediaHeavyTranscriptScroll`, 3 iterations, fast up/up/down, `CADisplayLink` probe | 4 traces per iteration: 123–133 frames; p50 16.7 ms; p95 34.8–37.7 ms; max 42.4–66.8 ms; scroll deceleration 2.327 s (RSD 6.4%); peak physical memory 27.4 MB |
-| Large-image viewer open/close (P10) | `connected-media-large`: one 3,000×2,000 inline PNG | `testLargeImageViewerOpen`, 3 iterations, `XCTClockMetric` + memory | Loop average 5.167 s (includes open, close and two existence waits in the UI test), RSD 0.18%; peak physical memory 24.4 MB |
-| Typing with an attachment (P10) | `connected-media` + pasted synthetic image; ~72 changes | `testTypingWhileAnAttachmentIsImporting`, reads the DEBUG typing probe | 7.3 ms average / 48.9 ms max over 72 changes; import had completed before typing, so this is the steady-state composer cost |
+| Media-heavy transcript scroll (P10 corrections) | `connected-media-long`: 30 turns × (text + two 320×200/200×320 inline images + reply) | `MediaPerformanceUITests.testMediaHeavyTranscriptScroll`, 3 iterations, fast up/up/down, `CADisplayLink` probe | 4 traces: 129–132 frames; p50 16.7 ms; p95 34.6–35.8 ms; max 41.6–65.3 ms; peak physical memory 29.7 MB |
+| Large-image viewer open/close (P10 corrections) | `connected-media-large`: one 3,000×2,000 inline PNG | `testLargeImageViewerOpen`, 3 iterations, `XCTClockMetric` + memory | Loop average 5.062 s (includes open, close and two existence waits in the UI test), RSD 0.16%; peak physical memory 25.9 MB |
+| Typing with an attachment (P10 corrections) | `connected-media` + pasted synthetic image; 75 changes | `testTypingWhileAnAttachmentIsImporting`, reads the DEBUG typing probe | 6.5 ms average / 32.0 ms max over 75 changes; import had completed before typing, so this is the steady-state composer cost |
 
 The long-transcript run shows single deferred frames (33–36 ms) during the measured swipes; p95 stays at one
 display interval. Streaming's first iteration includes the initial row/layout work; later iterations stay at
@@ -427,6 +427,15 @@ dock and queued sheet show fixture-only questions and messages.
 | Background subagent stop, shell Copy/Share | `OpenCodeSession/SessionFeature.swift`, `ios/OpenCode/Session/SessionView.swift` | `SessionMediaTests.subagentStop`; shell toolbar |
 | Cache limit, memory warning and launch cleanup | `MediaReferenceCache`, `AppFeature.memoryWarning`, `MediaScratch` | trim test; app launch cleans scratch and partial files |
 
+### P10 review corrections
+
+- Staged files are released only after a durable save. `pendingReleases` waits for `.saveFinished(.saved)` and checks current, parked, failed, outbound, persisted and leased ownership; a failed save or a lease keeps the source. Upload completion no longer deletes the source immediately.
+- Upload operations carry the originating `ComposerDraftKey`, attachment ID and monotonic attempt. Hidden completions merge into the persisted/parked draft without replacing newer edits; an old attempt cannot overwrite a retry; a merge failure is surfaced and retried when the owner is visible. Cancellation is per key and attachment.
+- `uploadFile` now takes an app-made upload ID and reuses `<tmp>/uploads/<uploadID>/<name>` on every retry. The previous fresh UUID per invocation contradicted the comment and could duplicate an ambiguous upload.
+- Staging writes go through `ComposerAttachments/.staging` and are moved into the final directory only after completion. Startup cleanup deletes only that namespace; an imported `report.tmp` or `capture.partial` is never inferred disposable from its suffix. File leases keep preview reads and annotations from being cleaned up underneath them.
+- `mediaData` now opens the transport stream and stops at a cumulative byte bound, rejecting an oversized declared length before the body and closing immediately on overflow. `OpenCodeClientError.responseTooLarge` is typed; loopback tests cover declared, chunked, understated-length and cancellation/close paths.
+- Media cache keys and disk paths include a SHA-256 authentication-scope token derived from server identity and credentials (never raw credentials). Fetched and disk-loaded bytes are verified against the requested SHA-256; corrupt disk entries are removed and refetched, and mismatched fetches are rejected.
+
 ### P10 acceptance matrix (summary; full detail in `P10_MATRIX.md`)
 
 | Contract | Status | Evidence or limit |
@@ -435,8 +444,8 @@ dock and queued sheet show fixture-only questions and messages.
 | Camera import | done through the system capture UI | deliberate native adaptation of the audited custom camera; physical camera unverified |
 | Document import | done with the system file importer and an app-owned copy | iCloud/file-provider latency and eviction unverified on device |
 | Paste | images, files and long text; >1,000 chars or >12 lines becomes Pasted Text | ordinary typing is never converted |
-| Staging/validation/upload | 20 MB images, 100 MB files, actual MIME sniff, progress, retry, unsupported server | live `/api/info` + `/api/experimental/fs/write` not run against a real V2 server |
-| Durable ownership | attachments in draft, failed and outbound records; interrupted uploads restore as failed with source | unit-tested; no crash-in-the-middle device run |
+| Staging/validation/upload | 20 MB images, 100 MB files, actual MIME sniff, progress, stable upload path, retry, unsupported server | live `/api/info` + `/api/experimental/fs/write` not run against a real V2 server |
+| Durable ownership | release only after a successful save; current, parked, failed, outbound, persisted and leased references all keep the source; interrupted uploads restore as failed with source | storage-backed tests; no crash-in-the-middle device run |
 | Prompt encoding | inline JPEG/paste `data:` parts, path reference lines, `metadata.attachments` | `ComposerAttachmentTests.promptEncoding` |
 | Transcript images/tool mosaics | native tiles and gallery; tool mosaic opens the same viewer | fixture UI journeys |
 | Viewers | image/zoom, video/audio, PDF, code/text, file | UI journeys; playback interruptions unverified |
@@ -445,15 +454,16 @@ dock and queued sheet show fixture-only questions and messages.
 | Browser | Experimental, off by default; public pages only; non-persistent store; handoff and fallback | gate journey; no credentials, no script bridge, no file access |
 | Math/Mermaid | explicit final source fallback | no renderer dependency added; not labelled as rendered |
 | Cross-block selection | deferred with owner and check | per-block selection and reply Copy remain |
-| Cache pressure | 256 MiB media blobs, disk trim oldest finished blobs, 48 MiB memory, 64 MiB decoded | trim and decode bounds tests; device memory warning unverified |
+| Cache pressure and scope | 256 MiB media blobs, disk trim oldest finished blobs, 48 MiB memory, 64 MiB decoded; hash-verified, authentication-scoped disk/memory keys | trim, scope, credential-change, mismatch and corrupt-disk tests; device memory warning unverified |
+| Download bounds | cumulative receive limit with early close; typed size failure | loopback declared/chunked/understated tests; no live large-file server test |
 | Background subagent stop | interrupt active child and cancel its subtree's jobs | synthetic reducer test; live jobs unverified |
 
 ## Verified in this phase
 
 | Command | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` (P10) | **532 tests pass**: 198 server, 67 core, 75 app, 38 drawer, 70 session, 36 composer, 26 transcript, 22 media; live and loopback opt-outs unchanged |
-| `ios/scripts/verify.sh` (P10) | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **70 UI tests pass** (grouped runs: 11 + 7 + 15 + 3 + 8 + 6 + 2 + 9; includes the fixed relaunch journey); package run hit the recorded intermittent Home deletion test (`a late delete result cannot reverse a targeted confirmation`, 4 assertions), and a focused `HomeFeatureTests` rerun plus the following full `swift test` were green (532 tests). The flake is not claimed fixed. |
+| `swift test --package-path ios/OpenCodeKit` (P10 corrections) | **553 tests pass**: 203 server, 67 core, 75 app, 38 drawer, 70 session, 44 composer, 26 transcript, 30 media; live and loopback opt-outs unchanged |
+| `ios/scripts/verify.sh` (P10 corrections) | toolchain 27.2 / Swift 6.4.2 / SDK 27.2; app build succeeds; **68 of 70 UI tests passed** in the full run. Two P8 transcript journeys failed on timing (`testFollowingSurvivesTailGrowthAndBrowsingHoldsItsAnchor`, `testJumpToLatestAfterReadingOlderContent`); a focused rerun of all nine `TranscriptUITests` passed. The script stopped before package tests because UI failed; a separate full `swift test` run passed 553 tests. Neither rerun is claimed as a fix. |
 | `xcodebuild … -only-testing:OpenCodeUITests/MediaUITests` | 8 journeys pass: transcript image gallery, tool mosaic, server file preview, browser gate, paste preview/remove, pasted-image send, annotation return, Dynamic Type/dark, relaunch recovery |
 | `xcodebuild … -only-testing:OpenCodeUITests/MediaScreenshotUITests` | 16 light/dark screenshots captured: transcript media, image viewer, tool mosaic, file viewer, browser, composer attachment, attachment preview, annotation |
 | `xcodebuild … -only-testing:OpenCodeUITests/MediaPerformanceUITests` | media-heavy scroll trace, large-image open/close metric and typing-while-attached trace; results below |
@@ -512,6 +522,10 @@ The 421 package tests are the sum of the six target runs the package runner prin
 - **P10 cross-block selection**: per-block selection and reply Copy remain; the cross-block handoff is not built.
 - **Pre-existing Home deletion timing failure**: the intermittent Home deletion test remains a known
   unrelated issue from earlier phases. It was not reproduced or changed in P10 and is not claimed fixed.
+- **P8 transcript UI timing flake (observed in the P10 correction full run)**: `TranscriptUITests`
+  `testFollowingSurvivesTailGrowthAndBrowsingHoldsItsAnchor` and
+  `testJumpToLatestAfterReadingOlderContent` failed once in the full suite and passed when the nine-test
+  suite was rerun. No transcript behavior was changed in this correction, and the flake is not claimed fixed.
 
 ## Deferred P8 items — later phase and acceptance check
 

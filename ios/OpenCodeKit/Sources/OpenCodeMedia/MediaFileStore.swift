@@ -12,12 +12,25 @@ public actor MediaFileStore {
     public var head: Data
   }
 
+  private struct Lease: Sendable, Hashable {
+    var token: UUID
+    var serverID: String
+    var storedName: String
+  }
+
   private let root: URL
   private let fileManager: FileManager
+  private var leases: [UUID: Lease] = [:]
 
   public init(root: URL, fileManager: FileManager = .default) {
     self.root = root
     self.fileManager = fileManager
+  }
+
+  /// App-controlled scratch. Only files this store put here are disposable on launch; a user's
+  /// `report.tmp` lives under the final attachment path and is never inferred disposable.
+  public nonisolated var scratchDirectory: URL {
+    root.appendingPathComponent(".staging", isDirectory: true)
   }
 
   /// Application Support, not Caches: a draft's files are not disposable cache entries.
@@ -50,22 +63,25 @@ public actor MediaFileStore {
       throw MediaAttachmentProblem.tooLarge
     }
     let cleanName = MediaFileType.sanitizedName(name)
-    let storedName = "\(id)/\(cleanName)"
-    let directory = serverDirectory(serverID).appendingPathComponent(id, isDirectory: true)
-    let destination = directory.appendingPathComponent(cleanName)
+    let temp = scratchDirectory.appendingPathComponent("\(UUID().uuidString.lowercased()).part")
     do {
-      try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-      try excludeFromBackup(directory)
-      try data.write(to: destination, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+      try fileManager.createDirectory(at: scratchDirectory, withIntermediateDirectories: true)
+      try data.write(to: temp, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+      let storedName = try finalize(
+        temp: temp,
+        name: cleanName,
+        serverID: serverID,
+        id: id
+      )
+      return Written(
+        storedName: storedName,
+        byteCount: Int64(data.count),
+        head: Data(data.prefix(4_096))
+      )
     } catch {
-      try? fileManager.removeItem(at: directory)
+      try? fileManager.removeItem(at: temp)
       throw MediaAttachmentProblem.couldNotWrite
     }
-    return Written(
-      storedName: storedName,
-      byteCount: Int64(data.count),
-      head: Data(data.prefix(4_096))
-    )
   }
 
   /// Copies a file from a picker or a security-scoped URL. The scope is opened here and always
@@ -91,24 +107,21 @@ public actor MediaFileStore {
       throw MediaAttachmentProblem.tooLarge
     }
     let cleanName = MediaFileType.sanitizedName(name)
-    let storedName = "\(id)/\(cleanName)"
-    let directory = serverDirectory(serverID).appendingPathComponent(id, isDirectory: true)
-    let destination = directory.appendingPathComponent(cleanName)
+    let temp = scratchDirectory.appendingPathComponent("\(UUID().uuidString.lowercased()).part")
     do {
-      try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-      try excludeFromBackup(directory)
+      try fileManager.createDirectory(at: scratchDirectory, withIntermediateDirectories: true)
       guard let input = try? FileHandle(forReadingFrom: source) else {
         throw MediaAttachmentProblem.unreadable
       }
       defer { try? input.close() }
       guard fileManager.createFile(
-        atPath: destination.path,
+        atPath: temp.path,
         contents: nil,
         attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
       ) else {
         throw MediaAttachmentProblem.couldNotWrite
       }
-      let output = try FileHandle(forWritingTo: destination)
+      let output = try FileHandle(forWritingTo: temp)
       defer { try? output.close() }
       var written: Int64 = 0
       while true {
@@ -121,16 +134,23 @@ public actor MediaFileStore {
         }
         try output.write(contentsOf: chunk)
       }
-      let head = try readPrefix(destination, count: 4_096)
+      try? output.close()
+      let head = try readPrefix(temp, count: 4_096)
+      let storedName = try finalize(
+        temp: temp,
+        name: cleanName,
+        serverID: serverID,
+        id: id
+      )
       return Written(storedName: storedName, byteCount: written, head: head)
     } catch let problem as MediaAttachmentProblem {
-      try? fileManager.removeItem(at: directory)
+      try? fileManager.removeItem(at: temp)
       throw problem
     } catch is CancellationError {
-      try? fileManager.removeItem(at: directory)
+      try? fileManager.removeItem(at: temp)
       throw CancellationError()
     } catch {
-      try? fileManager.removeItem(at: directory)
+      try? fileManager.removeItem(at: temp)
       throw MediaAttachmentProblem.couldNotWrite
     }
   }
@@ -159,19 +179,40 @@ public actor MediaFileStore {
     try? fileManager.removeItem(at: url.deletingLastPathComponent())
   }
 
-  /// Deletes partial or temporary writes left by a terminated import. A draft's own files are never
-  /// touched here; they are released only with their record.
+  /// A viewer, preview or annotation can pin a staged file for the duration of its read. Cleanup
+  /// refuses to delete a leased file; the lease is process-local and deliberately not persisted.
+  @discardableResult
+  public func lease(serverID: String, storedName: String) -> UUID {
+    let token = UUID()
+    leases[token] = Lease(token: token, serverID: serverID, storedName: storedName)
+    return token
+  }
+
+  public func release(_ token: UUID) {
+    leases.removeValue(forKey: token)
+  }
+
+  public func isLeased(serverID: String, storedName: String) -> Bool {
+    leases.values.contains { $0.serverID == serverID && $0.storedName == storedName }
+  }
+
+  /// Deletes one staged attachment only when no lease still holds its bytes.
+  @discardableResult
+  public func removeIfUnleased(serverID: String, storedName: String) -> Bool {
+    guard !isLeased(serverID: serverID, storedName: storedName) else { return false }
+    remove(serverID: serverID, storedName: storedName)
+    return true
+  }
+
+  /// Deletes only this store's app-controlled scratch. Imported names ending in `.tmp` or
+  /// `.partial` are final attachments and are never inferred disposable.
   public func cleanupTemporaryArtifacts() {
-    guard let enumerator = fileManager.enumerator(
-      at: root,
-      includingPropertiesForKeys: [.isRegularFileKey],
-      options: [.skipsHiddenFiles]
+    guard let entries = try? fileManager.contentsOfDirectory(
+      at: scratchDirectory,
+      includingPropertiesForKeys: nil
     ) else { return }
-    for case let url as URL in enumerator {
-      let name = url.lastPathComponent
-      if name.hasSuffix(".partial") || name.hasSuffix(".tmp") {
-        try? fileManager.removeItem(at: url)
-      }
+    for entry in entries {
+      try? fileManager.removeItem(at: entry)
     }
   }
 
@@ -186,9 +227,35 @@ public actor MediaFileStore {
     for folder in folders {
       let id = folder.lastPathComponent
       let kept = storedNames.contains { $0 == id || $0.hasPrefix("\(id)/") }
-      if !kept {
+      let leased = leases.values.contains {
+        $0.serverID == serverID && ($0.storedName == id || $0.storedName.hasPrefix("\(id)/"))
+      }
+      if !kept, !leased {
         try? fileManager.removeItem(at: folder)
       }
+    }
+  }
+
+  private func finalize(
+    temp: URL,
+    name: String,
+    serverID: String,
+    id: String
+  ) throws -> String {
+    let directory = serverDirectory(serverID).appendingPathComponent(id, isDirectory: true)
+    let destination = directory.appendingPathComponent(name)
+    do {
+      try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+      try excludeFromBackup(directory)
+      if fileManager.fileExists(atPath: destination.path) {
+        try fileManager.removeItem(at: destination)
+      }
+      try fileManager.moveItem(at: temp, to: destination)
+      return "\(id)/\(name)"
+    } catch {
+      try? fileManager.removeItem(at: temp)
+      try? fileManager.removeItem(at: directory)
+      throw MediaAttachmentProblem.couldNotWrite
     }
   }
 
@@ -234,6 +301,20 @@ public struct MediaFiles: Sendable {
     let store = store
     return { serverID, storedName in
       await store.url(serverID: serverID, storedName: storedName)
+    }
+  }
+
+  public var lease: @Sendable (String, String) async -> UUID {
+    let store = store
+    return { serverID, storedName in
+      await store.lease(serverID: serverID, storedName: storedName)
+    }
+  }
+
+  public var release: @Sendable (UUID) async -> Void {
+    let store = store
+    return { token in
+      await store.release(token)
     }
   }
 }

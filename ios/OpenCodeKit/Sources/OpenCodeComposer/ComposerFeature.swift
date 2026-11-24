@@ -53,6 +53,29 @@ public struct ComposerFeature: Sendable {
     var flushToken: Int
     var flushRequestID: UUID?
     var parkedDrafts: [ComposerDraftKey: ComposerDraft]
+    /// Uploads started by this composer, including ones whose target is no longer visible.
+    var uploadOperations: [AttachmentUploadID: UploadOperation]
+    var uploadAttempts: [AttachmentUploadID: Int]
+    /// Merge results that could not be persisted yet, retried when the owner is visible or saved.
+    var deferredUploads: [AttachmentUploadID: MediaTransfer]
+    /// Staged names waiting for a successful durable save before their source can be released.
+    var pendingReleases: Set<String>
+
+    public struct AttachmentUploadID: Hashable, Sendable {
+      public var key: ComposerDraftKey
+      public var attachmentID: String
+
+      public init(key: ComposerDraftKey, attachmentID: String) {
+        self.key = key
+        self.attachmentID = attachmentID
+      }
+    }
+
+    struct UploadOperation: Equatable, Sendable {
+      var key: ComposerDraftKey
+      var attachment: MediaAttachment
+      var attempt: Int
+    }
 
     struct PendingDispatch: Equatable, Sendable {
       var send: ComposerSend
@@ -99,6 +122,10 @@ public struct ComposerFeature: Sendable {
       self.flushToken = 0
       self.flushRequestID = nil
       self.parkedDrafts = [:]
+      self.uploadOperations = [:]
+      self.uploadAttempts = [:]
+      self.deferredUploads = [:]
+      self.pendingReleases = []
     }
 
     public var draftKey: ComposerDraftKey {
@@ -163,8 +190,21 @@ public struct ComposerFeature: Sendable {
     case importFinished(id: String, target: ComposerTarget, result: Result<MediaAttachment, MediaAttachmentProblem>)
     case attachmentRemoveTapped(String)
     case attachmentRetryTapped(String)
-    case attachmentUploadProgress(id: String, sent: Int64)
-    case attachmentUploadFinished(id: String, result: Result<String, MediaAttachmentProblem>)
+    case attachmentUploadProgress(
+      key: ComposerDraftKey,
+      id: String,
+      attempt: Int,
+      sent: Int64
+    )
+    case attachmentUploadFinished(
+      key: ComposerDraftKey,
+      id: String,
+      attempt: Int,
+      result: Result<String, MediaAttachmentProblem>
+    )
+    case attachmentReleaseFinished(storedName: String, released: Bool)
+    case attachmentReleaseOwned(storedName: String)
+    case attachmentDeferred(State.AttachmentUploadID, MediaTransfer)
     case attachmentProblemDismissed
     case attachmentPreviewTapped(String)
     case attachmentPreviewLoaded(id: String, data: Data)
@@ -237,8 +277,9 @@ public struct ComposerFeature: Sendable {
     case save
     case restore
     case importAttachments
-    case upload(String)
+    case upload(ComposerDraftKey, String)
     case preview(String)
+    case release
   }
 
   @Dependency(\.clock) private var clock
@@ -396,21 +437,47 @@ public struct ComposerFeature: Sendable {
         state.attachmentProblem = nil
         state.contentRevision += 1
         state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+        let attachment = state.attachments[index]
+        let key = state.draftKey
         return .merge(
-          startUpload(state.attachments[index], state: state),
+          beginUpload(attachment, key: key, state: &state),
           scheduleSave(state: &state)
         )
 
-      case .attachmentUploadProgress(let id, let sent):
-        guard let index = state.attachments.firstIndex(where: { $0.id == id }),
+      case .attachmentUploadProgress(let key, let id, let attempt, let sent):
+        let uploadID = State.AttachmentUploadID(key: key, attachmentID: id)
+        guard state.uploadAttempts[uploadID] == attempt,
+          key == state.draftKey,
+          let index = state.attachments.firstIndex(where: { $0.id == id }),
           case .uploading(let previous) = state.attachments[index].transfer,
           sent > previous
         else { return .none }
         state.attachments[index].transfer = .uploading(sent: sent)
         return .none
 
-      case .attachmentUploadFinished(let id, let result):
-        return uploadFinished(id: id, result: result, state: &state)
+      case .attachmentUploadFinished(let key, let id, let attempt, let result):
+        return uploadFinished(
+          key: key,
+          id: id,
+          attempt: attempt,
+          result: result,
+          state: &state
+        )
+
+      case .attachmentReleaseFinished(let storedName, let released):
+        if released {
+          state.pendingReleases.remove(storedName)
+        }
+        return .none
+
+      case .attachmentReleaseOwned(let storedName):
+        state.pendingReleases.remove(storedName)
+        return .none
+
+      case .attachmentDeferred(let uploadID, let transfer):
+        state.deferredUploads[uploadID] = transfer
+        state.problem = .couldNotSave
+        return .none
 
       case .attachmentProblemDismissed:
         state.attachmentProblem = nil
@@ -423,16 +490,20 @@ public struct ComposerFeature: Sendable {
         let serverID = state.serverID
         let storedName = attachment.storedName
         return .run { send in
+          let token = await files.store.lease(serverID: serverID, storedName: storedName)
           do {
             let data = try await files.store.read(
               serverID: serverID,
               storedName: storedName,
               maximumBytes: MediaLimits.maximumInlineBytes
             )
+            await files.store.release(token)
             await send(.attachmentPreviewLoaded(id: id, data: data))
           } catch is CancellationError {
+            await files.store.release(token)
             return
           } catch {
+            await files.store.release(token)
             await send(.attachmentPreviewLoaded(id: id, data: Data()))
           }
         }
@@ -506,7 +577,7 @@ public struct ComposerFeature: Sendable {
         state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         var effects: [Effect<Action>] = [scheduleSave(state: &state)]
         for attachment in accepted {
-          effects.append(releaseIfUnreferenced(attachment, state: state))
+          state.pendingReleases.insert(attachment.storedName)
         }
         return .merge(effects)
 
@@ -815,7 +886,7 @@ public struct ComposerFeature: Sendable {
       haptics.play(.selection)
       var effects: [Effect<Action>] = [scheduleSave(state: &state)]
       if attachment.kind == .file {
-        effects.append(startUpload(attachment, state: state))
+        effects.append(beginUpload(attachment, key: state.draftKey, state: &state))
       }
       return .merge(effects)
     case .failure(let problem):
@@ -825,9 +896,32 @@ public struct ComposerFeature: Sendable {
     }
   }
 
-  private func startUpload(_ attachment: MediaAttachment, state: State) -> Effect<Action> {
+  private func beginUpload(
+    _ attachment: MediaAttachment,
+    key: ComposerDraftKey,
+    state: inout State
+  ) -> Effect<Action> {
+    let uploadID = State.AttachmentUploadID(key: key, attachmentID: attachment.id)
+    let attempt = (state.uploadAttempts[uploadID] ?? 0) + 1
+    state.uploadAttempts[uploadID] = attempt
+    state.uploadOperations[uploadID] = State.UploadOperation(
+      key: key,
+      attachment: attachment,
+      attempt: attempt
+    )
+    return startUpload(attachment, key: key, attempt: attempt, state: state)
+  }
+
+  private func startUpload(
+    _ attachment: MediaAttachment,
+    key: ComposerDraftKey,
+    attempt: Int,
+    state: State
+  ) -> Effect<Action> {
     guard let server = state.server else {
-      return .send(.attachmentUploadFinished(id: attachment.id, result: .failure(.uploadUnsupported)))
+      return .send(
+        .attachmentUploadFinished(key: key, id: attachment.id, attempt: attempt, result: .failure(.uploadUnsupported))
+      )
     }
     let client = client
     let files = mediaFiles
@@ -839,87 +933,181 @@ public struct ComposerFeature: Sendable {
     return .run { send in
       let url = await files.store.url(serverID: serverID, storedName: storedName)
       do {
-        let path = try await client.uploadFile(server, directory, url, name) { sent in
-          Task { await send(.attachmentUploadProgress(id: id, sent: sent)) }
+        let path = try await client.uploadFile(server, directory, url, name, id) { sent in
+          Task {
+            await send(
+              .attachmentUploadProgress(key: key, id: id, attempt: attempt, sent: sent)
+            )
+          }
         }
-        await send(.attachmentUploadFinished(id: id, result: .success(path)))
+        await send(
+          .attachmentUploadFinished(key: key, id: id, attempt: attempt, result: .success(path))
+        )
       } catch is CancellationError {
         return
       } catch let error as OpenCodeClientError {
         let problem: MediaAttachmentProblem = error.isUnsupported
           ? .uploadUnsupported
           : .uploadFailed
-        await send(.attachmentUploadFinished(id: id, result: .failure(problem)))
+        await send(
+          .attachmentUploadFinished(key: key, id: id, attempt: attempt, result: .failure(problem))
+        )
       } catch {
-        await send(.attachmentUploadFinished(id: id, result: .failure(.uploadFailed)))
+        await send(
+          .attachmentUploadFinished(key: key, id: id, attempt: attempt, result: .failure(.uploadFailed))
+        )
       }
     }
-    .cancellable(id: CancelID.upload(id), cancelInFlight: true)
+    .cancellable(id: CancelID.upload(key, id), cancelInFlight: true)
   }
 
   private func uploadFinished(
+    key: ComposerDraftKey,
     id: String,
+    attempt: Int,
     result: Result<String, MediaAttachmentProblem>,
     state: inout State
   ) -> Effect<Action> {
-    guard let index = state.attachments.firstIndex(where: { $0.id == id }) else { return .none }
+    let uploadID = State.AttachmentUploadID(key: key, attachmentID: id)
+    guard let operation = state.uploadOperations[uploadID], operation.attempt == attempt else {
+      return .none
+    }
+    state.uploadOperations.removeValue(forKey: uploadID)
+    let transfer: MediaTransfer
     switch result {
-    case .success(let path):
-      state.attachments[index].transfer = .uploaded(path: path)
-      state.attachmentProblem = nil
-      haptics.play(.confirm)
-      let storedName = state.attachments[index].storedName
-      let serverID = state.serverID
-      let files = mediaFiles
-      return .merge(
-        scheduleSave(state: &state),
-        .run { _ in
-          await files.store.remove(serverID: serverID, storedName: storedName)
-        }
-      )
-    case .failure(let problem):
-      state.attachments[index].transfer = .failed(problem)
-      state.attachmentProblem = problem
-      haptics.play(.error)
+    case .success(let path): transfer = .uploaded(path: path)
+    case .failure(let problem): transfer = .failed(problem)
+    }
+
+    if key == state.draftKey, let index = state.attachments.firstIndex(where: { $0.id == id }) {
+      state.attachments[index].transfer = transfer
+      if case .uploaded = transfer {
+        state.attachmentProblem = nil
+        state.pendingReleases.insert(state.attachments[index].storedName)
+        haptics.play(.confirm)
+      } else if case .failed(let problem) = transfer {
+        state.attachmentProblem = problem
+        haptics.play(.error)
+      }
+      state.contentRevision += 1
+      state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
       return scheduleSave(state: &state)
+    }
+
+    return mergeHiddenTransfer(key: key, id: id, transfer: transfer, state: &state)
+  }
+
+  /// Applies an upload result to a draft that is not on screen. The persisted record is merged
+  /// atomically so newer text in that key is never replaced by this older snapshot.
+  private func mergeHiddenTransfer(
+    key: ComposerDraftKey,
+    id: String,
+    transfer: MediaTransfer,
+    state: inout State
+  ) -> Effect<Action> {
+    let uploadID = State.AttachmentUploadID(key: key, attachmentID: id)
+    var storedName: String?
+    if var parked = state.parkedDrafts[key],
+      let index = parked.attachments.firstIndex(where: { $0.id == id })
+    {
+      parked.attachments[index].transfer = transfer
+      storedName = parked.attachments[index].storedName
+      state.parkedDrafts[key] = parked
+    }
+    if case .failed(let problem) = transfer {
+      state.attachmentProblem = problem
+    }
+    let drafts = drafts
+    let files = mediaFiles
+    let serverID = state.serverID
+    let releaseName = storedName
+    return .run { send in
+      let result = await drafts.applyAttachmentTransfer(key, id, transfer)
+      switch result {
+      case .saved:
+        if case .uploaded = transfer, let releaseName {
+          let released = await files.store.removeIfUnleased(
+            serverID: serverID,
+            storedName: releaseName
+          )
+          await send(.attachmentReleaseFinished(storedName: releaseName, released: released))
+        }
+      case .tooLarge, .failure:
+        await send(.attachmentDeferred(uploadID, transfer))
+      }
     }
   }
 
   private func removeAttachment(_ id: String, state: inout State) -> Effect<Action> {
     guard let index = state.attachments.firstIndex(where: { $0.id == id }) else { return .none }
     let attachment = state.attachments.remove(at: index)
+    let key = state.draftKey
+    let uploadID = State.AttachmentUploadID(key: key, attachmentID: id)
+    state.uploadOperations.removeValue(forKey: uploadID)
+    state.uploadAttempts.removeValue(forKey: uploadID)
+    state.deferredUploads.removeValue(forKey: uploadID)
+    state.pendingReleases.insert(attachment.storedName)
     state.attachmentProblem = nil
     state.revision += 1
     state.contentRevision += 1
     state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
     haptics.play(.selection)
-    var effects: [Effect<Action>] = [
-      .cancel(id: CancelID.upload(id)),
-      releaseIfUnreferenced(attachment, state: state),
-      scheduleSave(state: &state),
-    ]
-    return .merge(effects)
+    return .merge(
+      .cancel(id: CancelID.upload(key, id)),
+      scheduleSave(state: &state)
+    )
   }
 
-  /// A staged file leaves only when no draft, failed send or outbound record still names it.
-  private func releaseIfUnreferenced(
-    _ attachment: MediaAttachment,
-    state: State
-  ) -> Effect<Action> {
-    let stillOwned = state.attachments.contains(where: { $0.storedName == attachment.storedName })
-      || state.failedSends.contains(where: { failed in
-        failed.attachments.contains(where: { $0.storedName == attachment.storedName })
-      })
-      || state.outbound.contains(where: { outbound in
-        outbound.attachments.contains(where: { $0.storedName == attachment.storedName })
-      })
-    guard !stillOwned else { return .none }
+  /// Releases staged names only after a durable save and only when no persisted draft, parked
+  /// draft, failed send, outbound record, pending upload or lease still requires the source.
+  private func releasePending(state: inout State) -> Effect<Action> {
+    guard !state.pendingReleases.isEmpty else { return .none }
+    let inMemory = localSourceReferences(state)
+    state.pendingReleases.subtract(inMemory)
+    let names = state.pendingReleases
+    guard !names.isEmpty else { return .none }
+    let drafts = drafts
     let files = mediaFiles
     let serverID = state.serverID
-    let storedName = attachment.storedName
-    return .run { _ in
-      await files.store.remove(serverID: serverID, storedName: storedName)
+    return .run { send in
+      let persisted: Set<String>
+      switch await drafts.referencedStoredNames(serverID) {
+      case .success(let names): persisted = names
+      case .failure: return
+      }
+      for name in names {
+        if persisted.contains(name) {
+          await send(.attachmentReleaseOwned(storedName: name))
+          continue
+        }
+        let released = await files.store.removeIfUnleased(serverID: serverID, storedName: name)
+        await send(.attachmentReleaseFinished(storedName: name, released: released))
+      }
     }
+    .cancellable(id: CancelID.release, cancelInFlight: false)
+  }
+
+  private func localSourceReferences(_ state: State) -> Set<String> {
+    var names: Set<String> = []
+    func add(_ attachments: [MediaAttachment]) {
+      for attachment in attachments where !attachment.transfer.isUploaded {
+        names.insert(attachment.storedName)
+      }
+    }
+    add(state.attachments)
+    for draft in state.parkedDrafts.values {
+      add(draft.attachments)
+      for failed in draft.failedSends { add(failed.attachments) }
+      for outbound in draft.outbound { add(outbound.attachments) }
+    }
+    add(state.failedSends.flatMap(\.attachments))
+    add(state.outbound.flatMap(\.attachments))
+    for operation in state.uploadOperations.values {
+      if !operation.attachment.transfer.isUploaded {
+        names.insert(operation.attachment.storedName)
+      }
+    }
+    return names
   }
 
   private func makeSend(delivery: Delivery, state: State) -> ComposerSend? {
@@ -1189,7 +1377,10 @@ public struct ComposerFeature: Sendable {
       state.dispatchGeneration = nil
       switch result {
       case .saved:
-        return .send(.outboundPersisted(messageID: pending.send.messageID))
+        return .merge(
+          .send(.outboundPersisted(messageID: pending.send.messageID)),
+          releasePending(state: &state)
+        )
       case .tooLarge:
         restoreDispatchFailure(.draftTooLarge, state: &state)
         return .none
@@ -1206,6 +1397,7 @@ public struct ComposerFeature: Sendable {
       {
         state.problem = nil
       }
+      return releasePending(state: &state)
     case .tooLarge:
       state.problem = .draftTooLarge
     case .failure:
@@ -1253,19 +1445,41 @@ public struct ComposerFeature: Sendable {
     state.parkedDrafts[key] = nil
     switch outcome {
     case .missing:
-      return .none
+      return retryDeferredTransfers(state: &state)
     case .failure:
       state.problem = .couldNotRestore
       return .none
     case .foundFromSource(let draft, .destinationFailed),
       .foundFromSource(let draft, .sourceRetained):
       state.problem = outcome.migrationProblem
-      return apply(draft, state: &state)
+      return .merge(apply(draft, state: &state), retryDeferredTransfers(state: &state))
     case .foundFromSource(let draft, .migrated):
-      return apply(draft, state: &state)
+      return .merge(apply(draft, state: &state), retryDeferredTransfers(state: &state))
     case .found(let draft):
-      return apply(draft, state: &state)
+      return .merge(apply(draft, state: &state), retryDeferredTransfers(state: &state))
     }
+  }
+
+  /// A hidden upload result whose merge could not be persisted waits here. Returning to the
+  /// originating draft applies it, then saves through the normal debounced path.
+  private func retryDeferredTransfers(state: inout State) -> Effect<Action> {
+    let key = state.draftKey
+    var applied = false
+    let deferred = state.deferredUploads
+    for (uploadID, transfer) in deferred where uploadID.key == key {
+      if let index = state.attachments.firstIndex(where: { $0.id == uploadID.attachmentID }) {
+        state.attachments[index].transfer = transfer
+        if case .uploaded = transfer {
+          state.pendingReleases.insert(state.attachments[index].storedName)
+        }
+        applied = true
+      }
+      state.deferredUploads.removeValue(forKey: uploadID)
+    }
+    guard applied else { return .none }
+    state.contentRevision += 1
+    state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+    return scheduleSave(state: &state)
   }
 
   private func apply(_ draft: ComposerDraft, state: inout State) -> Effect<Action> {
@@ -1447,7 +1661,7 @@ public struct ComposerFeature: Sendable {
       if oldDraft.isEmpty {
         result = await drafts.remove(oldKey)
       } else {
-        result = await drafts.save(oldDraft, oldKey)
+        result = await drafts.saveIfNewer(oldDraft, oldKey)
       }
       await send(
         .targetSwitchFinished(

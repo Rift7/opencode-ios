@@ -65,7 +65,7 @@ public struct MediaImages: Sendable {
           switch await references.load(server, hash) {
           case .loaded(let data):
             return await decode(
-              key: "\(server.persistenceID)|\(hash)",
+              key: "\(MediaCacheScope.token(for: server))|\(hash)",
               data: data,
               maximum: maximumPixelSize,
               cache: cache

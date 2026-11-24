@@ -46,6 +46,8 @@ public enum ConnectionFailure: Equatable, Sendable {
       return .unsupported
     case .undecodable(let feature):
       return .malformed(feature: feature)
+    case .responseTooLarge(let feature):
+      return .malformed(feature: feature)
     case .incompatibleAPI(let feature):
       return .incompatibleAPI(feature: feature)
     case .unreachable:

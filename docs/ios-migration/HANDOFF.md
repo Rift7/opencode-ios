@@ -237,11 +237,17 @@ parts of `OpenCodeKit/Sources/OpenCodeSession`, and the Home New Session entry. 
 
 - Attachments are app-owned staged files under Application Support, referenced by `storedName` in the P9
   draft/failed/outbound records. Never persist a picker or security-scoped URL. The file store opens and closes
-  the scope around its copy. The 256 MiB media disk cache and 48/64 MiB memory tiers are Caches only; a trim
-  never touches draft files.
-- One upload path per attachment is reused across retries; the protocol has no resume. An interrupted upload
-  restores as `.failed(.uploadInterrupted)` with its source. Imports carry their target and a late import after
-  switching is ignored; upload results are ignored when their attachment is gone.
+  the scope around its copy. Writes stage under `.staging` and move into the final directory only after
+  completion; launch cleanup deletes only that namespace, never a filename ending in `.tmp`/`.partial`.
+- A staged source is released only after the owning record is durably saved and no current, parked, failed,
+  outbound, persisted or leased reference needs it. Upload completion, removal and accepted sends queue a
+  release; a failed save or a viewer lease keeps the file. The 256 MiB media disk cache and 48/64 MiB memory
+  tiers are Caches only and are authentication-scoped.
+- Uploads carry the originating server/key, attachment ID and monotonic attempt. A hidden completion merges
+  into the parked/persisted draft without replacing newer text; an old attempt cannot overwrite a retry; a
+  persistence failure is retained and retried when the owner is visible. The remote upload path is
+  `<tmp>/uploads/<attachmentID>/<name>` and is stable across retries; the protocol has no resume. An
+  interrupted upload restores as `.failed(.uploadInterrupted)` with its source.
 - The prompt carries inline images/pastes as `data:` file parts, uploaded files as path reference lines and
   `metadata.attachments`, and quotes as `metadata.comments`.
 - Viewers are native. Remote video/audio/PDF is downloaded through the authenticated client into a Caches
@@ -328,17 +334,17 @@ Useful entry points:
 
 ### P10 evidence
 
-- `swift test --package-path ios/OpenCodeKit`: 532 tests (198 server, 67 core, 75 app, 38 drawer, 70 session,
-  36 composer, 26 transcript, 22 media).
-- `ios/scripts/verify.sh`: app build, `OpenCodeTests`, 70 UI tests and package tests. The full package run hit
-  the recorded intermittent Home deletion flake (`a late delete result cannot reverse a targeted
-  confirmation`); a focused `HomeFeatureTests` rerun and the next full `swift test` were green. The flake is
-  recorded, not fixed.
+- `swift test --package-path ios/OpenCodeKit`: 553 tests (203 server, 67 core, 75 app, 38 drawer, 70 session,
+  44 composer, 26 transcript, 30 media).
+- `ios/scripts/verify.sh`: app build; 68 of 70 UI tests passed in the correction full run. Two P8 transcript
+  timing journeys failed and passed when the nine-test `TranscriptUITests` suite was rerun. The script stopped
+  before package tests; a separate full `swift test` passed 553 tests. These are recorded, not fixed.
 - `MediaUITests`: eight journeys — image gallery, tool mosaic, server file preview, browser gate, paste
   preview/remove, pasted-image send, annotation return, Dynamic Type/dark and relaunch recovery.
 - `MediaScreenshotUITests`: 16 light/dark captures in `docs/ios-migration/screens/p10-*`.
-- `MediaPerformanceUITests`: media-heavy scroll 123–133 frames, p50 16.7 ms, p95 34.8–37.7 ms, peak 27.4 MB;
-  large image open/close 5.17 s loop average; typing with an attachment 7.3 ms average / 48.9 ms max.
+- `MediaPerformanceUITests` (corrections): media-heavy scroll 129–132 frames, p50 16.7 ms, p95 34.6–35.8 ms,
+  peak 29.7 MB; large image open/close 5.06 s loop average; typing with an attachment 6.5 ms average /
+  32.0 ms max.
 - Deferred: foldered server-file browser and picker videos (P11/P14), Ask/page context (P14), math/Mermaid
   and cross-block selection (P14), physical camera/permissions/playback/sharing (P14).
 

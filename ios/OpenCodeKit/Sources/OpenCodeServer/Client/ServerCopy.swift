@@ -25,6 +25,10 @@ public enum ServerCopy {
     "The event stream returned HTTP \(status)."
   }
 
+  public static func tooLarge(_ name: String) -> String {
+    "The \(name) is larger than this app can read."
+  }
+
   public static func undecodable(_ name: String) -> String {
     "The \(name) does not match the current OpenCode V2 contract."
   }
@@ -84,6 +88,8 @@ extension OpenCodeClientError {
       return ServerCopy.unsupported("that")
     case .undecodable(let feature):
       return ServerCopy.undecodable(feature)
+    case .responseTooLarge(let feature):
+      return ServerCopy.tooLarge(feature)
     case .incompatibleAPI:
       return ServerCopy.incompatibleAPI
     case .streamEnded:

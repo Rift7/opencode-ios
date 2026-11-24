@@ -334,9 +334,9 @@ import OpenCodeServer
           await composer.message(sessionID: sessionID, messageID: messageID)
         },
         mediaBlob: { _, _ in syntheticImageData() },
-        uploadFile: { _, _, _, name, progress in
+        uploadFile: { _, _, _, name, uploadID, progress in
           progress(4)
-          return "/tmp/uploads/fixture/\(name)"
+          return "/tmp/uploads/\(uploadID)/\(name)"
         },
         listDirectory: { _, path in
           DirectoryListing(

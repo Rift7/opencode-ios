@@ -36,6 +36,13 @@ public enum MediaTransfer: Equatable, Sendable {
   case failed(MediaAttachmentProblem)
 }
 
+extension MediaTransfer {
+  public var isUploaded: Bool {
+    if case .uploaded = self { return true }
+    return false
+  }
+}
+
 extension MediaTransfer: Codable {
   private enum CodingKeys: String, CodingKey {
     case state, sent, path, problem

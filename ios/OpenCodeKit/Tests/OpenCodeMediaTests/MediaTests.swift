@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import CoreGraphics
+import CryptoKit
 import Foundation
 import ImageIO
 import OpenCodeCore
@@ -8,6 +9,10 @@ import OpenCodeServer
 import OpenCodeTestSupport
 import Testing
 import UniformTypeIdentifiers
+
+private func sha256(_ data: Data) -> String {
+  SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
 
 private func testImageData(width: Int = 640, height: Int = 480, format: UTType = .png) -> Data {
   let space = CGColorSpaceCreateDeviceRGB()
@@ -204,6 +209,63 @@ struct MediaAttachmentTests {
     #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("keep/a.txt").path))
     #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("drop/b.txt").path))
   }
+
+  @Test("imported .tmp and .partial names survive cleanup while app scratch is removed")
+  func importedSuffixesSurviveScratchCleanup() async throws {
+    let environment = IsolatedTestEnvironment(testName: "media-scratch-cleanup")
+    defer { environment.cleanUp() }
+    let store = MediaFileStore(root: try environment.directory("stage"))
+    let report = try await store.write(
+      Data("report".utf8),
+      name: "report.tmp",
+      serverID: "s",
+      id: "f1"
+    )
+    let capture = try await store.write(
+      Data("capture".utf8),
+      name: "capture.partial",
+      serverID: "s",
+      id: "f2"
+    )
+    let scratch = store.scratchDirectory.appendingPathComponent("interrupted.part")
+    try FileManager.default.createDirectory(
+      at: store.scratchDirectory,
+      withIntermediateDirectories: true
+    )
+    try Data("scratch".utf8).write(to: scratch)
+    await store.cleanupTemporaryArtifacts()
+    let reportURL = await store.url(serverID: "s", storedName: report.storedName)
+    let captureURL = await store.url(serverID: "s", storedName: capture.storedName)
+    #expect(FileManager.default.fileExists(atPath: reportURL.path))
+    #expect(FileManager.default.fileExists(atPath: captureURL.path))
+    #expect(!FileManager.default.fileExists(atPath: scratch.path))
+  }
+
+  @Test("cleanup keeps draft, failed and outbound references and leased files")
+  func cleanupKeepsRecordsAndLeases() async throws {
+    let environment = IsolatedTestEnvironment(testName: "media-cleanup-records")
+    defer { environment.cleanUp() }
+    let store = MediaFileStore(root: try environment.directory("stage"))
+    let draft = try await store.write(Data("1".utf8), name: "draft.txt", serverID: "s", id: "draft")
+    let failed = try await store.write(Data("2".utf8), name: "failed.txt", serverID: "s", id: "failed")
+    let outbound = try await store.write(Data("3".utf8), name: "out.txt", serverID: "s", id: "outbound")
+    let leased = try await store.write(Data("4".utf8), name: "lease.txt", serverID: "s", id: "leased")
+    let orphan = try await store.write(Data("5".utf8), name: "orphan.txt", serverID: "s", id: "orphan")
+    let token = await store.lease(serverID: "s", storedName: leased.storedName)
+    await store.cleanupAbandonedFiles(
+      serverID: "s",
+      keeping: [draft.storedName, failed.storedName, outbound.storedName]
+    )
+    let directory = store.serverDirectory("s")
+    #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent(draft.storedName).path))
+    #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent(failed.storedName).path))
+    #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent(outbound.storedName).path))
+    #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent(leased.storedName).path))
+    #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(orphan.storedName).path))
+    await store.release(token)
+    await store.cleanupAbandonedFiles(serverID: "s", keeping: [draft.storedName, failed.storedName, outbound.storedName])
+    #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(leased.storedName).path))
+  }
 }
 
 @Suite("Media references")
@@ -215,21 +277,147 @@ struct MediaReferenceCacheTests {
     let directory = try environment.directory("blobs")
     let counter = Counter()
     let server = fixtureServer()
-    let cache = MediaReferenceCache(directory: directory) { server, hash in
+    let bytes = Data("image-bytes".utf8)
+    let hash = sha256(bytes)
+    let cache = MediaReferenceCache(directory: directory) { server, requested in
       await counter.increment()
-      if hash.hasPrefix("f") { throw OpenCodeClientError(.status(404)) }
-      return Data("image-bytes".utf8)
+      if requested != hash { throw OpenCodeClientError(.status(404)) }
+      return bytes
     }
-    let hash = String(repeating: "a", count: 64)
     let first = await cache.load(server: server, hash: hash)
-    #expect(first == .loaded(Data("image-bytes".utf8)))
+    #expect(first == .loaded(bytes))
     await cache.purgeMemory()
     let second = await cache.load(server: server, hash: hash)
-    #expect(second == .loaded(Data("image-bytes".utf8)))
+    #expect(second == .loaded(bytes))
     #expect(await counter.value == 1)
     let missing = String(repeating: "f", count: 64)
     #expect(await cache.load(server: server, hash: missing) == .unavailable)
     #expect(await cache.load(server: server, hash: missing) == .unavailable)
+  }
+
+  @Test("two servers with the same hash do not share bytes or a cache hit")
+  func cacheScopeIsolation() async throws {
+    let environment = IsolatedTestEnvironment(testName: "media-cache-scope")
+    defer { environment.cleanUp() }
+    let counter = Counter()
+    let bytes = Data("scoped-image".utf8)
+    let hash = sha256(bytes)
+    let cache = MediaReferenceCache(directory: try environment.directory("blobs")) { _, _ in
+      await counter.increment()
+      return bytes
+    }
+    let serverA = OpenCodeServer(url: "https://wire-a.invalid", password: "token-a")
+    let serverB = OpenCodeServer(url: "https://wire-b.invalid", password: "token-b")
+    #expect(await cache.load(server: serverA, hash: hash) == .loaded(bytes))
+    #expect(await cache.cachedData(server: serverB, hash: hash) == nil)
+    #expect(await cache.load(server: serverB, hash: hash) == .loaded(bytes))
+    #expect(await counter.value == 2)
+    let scopeA = MediaCacheScope.token(for: serverA)
+    let scopeB = MediaCacheScope.token(for: serverB)
+    #expect(scopeA != scopeB)
+    #expect(
+      FileManager.default.fileExists(
+        atPath: environment.root.appendingPathComponent("blobs/\(scopeA)/\(hash).blob").path
+      )
+    )
+    #expect(
+      FileManager.default.fileExists(
+        atPath: environment.root.appendingPathComponent("blobs/\(scopeB)/\(hash).blob").path
+      )
+    )
+  }
+
+  @Test("a second scope cannot substitute its own bytes for the same hash")
+  func secondScopeMismatchCannotUseFirstScopeBytes() async throws {
+    let environment = IsolatedTestEnvironment(testName: "media-cache-scope-mismatch")
+    defer { environment.cleanUp() }
+    let bytes = Data("first-scope".utf8)
+    let hash = sha256(bytes)
+    let cache = MediaReferenceCache(directory: try environment.directory("blobs")) { server, _ in
+      if server.url.contains("wire-a") { return bytes }
+      return Data("second-scope".utf8)
+    }
+    let serverA = OpenCodeServer(url: "https://wire-a.invalid", password: "token")
+    let serverB = OpenCodeServer(url: "https://wire-b.invalid", password: "token")
+    #expect(await cache.load(server: serverA, hash: hash) == .loaded(bytes))
+    #expect(await cache.load(server: serverB, hash: hash) == .failed(.unreadable))
+    #expect(await cache.cachedData(server: serverB, hash: hash) == nil)
+  }
+
+  @Test("concurrent same-scope loads coalesce into one request")
+  func sameScopeCoalesces() async throws {
+    let environment = IsolatedTestEnvironment(testName: "media-cache-coalesce")
+    defer { environment.cleanUp() }
+    let bytes = Data("coalesced".utf8)
+    let hash = sha256(bytes)
+    let counter = Counter()
+    let cache = MediaReferenceCache(directory: try environment.directory("blobs")) { _, _ in
+      await counter.increment()
+      try await Task.sleep(for: .milliseconds(40))
+      return bytes
+    }
+    let server = fixtureServer()
+    async let first = cache.load(server: server, hash: hash)
+    async let second = cache.load(server: server, hash: hash)
+    let results = await [first, second]
+    #expect(results == [.loaded(bytes), .loaded(bytes)])
+    #expect(await counter.value == 1)
+  }
+
+  @Test("a changed credential invalidates the scope")
+  func credentialChangeInvalidates() async throws {
+    let environment = IsolatedTestEnvironment(testName: "media-cache-credentials")
+    defer { environment.cleanUp() }
+    let counter = Counter()
+    let bytes = Data("credential-image".utf8)
+    let hash = sha256(bytes)
+    let cache = MediaReferenceCache(directory: try environment.directory("blobs")) { _, _ in
+      await counter.increment()
+      return bytes
+    }
+    let old = OpenCodeServer(url: "https://wire.invalid", password: "old-token")
+    let new = OpenCodeServer(url: "https://wire.invalid", password: "new-token")
+    #expect(await cache.load(server: old, hash: hash) == .loaded(bytes))
+    #expect(await cache.cachedData(server: new, hash: hash) == nil)
+    #expect(await cache.load(server: new, hash: hash) == .loaded(bytes))
+    #expect(await counter.value == 2)
+    #expect(MediaCacheScope.token(for: old) != MediaCacheScope.token(for: new))
+  }
+
+  @Test("fetched bytes that do not match the hash are rejected")
+  func mismatchedFetchRejected() async throws {
+    let environment = IsolatedTestEnvironment(testName: "media-cache-mismatch")
+    defer { environment.cleanUp() }
+    let hash = sha256(Data("expected".utf8))
+    let cache = MediaReferenceCache(directory: try environment.directory("blobs")) { _, _ in
+      Data("different".utf8)
+    }
+    let server = fixtureServer()
+    #expect(await cache.load(server: server, hash: hash) == .failed(.unreadable))
+    #expect(await cache.cachedData(server: server, hash: hash) == nil)
+  }
+
+  @Test("a corrupted disk entry is removed and refetched")
+  func corruptedDiskEntryRejected() async throws {
+    let environment = IsolatedTestEnvironment(testName: "media-cache-corrupt")
+    defer { environment.cleanUp() }
+    let bytes = Data("valid".utf8)
+    let hash = sha256(bytes)
+    let counter = Counter()
+    let cache = MediaReferenceCache(directory: try environment.directory("blobs")) { _, _ in
+      await counter.increment()
+      return bytes
+    }
+    let server = fixtureServer()
+    let scope = MediaCacheScope.token(for: server)
+    let folder = environment.root.appendingPathComponent("blobs/\(scope)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    try Data("corrupt".utf8).write(to: folder.appendingPathComponent("\(hash).blob"))
+    #expect(await cache.load(server: server, hash: hash) == .loaded(bytes))
+    #expect(await counter.value == 1)
+    #expect(
+      (try Data(contentsOf: folder.appendingPathComponent("\(hash).blob"))) == bytes
+    )
   }
 
   @Test("trimming counts finished blobs only, keeps a partial, and deletes the oldest first")
