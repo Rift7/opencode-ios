@@ -406,12 +406,12 @@ Useful entry points:
 
 ### P11 evidence
 
-- `swift test --package-path ios/OpenCodeKit` (correction): 614 tests pass (15 settings, 60 composer,
-  79 session, 209 server, 85 app, 67 core, 41 drawer, 26 transcript, 32 media).
-- Final grouped UI inventory: 81/81 on the correction head. `PreferenceBehaviorUITests` covers
+- `swift test --package-path ios/OpenCodeKit` (correction): 618 tests pass (15 settings, 60 composer,
+  79 session, 209 server, 89 app, 67 core, 41 drawer, 26 transcript, 32 media).
+- Final grouped UI inventory on the storage correction: 80/81, with the known P8 anchor hittability flake; the nine-test TranscriptUITests then passed 9/9. `PreferenceBehaviorUITests` covers
   Return before/after relaunch, Return in the request-answer bar, and Wrap Lines live plus relaunch.
 - P11 package regressions include gated catalogue load/reload/navigation, occurrence ranges and Unicode,
-  transaction failure at each step/restart, operation fencing, active/non-active edits, removal draft
+  transaction failure at each step/collision/restart, intent ownership, operation fencing, active/non-active edits, removal draft
   ownership, late completions and cancellation after an agent switch.
 - Screenshots: `docs/ios-migration/screens/p11-*` (synthetic fixture only).
 

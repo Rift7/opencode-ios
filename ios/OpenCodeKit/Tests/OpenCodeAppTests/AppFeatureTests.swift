@@ -394,7 +394,7 @@ struct AppFeatureTests {
       $0.savedServer = TestServer.server
       $0.savedServers = [TestServer.server]
     }
-    await store.receive(.persisted(saved: .success, list: .success))
+    await store.receive(.persisted(.success(.init(server: TestServer.server, servers: [TestServer.server]))))
 
     #expect(shared.result(ServerSharedKeys.savedServer) == .success(TestServer.server))
     #expect(shared.result(ServerSharedKeys.savedServers) == .success([TestServer.server]))
@@ -423,7 +423,7 @@ struct AppFeatureTests {
       $0.savedServer = TestServer.server
       $0.savedServers = [TestServer.server]
     }
-    await store.receive(.persisted(saved: .failure(.unavailable), list: .failure(.unavailable))) {
+    await store.receive(.persisted(.failure(.storage(.unavailable)))) {
       $0.notice = .couldNotSaveServer(.unavailable)
     }
   }
@@ -448,9 +448,11 @@ struct AppFeatureTests {
       $0.sharedStore = shared
     }
 
+    store.exhaustivity = .off
     await store.send(.connection(.delegate(.verified(TestServer.server, TestServer.info))))
-    await store.receive(.persisted(saved: .success, list: .success))
+    await settle(store)
     #expect(store.state.savedServer?.name == "Desk")
+    #expect(shared.result(ServerSharedKeys.savedServer) == .success(store.state.savedServer))
   }
 
   @Test("a manual address without a scheme becomes HTTP and blank username stays opencode")
@@ -789,11 +791,16 @@ struct AppFeatureTests {
       $0.sharedStore = shared
     }
 
-    await store.send(.forgetSavedServersTapped) {
+    await store.send(.forgetSavedServersTapped)
+    await store.receive(.savedServersForgotten(.success(.init(server: nil, servers: [])))) {
       $0.savedServer = nil
       $0.savedServers = []
       $0.savedData = .read
       $0.restore = .ready
+      $0.connection = nil
+      $0.home = nil
+      $0.session = nil
+      $0.sessionDestination = nil
     }
     #expect(shared.read(ServerSharedKeys.savedServer).isMissing)
     #expect(shared.read(ServerSharedKeys.savedServers).isMissing)
@@ -867,17 +874,21 @@ struct AppFeatureTests {
     }
     await store.receive(
       .replaceSavedDataFinished(
-        deleteSaved: .success,
-        deleteList: .success,
-        save: .success,
-        list: .success
+        .success(
+          .init(
+            server: TestServer.server,
+            servers: [TestServer.server, oldFirst, oldSecond]
+          )
+        )
       )
     ) {
       $0.savedData = .read
       $0.restore = .ready
+      $0.savedServer = TestServer.server
+      $0.savedServers = [TestServer.server, oldFirst, oldSecond]
     }
 
-    #expect(keychain.writes == 2)
+    #expect(keychain.writes == 3)
     #expect(shared.result(ServerSharedKeys.savedServer) == .success(TestServer.server))
     #expect(
       shared.result(ServerSharedKeys.savedServers)
@@ -940,8 +951,9 @@ struct AppFeatureTests {
       $0.savedServer = TestServer.server
       $0.savedServers = [TestServer.server, oldFirst, oldSecond]
     }
-    await store.receive(.persisted(saved: .success, list: .success))
-    #expect(keychain.writes == 2)
+    store.exhaustivity = .off
+    await settle(store)
+    #expect(keychain.writes == 3)
     #expect(
       shared.result(ServerSharedKeys.savedServers)
         == .success([TestServer.server, oldFirst, oldSecond])
@@ -977,12 +989,7 @@ struct AppFeatureTests {
       $0.showsReplaceSavedDataConfirmation = false
     }
     await store.receive(
-      .replaceSavedDataFinished(
-        deleteSaved: .failure(.unavailable),
-        deleteList: .failure(.unavailable),
-        save: .failure(.unavailable),
-        list: .failure(.unavailable)
-      )
+      .replaceSavedDataFinished(.failure(.storage(.unavailable)))
     ) {
       $0.notice = .couldNotReplaceSavedData(.unavailable)
     }

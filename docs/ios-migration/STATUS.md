@@ -29,7 +29,7 @@
 | P11 base | `0ec10ba4` (`origin/ios`, PR #9 merged) |
 | P11 branch | `ios-settings`, created from `origin/ios` after `git fetch origin` |
 | P11 review-correction head | `f553cbd7` (preference consumers, mention occurrences, catalogue ownership, server transaction and cancellation checks) |
-| P11 final head | recorded on the branch and draft PR after the evidence commit |
+| P11 storage-correction head | recorded on the branch and draft PR after this evidence commit |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
 `git fetch origin` moved `origin/ios` to `e42cb455`; PR #8 (`ios: add the native composer, drafts, sends, queue,
@@ -600,13 +600,13 @@ The 421 package tests are the sum of the six target runs the package runner prin
 
 | Check | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | 614 tests pass (settings 15, composer 60, session 79, server 209, app 85, core 67, drawer 41, transcript 26, media 32) |
+| `swift test --package-path ios/OpenCodeKit` | 618 tests pass (settings 15, composer 60, session 79, server 209, app 89, core 67, drawer 41, transcript 26, media 32) |
 | `xcodebuild ... build` | app target builds for iPhone 18 Pro Max, iOS 27.2 |
 | `SettingsUITests` | 5/5 pass (preference relaunch, diagnostics collect/copy, onboarding, header edit/save, injected QR confirmation) |
 | `PreferenceBehaviorUITests` | 3/3 pass — Return before/after relaunch, Return answering a request without chat, Wrap Lines live toggle and before/after relaunch |
 | `ComposerContextUITests` | 2/2 pass (model/agent/mention selection, folder select/cancel with draft) |
 | `SettingsScreenshotUITests` | 12 light/dark captures |
-| `xcodebuild … test` (P11 correction) | **81/81 UI tests pass in one grouped run** on the final corrected code. This includes the new preference-behaviour journeys; earlier grouped runs exposed harness timing failures (media mosaic, large-image viewer, one long-transcript autocomplete probe) that were fixed as viewport/dismissal waits, and the unreliable latency probe was removed from the grouped inventory. Focused media suites pass 8/8 and 3/3. |
+| `xcodebuild … test` (P11 storage correction) | 81 UI tests ran; 80 passed in the grouped inventory and `TranscriptUITests.testFollowingSurvivesTailGrowthAndBrowsingHoldsItsAnchor` hit the known P8 anchor hittability flake. The complete nine-test `TranscriptUITests` suite then passed 9/9 on the final code. This records the flake; it is not claimed fixed. |
 | Autocomplete trace (implementation probe) | `connected-composer-long`, 900 fixture transcript entries; focused UI-test elapsed from typing `@rev` through the first skill suggestion **about 2.0 s**, including XCTest input and expectation polling; simulator only. The probe was not retained in the final grouped inventory to avoid an XCUITest input flake; autocomplete itself is covered by `testModelAgentAndMentionSelection`. |
 | Existing regressions | full package suite passes; P8/P9/P10 suites unchanged apart from additive fields with decoding defaults. The P10 media UI/perf harnesses now scroll rows clear of the taller P11 composer inset and wait for viewer dismissal; product behaviour is unchanged. `MediaUITests` passes 8/8 and `MediaPerformanceUITests` 3/3 with that adjustment; the large-image loop measured 5.12 s including UI-test waits. |
 | Screenshots | `docs/ios-migration/screens/p11-{settings,diagnostics,onboarding,model-picker,autocomplete,folder-browser}-{light,dark}.png`, captured from `SettingsScreenshotUITests` on the iPhone 18 Pro Max simulator with the synthetic `Fixture` server and `/work/opencode` paths |
@@ -618,7 +618,8 @@ The 421 package tests are the sum of the six target runs the package runner prin
   onboarding completion; injected QR parsing/confirmation/exactly-once forwarding; catalogue
   completeness and destinations; model/agent selection, payload order, refused switch and durable
   snapshot; autocomplete triggers, composition guard, occurrence ranges and mention encoding;
-  folder navigation and draft preservation; server edit/removal transactions and draft handoff.
+  folder navigation and draft preservation; server edit/removal transactions, collision/restart
+  recovery and draft handoff.
 - **Hardware-unverified (P12):** real camera capture and permission prompts, physical Keychain on a
   signed build, haptics, IME marked text and hardware Shift+Return, VoiceOver, photo/file provider
   eviction, playback interruptions/share, memory pressure and device performance. See

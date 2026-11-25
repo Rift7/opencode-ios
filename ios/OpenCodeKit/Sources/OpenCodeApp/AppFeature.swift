@@ -266,40 +266,24 @@ public enum AppRestoreResult: Equatable, Sendable {
   case storageUnavailable(StorageFailure)
 
   public static func read(_ store: SharedStore) -> AppRestoreResult {
-    switch ServerWriteTransaction.recover(store) {
+    let records: ServerWriteTransaction.Records
+    switch ServerWriteTransaction.read(store: store) {
     case .failure(.storage(let failure)):
       return .storageUnavailable(failure)
     case .failure(.corrupt):
       return .corrupt
-    case .success:
-      break
+    case .success(let value):
+      records = value
     }
-    let saved = store.read(ServerSharedKeys.savedServer)
-    let list = store.read(ServerSharedKeys.savedServers)
     let cache = store.read(ServerSharedKeys.cachedSummaries)
-
-    if case .failure(let failure) = saved { return .storageUnavailable(failure) }
-    if case .failure(let failure) = list { return .storageUnavailable(failure) }
-
-    let savedServer: OpenCodeServer? = {
-      if case .value(let value) = saved { return value }
-      return nil
-    }()
-    let savedServers: [OpenCodeServer] = {
-      if case .value(let value) = list { return value }
-      return []
-    }()
-
-    let server = savedServer ?? savedServers.first
-    guard let server else {
-      if case .undecodable = saved { return .corrupt }
-      if case .undecodable = list { return .corrupt }
-      return .missing
+    guard let server = records.server else {
+      return records.serverUnreadable || records.listUnreadable ? .corrupt : .missing
     }
 
     var notice: AppNotice?
-    if case .undecodable = list { notice = .couldNotReadSavedServers }
-    if case .undecodable = saved { notice = .couldNotReadSavedServers }
+    if records.listUnreadable || records.serverUnreadable {
+      notice = .couldNotReadSavedServers
+    }
 
     var summary: CachedServerSummary?
     switch cache {
@@ -313,7 +297,7 @@ public enum AppRestoreResult: Equatable, Sendable {
       break
     }
 
-    return .restored(server: server, servers: savedServers, cache: summary, notice: notice)
+    return .restored(server: server, servers: records.servers, cache: summary, notice: notice)
   }
 }
 
@@ -914,16 +898,12 @@ public struct AppFeature {
     )
     case retryRetainedDrafts
     case noticeDismissed
-    case persisted(saved: StorageWrite, list: StorageWrite)
+    case persisted(Result<ServerWriteTransaction.Outcome, ServerWriteTransaction.Failure>)
+    case savedServersForgotten(Result<ServerWriteTransaction.Outcome, ServerWriteTransaction.Failure>)
     case replaceSavedDataTapped
     case replaceSavedDataCancelled
     case replaceSavedDataConfirmed
-    case replaceSavedDataFinished(
-      deleteSaved: StorageWrite,
-      deleteList: StorageWrite,
-      save: StorageWrite,
-      list: StorageWrite
-    )
+    case replaceSavedDataFinished(Result<ServerWriteTransaction.Outcome, ServerWriteTransaction.Failure>)
     case connection(ConnectionFeature.Action)
     case home(HomeFeature.Action)
     case session(SessionFeature.Action)
@@ -1092,21 +1072,33 @@ public struct AppFeature {
         return restoreEffect()
 
       case .forgetSavedServersTapped:
-        let saved = store.delete(ServerSharedKeys.savedServer)
-        let list = store.delete(ServerSharedKeys.savedServers)
-        if case .failure(let failure) = saved { return .send(.restored(.storageUnavailable(failure))) }
-        if case .failure(let failure) = list { return .send(.restored(.storageUnavailable(failure))) }
-        state.savedServer = nil
-        state.savedServers = []
-        state.savedData = .read
-        state.pendingSave = nil
-        state.restore = .ready
-        state.connection = nil
-        state.home = nil
-        state.session = nil
-        state.sessionDestination = nil
-        state.notice = nil
-        return .none
+        let store = store
+        return .run { send in
+          await send(
+            .savedServersForgotten(
+              ServerWriteTransaction.remove(server: nil, servers: [], store: store)
+            )
+          )
+        }
+
+      case .savedServersForgotten(let result):
+        switch result {
+        case .success:
+          state.savedServer = nil
+          state.savedServers = []
+          state.savedData = .read
+          state.pendingSave = nil
+          state.restore = .ready
+          state.connection = nil
+          state.home = nil
+          state.session = nil
+          state.sessionDestination = nil
+          state.notice = nil
+          return .none
+        case .failure(let failure):
+          let storage = storageFailure(failure)
+          return .send(.restored(.storageUnavailable(storage)))
+        }
 
       case .replaceSavedDataTapped:
         state.showsReplaceSavedDataConfirmation = true
@@ -1124,45 +1116,25 @@ public struct AppFeature {
         let servers = state.savedServers.isEmpty ? [server] : state.savedServers
         let store = store
         return .run { send in
-          let deleteSaved = store.delete(ServerSharedKeys.savedServer)
-          let deleteList = store.delete(ServerSharedKeys.savedServers)
-          var save: StorageWrite = .failure(.unavailable)
-          var list: StorageWrite = .failure(.unavailable)
-          if case .success = deleteSaved, case .success = deleteList {
-            save = store.write(server, for: ServerSharedKeys.savedServer)
-            list = store.write(servers, for: ServerSharedKeys.savedServers)
-          }
           await send(
             .replaceSavedDataFinished(
-              deleteSaved: deleteSaved,
-              deleteList: deleteList,
-              save: save,
-              list: list
+              ServerWriteTransaction.save(server: server, servers: servers, store: store)
             )
           )
         }
 
-      case .replaceSavedDataFinished(let deleteSaved, let deleteList, let save, let list):
-        if case .failure(let failure) = deleteSaved {
-          state.notice = .couldNotReplaceSavedData(failure)
-          return .none
+      case .replaceSavedDataFinished(let result):
+        switch result {
+        case .success(let outcome):
+          state.savedServer = outcome.server
+          state.savedServers = outcome.servers
+          state.savedData = .read
+          state.pendingSave = nil
+          state.restore = .ready
+          state.notice = nil
+        case .failure(let failure):
+          state.notice = .couldNotReplaceSavedData(storageFailure(failure))
         }
-        if case .failure(let failure) = deleteList {
-          state.notice = .couldNotReplaceSavedData(failure)
-          return .none
-        }
-        if case .failure(let failure) = save {
-          state.notice = .couldNotReplaceSavedData(failure)
-          return .none
-        }
-        if case .failure(let failure) = list {
-          state.notice = .couldNotReplaceSavedData(failure)
-          return .none
-        }
-        state.savedData = .read
-        state.pendingSave = nil
-        state.restore = .ready
-        state.notice = nil
         return .none
 
       case .manualEntryTapped:
@@ -1380,13 +1352,14 @@ public struct AppFeature {
         }
         return persistEffect(server: remembered, servers: servers)
 
-      case .persisted(let saved, let list):
-        if case .failure(let failure) = saved {
-          state.notice = .couldNotSaveServer(failure)
-        } else if case .failure(let failure) = list {
-          state.notice = .couldNotSaveServer(failure)
-        } else {
+      case .persisted(let result):
+        switch result {
+        case .success(let outcome):
+          state.savedServer = outcome.server
+          state.savedServers = outcome.servers
           state.notice = nil
+        case .failure(let failure):
+          state.notice = .couldNotSaveServer(storageFailure(failure))
         }
         return .none
 
@@ -1650,9 +1623,9 @@ public struct AppFeature {
   private func persistEffect(server: OpenCodeServer, servers: [OpenCodeServer]) -> Effect<Action> {
     let store = store
     return .run { send in
-      let saved = store.write(server, for: ServerSharedKeys.savedServer)
-      let list = store.write(servers, for: ServerSharedKeys.savedServers)
-      await send(.persisted(saved: saved, list: list))
+      await send(
+        .persisted(ServerWriteTransaction.save(server: server, servers: servers, store: store))
+      )
     }
   }
 

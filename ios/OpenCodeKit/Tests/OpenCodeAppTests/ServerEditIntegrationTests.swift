@@ -17,14 +17,17 @@ struct ServerEditIntegrationTests {
   private final class ScriptedStorage: KeyValueStorage, Sendable {
     private let inner = OpenCodeCore.InMemoryStorage()
     private let state = Mutex<(writes: Int, failAt: Int?)>((0, nil))
+    private let keys = Mutex<[String]>([])
 
     func setFailAt(_ value: Int?) { state.withLock { $0.failAt = value } }
+    var writtenKeys: [String] { keys.withLock { $0 } }
     func read(_ key: String) -> StorageRead { inner.read(key) }
     func write(_ data: Data, for key: String) -> StorageWrite {
       let fail = state.withLock { value -> Bool in
         value.writes += 1
         return value.failAt == value.writes
       }
+      keys.withLock { $0.append(key) }
       return fail ? .failure(.unavailable) : inner.write(data, for: key)
     }
     func delete(_ key: String) -> StorageWrite {
@@ -32,6 +35,7 @@ struct ServerEditIntegrationTests {
         value.writes += 1
         return value.failAt == value.writes
       }
+      keys.withLock { $0.append(key) }
       return fail ? .failure(.unavailable) : inner.delete(key)
     }
   }
@@ -269,6 +273,20 @@ struct ServerEditIntegrationTests {
     #expect(store.state.connection?.server == active)
     #expect(store.state.savedServers == [updated, active])
     #expect(store.state.serverWrite == nil)
+  }
+
+  @Test("connection persistence writes through the coordinated intent boundary")
+  func connectionPersistenceUsesBoundary() async {
+    let (store, shared, keychain) = makeStore(state())
+    await store.send(.connection(.delegate(.verified(TestServer.server, TestServer.info))))
+    await settle(store)
+
+    #expect(keychain.writtenKeys.contains(ServerSharedKeys.writeIntent.name))
+    #expect(keychain.writtenKeys.contains(ServerSharedKeys.savedServer.name))
+    #expect(keychain.writtenKeys.contains(ServerSharedKeys.savedServers.name))
+    #expect(shared.result(ServerSharedKeys.savedServer) == .success(TestServer.server))
+    #expect(shared.result(ServerSharedKeys.savedServers) == .success([TestServer.server]))
+    #expect(shared.result(ServerSharedKeys.writeIntent) == .success(nil))
   }
 
   @Test("a duplicate submission while a write is in flight is ignored")

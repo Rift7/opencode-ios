@@ -130,6 +130,6 @@ therefore runs in the app process through a DEBUG-only `-uiTestKeychainProbe` la
 | `xcodebuild … test` (P9) | app build succeeds; 58 UI tests pass |
 | Device build (iPhone Air, iOS 27.2) | succeeds with `-allowProvisioningUpdates DEVELOPMENT_TEAM=<team> -skipMacroValidation`; automatic signing registered the app |
 
-| `swift test --package-path OpenCodeKit` (P11) | 591 tests pass (209 server, 67 core, 75 app, 41 drawer, 78 session, 26 transcript, 52 composer, 30 media, 13 settings) |
-| `xcodebuild … test` (P11 correction) | 81/81 UI tests pass in one grouped run on iPhone 18 Pro Max / iOS 27.2; see `STATUS.md` for the journey list and earlier harness flake record |
+| `swift test --package-path OpenCodeKit` (P11 storage correction) | 618 tests pass (209 server, 67 core, 89 app, 41 drawer, 79 session, 26 transcript, 60 composer, 32 media, 15 settings) |
+| `xcodebuild … test` (P11 storage correction) | 80/81 grouped UI tests pass (known P8 anchor hittability flake), then TranscriptUITests 9/9 on the final code; see `STATUS.md` |
 | Phase 11 simulator measurements | iPhone 18 Pro Max, iOS 27.2 (runtime `24B8117`); no physical iPhone, camera, signing team or provisioning change was used |

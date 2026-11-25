@@ -1258,16 +1258,24 @@ scrolling. App and Session states receive the loaded values and every successful
 - Gate: `ComposerReturnKey` tests, `FileViewerTests.wrapTogglePersists`/`wrapFailureKeepsMode`,
   `PreferenceBehaviorUITests` (composer relaunch, request bar, live viewer toggle and relaunch).
 
-### D-103 Server records commit through a recoverable Keychain intent
-`savedServer` and `savedServers` are separate Keychain items. `ServerWriteTransaction` writes a
-Keychain `ServerWriteIntent` with both before and after states, writes the list then the selected
-record, and clears the intent only after both succeed. Any failure rolls both records back; a
-leftover intent from termination is rolled back by `AppRestoreResult.read` before the app trusts
-either record. A concurrent newer selection is not overwritten.
+### D-103 Server records commit through one serialized recoverable boundary
+`savedServer`, `savedServers` and the Keychain `ServerWriteIntent` are owned by one process-wide
+`ServerWriteTransaction` boundary. Settings edits/removals, pairing/connection persistence, forget-all
+and explicit saved-data replacement all enter it; a launch read uses its `read` path. A mutex makes
+the intent/list/selected sequence serial, so an unfinished intent is never overwritten. The intent
+records both before and after states. A failed write rolls both records back; if rollback itself
+fails, the intent and its original recovery information remain and a later read retries before
+trusting either record. Rollback merges a newer selected server/list entry that was never part of
+the failed operation, and the selected server is always present in the returned list. Successful
+outcomes re-read and return the actual committed pair.
 
 - Intent values carry credentials, so they live in the Keychain, never in logs or UserDefaults.
-- Gate: `ServerWriteTransactionTests` (failure at each write/delete step, removal, restart recovery)
-  and `ServerEditIntegrationTests.secondWriteFailureAndRestart`.
+- Preserves partial-corruption facts through `ServerWriteTransaction.read` so the existing
+  explicit saved-data recovery UI remains available.
+- Gate: `ServerWriteTransactionTests` (failure at every step, newer-selection collision, actual
+  success outcome, failed rollback/restart, unresolved-intent overwrite prevention) and
+  `ServerEditIntegrationTests` (second-write failure, active/non-active edits, removal, late
+  completion, duplicate submission and connection persistence through the boundary).
 
 ### D-104 Server edit/removal operations are identity-fenced and draft-safe
 Settings attaches an edit-operation UUID to each submission and refuses a second submission while

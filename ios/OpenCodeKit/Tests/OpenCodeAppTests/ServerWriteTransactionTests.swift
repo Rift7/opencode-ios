@@ -9,11 +9,11 @@ import Testing
 struct ServerWriteTransactionTests {
   private final class ScriptedStorage: KeyValueStorage, Sendable {
     private let inner: OpenCodeCore.InMemoryStorage
-    private let state = Mutex<(writes: Int, failAt: Int?)>((0, nil))
+    private let state = Mutex<(writes: Int, failAt: Set<Int>)>((0, []))
 
     init(failAt: Int? = nil) {
       inner = OpenCodeCore.InMemoryStorage()
-      state.withLock { $0.failAt = failAt }
+      if let failAt { state.withLock { $0.failAt = [failAt] } }
     }
 
     func read(_ key: String) -> StorageRead { inner.read(key) }
@@ -21,7 +21,7 @@ struct ServerWriteTransactionTests {
     func write(_ data: Data, for key: String) -> StorageWrite {
       let shouldFail = state.withLock { value -> Bool in
         value.writes += 1
-        return value.failAt == value.writes
+        return value.failAt.contains(value.writes)
       }
       if shouldFail { return .failure(.unavailable) }
       return inner.write(data, for: key)
@@ -30,7 +30,7 @@ struct ServerWriteTransactionTests {
     func delete(_ key: String) -> StorageWrite {
       let shouldFail = state.withLock { value -> Bool in
         value.writes += 1
-        return value.failAt == value.writes
+        return value.failAt.contains(value.writes)
       }
       if shouldFail { return .failure(.unavailable) }
       return inner.delete(key)
@@ -38,7 +38,8 @@ struct ServerWriteTransactionTests {
 
     func seed(_ data: Data, for key: String) { _ = inner.write(data, for: key) }
 
-    func setFailAt(_ value: Int?) { state.withLock { $0.failAt = value } }
+    func setFailAt(_ value: Int?) { state.withLock { $0.failAt = value.map { [$0] } ?? [] } }
+    func setFailAt(_ values: Set<Int>) { state.withLock { $0.failAt = values } }
 
     func data(_ key: String) -> Data? {
       if case .value(let data) = inner.read(key) { return data }
@@ -57,7 +58,7 @@ struct ServerWriteTransactionTests {
     password: "after"
   )
 
-  private func store(_ keychain: ScriptedStorage = ScriptedStorage()) -> SharedStore {
+  private func store(_ keychain: any KeyValueStorage = ScriptedStorage()) -> SharedStore {
     SharedStore(defaults: OpenCodeCore.InMemoryStorage(), keychain: keychain)
   }
 
@@ -125,6 +126,138 @@ struct ServerWriteTransactionTests {
     #expect(store.write(intent, for: ServerSharedKeys.writeIntent) == .success)
     #expect(store.write([after], for: ServerSharedKeys.savedServers) == .success)
 
+    let restored = AppRestoreResult.read(store)
+    #expect(restored == .restored(server: before, servers: [before], cache: nil, notice: nil))
+    #expect(store.result(ServerSharedKeys.savedServer) == .success(before))
+    #expect(store.result(ServerSharedKeys.savedServers) == .success([before]))
+    #expect(store.result(ServerSharedKeys.writeIntent) == .success(nil))
+  }
+
+  private final class GatedStorage: KeyValueStorage, @unchecked Sendable {
+    private struct State {
+      var blockSelected = false
+      var failSelected = false
+      var entered = false
+    }
+
+    private let inner = OpenCodeCore.InMemoryStorage()
+    private let state = Mutex(State())
+    private let gate = DispatchSemaphore(value: 0)
+
+    func blockSelectedWrite(failing: Bool) {
+      state.withLock {
+        $0.blockSelected = true
+        $0.failSelected = failing
+        $0.entered = false
+      }
+    }
+
+    var hasEntered: Bool { state.withLock { $0.entered } }
+
+    func release() { gate.signal() }
+
+    func read(_ key: String) -> StorageRead { inner.read(key) }
+
+    func write(_ data: Data, for key: String) -> StorageWrite {
+      let action = state.withLock { value -> (block: Bool, fail: Bool) in
+        guard key == ServerSharedKeys.savedServer.name, value.blockSelected else {
+          return (false, false)
+        }
+        value.blockSelected = false
+        value.entered = true
+        return (true, value.failSelected)
+      }
+      if action.block {
+        gate.wait()
+        if action.fail { return .failure(.unavailable) }
+      }
+      return inner.write(data, for: key)
+    }
+
+    func delete(_ key: String) -> StorageWrite { inner.delete(key) }
+  }
+
+  @Test("a failed older edit cannot erase a newer selected server")
+  func concurrentNewerSelectionSurvivesFailure() async {
+    let keychain = GatedStorage()
+    let store = store(keychain)
+    seed(store)
+    let newer = OpenCodeServer(url: "http://10.0.0.9:4096", password: "newer")
+    keychain.blockSelectedWrite(failing: true)
+
+    let olderTask = Task.detached { () -> Result<ServerWriteTransaction.Outcome, ServerWriteTransaction.Failure> in
+      ServerWriteTransaction.save(server: after, servers: [after, before], store: store)
+    }
+    while !keychain.hasEntered { try? await Task.sleep(for: .milliseconds(5)) }
+    let newerTask = Task.detached { () -> Result<ServerWriteTransaction.Outcome, ServerWriteTransaction.Failure> in
+      ServerWriteTransaction.save(server: newer, servers: [newer, before], store: store)
+    }
+    keychain.release()
+
+    let older = await olderTask.value
+    let newerResult = await newerTask.value
+    #expect(older == .failure(.storage(.unavailable)))
+    #expect(newerResult == .success(.init(server: newer, servers: [newer, before])))
+    #expect(store.result(ServerSharedKeys.savedServer) == .success(newer))
+    #expect(store.result(ServerSharedKeys.savedServers) == .success([newer, before]))
+    #expect(store.result(ServerSharedKeys.writeIntent) == .success(nil))
+  }
+
+  @Test("a successful older edit returns the actual preserved newer selection")
+  func successfulOlderReturnsActualSelection() {
+    let newer = OpenCodeServer(url: "http://10.0.0.9:4096", password: "newer")
+    let store = store()
+    #expect(store.write(newer, for: ServerSharedKeys.savedServer) == .success)
+    #expect(store.write([newer, before], for: ServerSharedKeys.savedServers) == .success)
+
+    let result = ServerWriteTransaction.save(
+      server: newer,
+      servers: [newer, after, before],
+      store: store
+    )
+    #expect(result == .success(.init(server: newer, servers: [newer, after, before])))
+    #expect(store.result(ServerSharedKeys.savedServer) == .success(newer))
+    #expect(store.result(ServerSharedKeys.savedServers) == .success([newer, after, before]))
+    #expect(store.result(ServerSharedKeys.writeIntent) == .success(nil))
+  }
+
+  @Test("a failed rollback keeps the intent until a later restart recovers it")
+  func failedRollbackRemainsRecoverable() {
+    let keychain = ScriptedStorage()
+    let store = store(keychain)
+    seed(store)
+    // Intent and list writes succeed; the selected write and the rollback's list write fail.
+    keychain.setFailAt([5, 6])
+    let result = ServerWriteTransaction.save(server: after, servers: [after], store: store)
+    #expect(result == .failure(.storage(.unavailable)))
+    let originalIntent: ServerWriteIntent
+    if case .value(.some(let intent)) = store.read(ServerSharedKeys.writeIntent) {
+      originalIntent = intent
+    } else {
+      Issue.record("the unfinished intent was lost")
+      return
+    }
+
+    // Another transaction cannot overwrite an unresolved intent.
+    keychain.setFailAt([7])
+    let blocked = ServerWriteTransaction.save(
+      server: OpenCodeServer(url: "http://10.0.0.10:4096", password: "blocked"),
+      servers: [],
+      store: store
+    )
+    #expect(blocked == .failure(.storage(.unavailable)))
+    #expect(store.result(ServerSharedKeys.writeIntent) == .success(originalIntent))
+
+    if case .value(.some(let intent)) = store.read(ServerSharedKeys.writeIntent) {
+      #expect(intent.beforeServer == before)
+      #expect(intent.beforeServers == [before])
+      #expect(intent.afterServer == after)
+      #expect(intent.afterServers == [after])
+    } else {
+      Issue.record("the unfinished intent was lost")
+    }
+
+    keychain.setFailAt(Set<Int>())
     let restored = AppRestoreResult.read(store)
     #expect(restored == .restored(server: before, servers: [before], cache: nil, notice: nil))
     #expect(store.result(ServerSharedKeys.savedServer) == .success(before))
