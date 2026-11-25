@@ -195,6 +195,12 @@ public struct ComposerFeature: Sendable {
     case task
     case restoreRetried
     case textChanged(String)
+    case textEdited(
+      oldText: String,
+      newText: String,
+      range: NSRange,
+      replacementLength: Int
+    )
     case caretChanged(text: String, caret: Int?, isComposing: Bool)
     case modelPickerOpened
     case modelPicked(ModelRef?)
@@ -205,7 +211,6 @@ public struct ComposerFeature: Sendable {
       serverID: String,
       directory: String?,
       skills: [ServerSkill],
-      agents: [ServerAgent],
       commands: [ServerCommand]
     )
     case autocompleteCatalogFailed
@@ -329,6 +334,7 @@ public struct ComposerFeature: Sendable {
     case preview(String)
     case release
     case autocompleteCatalog(serverID: String, directory: String?)
+    case modelCatalog(serverID: String, directory: String?)
     case autocompleteFiles(Int)
     case agentCatalog(serverID: String, directory: String?)
   }
@@ -365,6 +371,18 @@ public struct ComposerFeature: Sendable {
         state.problem = nil
         let autocomplete = updateAutocomplete(text: text, caret: text.utf16.count, isComposing: false, state: &state)
         return .merge(autocomplete, scheduleSave(state: &state))
+
+      case .textEdited(_, _, let range, let replacementLength):
+        let next = ComposerMentionBuilder.applyingEdit(
+          range: range,
+          replacementLength: replacementLength,
+          chips: state.chips
+        )
+        guard next != state.chips else { return .none }
+        state.chips = next
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+        return scheduleSave(state: &state)
 
       case .caretChanged(let text, let caret, let isComposing):
         if text != state.draft {
@@ -422,11 +440,10 @@ public struct ComposerFeature: Sendable {
         }
         return .none
 
-      case .autocompleteCatalogLoaded(let serverID, let directory, let skills, let agents, let commands):
+      case .autocompleteCatalogLoaded(let serverID, let directory, let skills, let commands):
         guard serverID == state.serverID, directory == state.uploadDirectory else { return .none }
         state.autocomplete.isLoadingCatalog = false
         state.autocomplete.skills = skills
-        state.autocomplete.agents = agents
         state.autocomplete.commands = commands
         state.autocomplete.loadedDirectory = directory
         state.autocomplete.problem = nil
@@ -464,9 +481,7 @@ public struct ComposerFeature: Sendable {
           let suggestion = state.autocomplete.selected(),
           let applied = ComposerMentionBuilder.apply(suggestion, trigger: trigger, to: state.draft)
         else { return .none }
-        if !state.chips.contains(where: { $0.id == applied.chip.id && $0.token == applied.chip.token }) {
-          state.chips.append(applied.chip)
-        }
+        state.chips.append(applied.chip)
         state.draft = applied.text
         state.revision += 1
         state.contentRevision += 1
@@ -1329,7 +1344,7 @@ public struct ComposerFeature: Sendable {
           await send(.catalogLoaded(serverID: serverID, directory: directory, result: .failure(.init(.unreachable))))
         }
       }
-      .cancellable(id: CancelID.autocompleteCatalog(serverID: serverID, directory: directory), cancelInFlight: true),
+      .cancellable(id: CancelID.modelCatalog(serverID: serverID, directory: directory), cancelInFlight: true),
       .run { send in
         do {
           let agents = try await client.agents(server, directory, false)
@@ -1344,14 +1359,12 @@ public struct ComposerFeature: Sendable {
       .run { send in
         do {
           async let skills = client.skills(server, directory)
-          async let agents = client.agents(server, directory, false)
           async let commands = client.commands(server, directory)
           await send(
             .autocompleteCatalogLoaded(
               serverID: serverID,
               directory: directory,
               skills: try await skills,
-              agents: try await agents,
               commands: try await commands
             )
           )
@@ -1372,10 +1385,6 @@ public struct ComposerFeature: Sendable {
     guard !isComposing else {
       state.autocomplete.close()
       return .none
-    }
-    let validIDs = Set(ComposerMentionBuilder.ranges(text: text, chips: state.chips).map(\.chip.id))
-    if validIDs.count != state.chips.count {
-      state.chips.removeAll { !validIDs.contains($0.id) }
     }
     guard let trigger = ComposerAutocompleteTrigger.detect(text: text, caret: caret, chips: state.chips),
       trigger.key != state.autocomplete.dismissedKey

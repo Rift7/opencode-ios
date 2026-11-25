@@ -20,9 +20,19 @@ struct FileViewerView: View {
           ProgressView()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .code(let preview):
-          ScrollView([.vertical, .horizontal]) {
-            CodePreviewText(preview: preview)
-              .padding()
+          if store.wrapsLines {
+            ScrollView(.vertical) {
+              CodePreviewText(preview: preview, wrapsLines: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+            }
+            .accessibilityIdentifier("file-viewer-code-wrapped")
+          } else {
+            ScrollView([.vertical, .horizontal]) {
+              CodePreviewText(preview: preview, wrapsLines: false)
+                .padding()
+            }
+            .accessibilityIdentifier("file-viewer-code-unwrapped")
           }
         case .image(let data):
           ScrollView([.vertical, .horizontal]) {
@@ -55,6 +65,15 @@ struct FileViewerView: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
       }
+      .alert(
+        AppCopy.text("media.file_wrap_failed"),
+        isPresented: Binding(
+          get: { store.wrapLinesProblem },
+          set: { if !$0 { store.send(.wrapLinesProblemDismissed) } }
+        )
+      ) {
+        Button(AppCopy.text("common.done")) {}
+      }
       .navigationTitle(store.title)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -63,11 +82,21 @@ struct FileViewerView: View {
             .accessibilityIdentifier("file-viewer-close")
         }
         ToolbarItemGroup(placement: .primaryAction) {
-          if let text = store.text {
-            ShareLink(item: text) {
-              Image(systemName: "square.and.arrow.up")
+          if store.text != nil {
+            Button {
+              store.send(.wrapLinesToggled)
+            } label: {
+              Image(systemName: store.wrapsLines ? "text.alignleft" : "arrow.left.and.right")
             }
-            .accessibilityLabel(AppCopy.text("media.file_share"))
+            .accessibilityLabel(AppCopy.text("media.file_wrap_lines"))
+            .accessibilityValue(store.wrapsLines ? "wrapped" : "scrolls")
+            .accessibilityIdentifier("file-viewer-wrap-lines")
+            if let text = store.text {
+              ShareLink(item: text) {
+                Image(systemName: "square.and.arrow.up")
+              }
+              .accessibilityLabel(AppCopy.text("media.file_share"))
+            }
           }
         }
       }
@@ -87,6 +116,7 @@ struct FileViewerView: View {
 
 private struct CodePreviewText: View {
   let preview: CodePreview
+  var wrapsLines: Bool = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -106,7 +136,8 @@ private struct CodePreviewText: View {
             .font(OpenCodeFonts.font(.codeSmall))
             .foregroundStyle(OpenCodeColors.color(.textBody))
             .textSelection(.enabled)
-            .fixedSize(horizontal: true, vertical: false)
+            .fixedSize(horizontal: !wrapsLines, vertical: true)
+            .frame(maxWidth: wrapsLines ? .infinity : nil, alignment: .leading)
         }
         .padding(.vertical, 1)
         .background(

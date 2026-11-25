@@ -110,12 +110,65 @@ struct SettingsFeatureTests {
     form.address = "http://10.0.0.3:4096"
     state.serverForm = form
     let store = store(state: state)
+    await store.send(.serverFormSubmitted)
+    let operationID = store.state.serverFormOperation!
     await store.send(
-      .serverSaveResult(previous: server, result: .failure(.denied))
+      .serverSaveResult(operationID: operationID, previous: server, result: .failure(.denied))
     )
     #expect(store.state.server == server)
     #expect(store.state.serverForm?.address == "http://10.0.0.3:4096")
     #expect(store.state.serverFormSaveProblem == .storage(.denied))
+  }
+
+  @Test("duplicate submissions and late results cannot overwrite a newer edit")
+  func serverWriteFencing() async {
+    var state = SettingsFeature.State(server: server)
+    var form = ServerEditForm(server)
+    form.address = "http://10.0.0.3:4096"
+    state.serverForm = form
+    let store = store(state: state)
+
+    await store.send(.serverFormSubmitted)
+    let first = store.state.serverFormOperation!
+    await store.send(.serverFormSubmitted)
+    #expect(store.state.serverFormOperation == first)
+
+    await store.send(
+      .serverSaveResult(
+        operationID: UUID(),
+        previous: server,
+        result: .success(server)
+      )
+    )
+    #expect(store.state.serverFormOperation == first)
+    await store.send(
+      .serverSaveResult(operationID: first, previous: server, result: .success(server))
+    )
+    #expect(store.state.serverFormOperation == nil)
+    #expect(store.state.server == server)
+  }
+
+  @Test("an unavailable or corrupt appearance read is reported")
+  func appearanceStorageProblem() {
+    let unavailable = SettingsFeature.readPreferences(
+      OpenCodeCore.SharedStore(
+        defaults: FailingStorage(failure: .denied),
+        keychain: OpenCodeCore.InMemoryStorage()
+      )
+    )
+    #expect(unavailable.problem == .storage(.denied))
+    #expect(unavailable.preferences.appearance == .system)
+
+    let corruptDefaults = OpenCodeCore.InMemoryStorage()
+    _ = corruptDefaults.write(Data("not json".utf8), for: SharedKeys.appearanceColorScheme.name)
+    let corrupt = SettingsFeature.readPreferences(
+      OpenCodeCore.SharedStore(
+        defaults: corruptDefaults,
+        keychain: OpenCodeCore.InMemoryStorage()
+      )
+    )
+    #expect(corrupt.problem == .corrupt)
+    #expect(corrupt.preferences.appearance == .system)
   }
 
   @Test("diagnostics contain typed facts and no synthetic secret")

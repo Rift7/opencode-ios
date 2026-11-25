@@ -266,6 +266,14 @@ public enum AppRestoreResult: Equatable, Sendable {
   case storageUnavailable(StorageFailure)
 
   public static func read(_ store: SharedStore) -> AppRestoreResult {
+    switch ServerWriteTransaction.recover(store) {
+    case .failure(.storage(let failure)):
+      return .storageUnavailable(failure)
+    case .failure(.corrupt):
+      return .corrupt
+    case .success:
+      break
+    }
     let saved = store.read(ServerSharedKeys.savedServer)
     let list = store.read(ServerSharedKeys.savedServers)
     let cache = store.read(ServerSharedKeys.cachedSummaries)
@@ -724,6 +732,25 @@ public struct ConnectionFeature {
 
 // MARK: - App parent
 
+/// One server edit/removal write in flight. Its identity fences duplicate submissions and late
+/// completions; `previous` is the server whose records this operation is changing.
+public struct ServerWriteOperation: Equatable, Sendable {
+  public enum Kind: Equatable, Sendable {
+    case save(updated: OpenCodeServer)
+    case remove
+  }
+
+  public var id: UUID
+  public var kind: Kind
+  public var previous: OpenCodeServer
+
+  public init(id: UUID, kind: Kind, previous: OpenCodeServer) {
+    self.id = id
+    self.kind = kind
+    self.previous = previous
+  }
+}
+
 @Reducer
 public struct AppFeature {
   @ObservableState
@@ -739,6 +766,10 @@ public struct AppFeature {
     /// A scanned pairing payload waiting for the Settings cover to finish dismissing. In memory
     /// only; it is never logged or copied.
     public var pendingScannedPairing: String?
+    /// Native-input and file-viewer preferences, loaded from the shared store and updated by
+    /// Settings after a successful write.
+    public var returnKeySends: Bool
+    public var fileViewerWrapsLines: Bool
     public var form: ServerForm?
     public var pendingPairing: PairingConfirmation?
     public var pairingAttempt: PairingAttempt?
@@ -753,6 +784,7 @@ public struct AppFeature {
     public var pendingDismissal: PendingSessionDismissal?
     public var pendingDraftTransfers: [UUID: DraftTransfer]
     public var retainedDraftTransfers: [ComposerDraftKey: DraftTransfer]
+    public var serverWrite: ServerWriteOperation?
 
     var didStart = false
     var pendingSave: OpenCodeServer?
@@ -770,6 +802,8 @@ public struct AppFeature {
       savedServers: [OpenCodeServer] = [],
       settings: SettingsFeature.State? = nil,
       pendingScannedPairing: String? = nil,
+      returnKeySends: Bool = false,
+      fileViewerWrapsLines: Bool = false,
       form: ServerForm? = nil,
       pendingPairing: PairingConfirmation? = nil,
       pairingAttempt: PairingAttempt? = nil,
@@ -783,7 +817,8 @@ public struct AppFeature {
       showsReplaceSavedDataConfirmation: Bool = false,
       pendingDismissal: PendingSessionDismissal? = nil,
       pendingDraftTransfers: [UUID: DraftTransfer] = [:],
-      retainedDraftTransfers: [ComposerDraftKey: DraftTransfer] = [:]
+      retainedDraftTransfers: [ComposerDraftKey: DraftTransfer] = [:],
+      serverWrite: ServerWriteOperation? = nil
     ) {
       self.restore = restore
       self.connection = connection
@@ -794,6 +829,8 @@ public struct AppFeature {
       self.savedServers = savedServers
       self.settings = settings
       self.pendingScannedPairing = pendingScannedPairing
+      self.returnKeySends = returnKeySends
+      self.fileViewerWrapsLines = fileViewerWrapsLines
       self.form = form
       self.pendingPairing = pendingPairing
       self.pairingAttempt = pairingAttempt
@@ -808,6 +845,7 @@ public struct AppFeature {
       self.pendingDismissal = pendingDismissal
       self.pendingDraftTransfers = pendingDraftTransfers
       self.retainedDraftTransfers = retainedDraftTransfers
+      self.serverWrite = serverWrite
     }
 
     public static func == (lhs: State, rhs: State) -> Bool {
@@ -820,6 +858,8 @@ public struct AppFeature {
         && lhs.savedServers == rhs.savedServers
         && lhs.settings == rhs.settings
         && lhs.pendingScannedPairing == rhs.pendingScannedPairing
+        && lhs.returnKeySends == rhs.returnKeySends
+        && lhs.fileViewerWrapsLines == rhs.fileViewerWrapsLines
         && lhs.form == rhs.form
         && lhs.pendingPairing == rhs.pendingPairing
         && lhs.pairingAttempt == rhs.pairingAttempt
@@ -834,6 +874,7 @@ public struct AppFeature {
         && lhs.pendingDismissal == rhs.pendingDismissal
         && lhs.pendingDraftTransfers == rhs.pendingDraftTransfers
         && lhs.retainedDraftTransfers == rhs.retainedDraftTransfers
+        && lhs.serverWrite == rhs.serverWrite
     }
   }
 
@@ -889,8 +930,10 @@ public struct AppFeature {
     case settings(SettingsFeature.Action)
     case settingsOpened
     case settingsDiagnosticContextChanged
-    case settingsSavedCurrentServer(OpenCodeServer, servers: [OpenCodeServer])
-    case settingsForgottenServer(OpenCodeServer, servers: [OpenCodeServer], saved: OpenCodeServer?)
+    case serverWriteFinished(
+      id: UUID,
+      result: Result<ServerWriteTransaction.Outcome, ServerWriteTransaction.Failure>
+    )
     case settingsCoverDismissed
   }
 
@@ -898,6 +941,7 @@ public struct AppFeature {
     case restore
     case path
     case pairing
+    case serverWrite(UUID)
   }
 
   @Dependency(\.sharedStore) private var store
@@ -919,6 +963,9 @@ public struct AppFeature {
       case .task:
         guard !state.didStart else { return .none }
         state.didStart = true
+        let read = SettingsFeature.readPreferences(store)
+        state.returnKeySends = read.preferences.returnKeySends
+        state.fileViewerWrapsLines = read.preferences.fileViewerWrapsLines
         if state.isPinnedForUITest { return .none }
         let scratch = mediaScratch
         let files = mediaFiles
@@ -1306,9 +1353,11 @@ public struct AppFeature {
         state.notice = nil
         return .none
 
-      case .settingsOpened, .settingsDiagnosticContextChanged, .settingsSavedCurrentServer,
-        .settingsForgottenServer, .settings:
+      case .settingsOpened, .settingsDiagnosticContextChanged, .settings:
         return reduceSettings(action, state: &state)
+
+      case .serverWriteFinished(let id, let result):
+        return serverWriteFinished(id: id, result: result, state: &state)
 
       case .settingsCoverDismissed:
         guard let payload = state.pendingScannedPairing else { return .none }
@@ -1404,7 +1453,9 @@ public struct AppFeature {
           selection: selection,
           session: home.session(selection.sessionID),
           isLive: homeIsLive(state),
-          isPinned: state.isPinnedForUITest
+          isPinned: state.isPinnedForUITest,
+          returnKeySends: state.returnKeySends,
+          fileViewerWrapsLines: state.fileViewerWrapsLines
         )
         raiseDraftWatermark(into: &state)
         return .merge(
@@ -1437,7 +1488,9 @@ public struct AppFeature {
           selection: selection,
           session: nil,
           isLive: homeIsLive(state),
-          isPinned: state.isPinnedForUITest
+          isPinned: state.isPinnedForUITest,
+          returnKeySends: state.returnKeySends,
+          fileViewerWrapsLines: state.fileViewerWrapsLines
         )
         raiseDraftWatermark(into: &state)
         return .merge(
@@ -1482,6 +1535,10 @@ public struct AppFeature {
         return .merge(transfer, retryRetainedEffect(state: state))
 
       case .home:
+        return .none
+
+      case .session(.delegate(.wrapsLinesChanged(let enabled))):
+        state.fileViewerWrapsLines = enabled
         return .none
 
       case .session(.delegate(.dismiss)):
@@ -1614,93 +1671,49 @@ public struct AppFeature {
       guard state.settings != nil else { return .none }
       return .send(.settings(.diagnosticsContextChanged(diagnosticFacts(state))))
 
-    case .settingsSavedCurrentServer(let updated, let servers):
-      state.savedServer = updated
-      state.savedServers = servers
-      state.settings?.server = updated
-      if let home = state.home, home.serverID == updated.persistenceID {
-        return connect(to: updated, state: &state)
-      }
-      return .none
-
-    case .settingsForgottenServer(let forgotten, let servers, let saved):
-      state.savedServers = servers
-      state.savedServer = saved
-      guard state.savedServer?.persistenceID != forgotten.persistenceID else { return .none }
-      if state.connection?.server.persistenceID == forgotten.persistenceID || state.savedServer == nil {
-        state.connection = nil
-        state.home = nil
-        state.session = nil
-        state.sessionDestination = nil
-      }
-      return .none
-
     case .settings(let settingsAction):
       switch settingsAction {
       case .delegate(.close):
         state.settings = nil
         return .none
 
-      case .delegate(.saveServer(let previous, let updated)):
-        guard state.savedData.isReadable else {
-          return .send(.settings(.serverSaveResult(previous: previous, result: .failure(.unavailable))))
+      case .delegate(.saveServer(let operationID, let previous, let updated)):
+        guard state.serverWrite == nil, state.savedData.isReadable else {
+          return .send(
+            .settings(
+              .serverSaveResult(operationID: operationID, previous: previous, result: .failure(.unavailable))
+            )
+          )
         }
         let others = state.savedServers.filter { !previous.supersedes($0) && !updated.supersedes($0) }
         let servers = [updated] + others
-        let current = state.savedServer
-        let isCurrent = current?.persistenceID == previous.persistenceID || current == previous
-        let nextSaved = isCurrent ? updated : current
+        let selected = isCurrentServer(previous, state) ? updated : state.savedServer
+        state.serverWrite = ServerWriteOperation(
+          id: operationID,
+          kind: .save(updated: updated),
+          previous: previous
+        )
         let store = store
         return .run { send in
-          let listWrite = store.write(servers, for: ServerSharedKeys.savedServers)
-          if case .failure(let failure) = listWrite {
-            await send(.settings(.serverSaveResult(previous: previous, result: .failure(failure))))
-            return
-          }
-          let savedWrite: StorageWrite
-          if let nextSaved {
-            savedWrite = store.write(nextSaved, for: ServerSharedKeys.savedServer)
-          } else {
-            savedWrite = .success
-          }
-          if case .failure(let failure) = savedWrite {
-            await send(.settings(.serverSaveResult(previous: previous, result: .failure(failure))))
-            return
-          }
-          await send(.settings(.serverSaveResult(previous: previous, result: .success(updated))))
-          await send(.settings(.delegate(.close)))
-          if isCurrent {
-            await send(.settingsSavedCurrentServer(updated, servers: servers))
-          }
+          let result = ServerWriteTransaction.save(server: selected, servers: servers, store: store)
+          await send(.serverWriteFinished(id: operationID, result: result))
         }
+        .cancellable(id: CancelID.serverWrite(operationID), cancelInFlight: true)
 
       case .delegate(.forgetServer(let server)):
-        guard state.savedData.isReadable else {
+        guard state.serverWrite == nil, state.savedData.isReadable else {
           return .send(.settings(.serverForgetResult(server: server, result: .failure(.unavailable))))
         }
         let servers = state.savedServers.filter { !server.supersedes($0) }
-        let isCurrent = state.savedServer?.persistenceID == server.persistenceID || state.savedServer == server
-        let nextSaved = isCurrent ? servers.first : state.savedServer
+        let selected = isCurrentServer(server, state) ? servers.first : state.savedServer
+        let operationID = uuid.uuid()
+        state.serverWrite = ServerWriteOperation(id: operationID, kind: .remove, previous: server)
         let store = store
         return .run { send in
-          let listWrite = store.write(servers, for: ServerSharedKeys.savedServers)
-          if case .failure(let failure) = listWrite {
-            await send(.settings(.serverForgetResult(server: server, result: .failure(failure))))
-            return
-          }
-          let savedWrite: StorageWrite
-          if let nextSaved {
-            savedWrite = store.write(nextSaved, for: ServerSharedKeys.savedServer)
-          } else {
-            savedWrite = store.delete(ServerSharedKeys.savedServer)
-          }
-          if case .failure(let failure) = savedWrite {
-            await send(.settings(.serverForgetResult(server: server, result: .failure(failure))))
-            return
-          }
-          await send(.settings(.serverForgetResult(server: server, result: .removed)))
-          await send(.settingsForgottenServer(server, servers: servers, saved: nextSaved))
+          let result = ServerWriteTransaction.remove(server: selected, servers: servers, store: store)
+          await send(.serverWriteFinished(id: operationID, result: result))
         }
+        .cancellable(id: CancelID.serverWrite(operationID), cancelInFlight: true)
 
       case .delegate(.pairingPayload(let payload)):
         state.pendingScannedPairing = payload
@@ -1710,6 +1723,19 @@ public struct AppFeature {
       case .delegate(.inAppBrowserChanged(let enabled)):
         guard state.session != nil else { return .none }
         return .send(.session(.browserExperimentChanged(enabled: enabled)))
+
+      case .delegate(.preferencesChanged(let preferences)):
+        state.returnKeySends = preferences.returnKeySends
+        state.fileViewerWrapsLines = preferences.fileViewerWrapsLines
+        guard state.session != nil else { return .none }
+        return .send(
+          .session(
+            .preferencesChanged(
+              returnKeySends: preferences.returnKeySends,
+              fileViewerWrapsLines: preferences.fileViewerWrapsLines
+            )
+          )
+        )
 
       case .delegate:
         return .none
@@ -1721,6 +1747,90 @@ public struct AppFeature {
       }
     default:
       return .none
+    }
+  }
+
+  private func isCurrentServer(_ server: OpenCodeServer, _ state: State) -> Bool {
+    state.savedServer?.persistenceID == server.persistenceID
+      || state.connection?.server.persistenceID == server.persistenceID
+  }
+
+  private func serverWriteFinished(
+    id: UUID,
+    result: Result<ServerWriteTransaction.Outcome, ServerWriteTransaction.Failure>,
+    state: inout State
+  ) -> Effect<Action> {
+    guard let operation = state.serverWrite, operation.id == id else { return .none }
+    state.serverWrite = nil
+    switch (operation.kind, result) {
+    case (.save(let updated), .success(let outcome)):
+      let wasCurrent = isCurrentServer(operation.previous, state)
+      state.savedServers = outcome.servers
+      if wasCurrent {
+        state.savedServer = updated
+      }
+      var effects: [Effect<Action>] = [
+        .send(
+          .settings(
+            .serverSaveResult(operationID: id, previous: operation.previous, result: .success(updated))
+          )
+        ),
+        .send(.settings(.delegate(.close))),
+      ]
+      if wasCurrent {
+        let transfer = transferDraft(from: state.session, state: &state)
+        effects.append(transfer)
+        effects.append(connect(to: updated, state: &state))
+      }
+      return .merge(effects)
+
+    case (.save, .failure(let failure)):
+      return .send(
+        .settings(
+          .serverSaveResult(
+            operationID: id,
+            previous: operation.previous,
+            result: .failure(storageFailure(failure))
+          )
+        )
+      )
+
+    case (.remove, .success(let outcome)):
+      let wasCurrent = isCurrentServer(operation.previous, state)
+      state.savedServers = outcome.servers
+      if wasCurrent {
+        state.savedServer = outcome.server
+      }
+      var effects: [Effect<Action>] = [
+        .send(.settings(.serverForgetResult(server: operation.previous, result: .removed)))
+      ]
+      if wasCurrent {
+        let transfer = transferDraft(from: state.session, state: &state)
+        state.connection = nil
+        state.home = nil
+        state.session = nil
+        state.sessionDestination = nil
+        state.pendingDismissal = nil
+        effects.append(transfer)
+      }
+      return .merge(effects)
+
+    case (.remove, .failure(let failure)):
+      return .send(
+        .settings(
+          .serverForgetResult(
+            server: operation.previous,
+            result: .failure(storageFailure(failure))
+          )
+        )
+      )
+    }
+  }
+
+  private func storageFailure(_ failure: ServerWriteTransaction.Failure) -> StorageFailure {
+    switch failure {
+    case .storage(let storage): storage
+    case .corrupt: .encoding
     }
   }
 

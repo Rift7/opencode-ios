@@ -1,8 +1,9 @@
 import Foundation
 import OpenCodeServer
 
-/// One semantic mention or command choice kept with the draft. `token` is the visible text; the
-/// wire mention range is derived from it at send time, so an edited token contributes nothing.
+/// One semantic mention or command occurrence kept with the draft. `id` is the occurrence
+/// identity; `suggestionID` only names the catalogue row it came from. The UTF-16 range is moved by
+/// editor operations, never rediscovered by searching for the display token at send time.
 public struct ComposerMentionChip: Codable, Identifiable, Equatable, Sendable {
   public enum Kind: String, Codable, Sendable {
     case skill
@@ -11,22 +12,90 @@ public struct ComposerMentionChip: Codable, Identifiable, Equatable, Sendable {
     case command
   }
 
-  public var id: String
+  public var occurrenceID: String
+  public var suggestionID: String
   public var kind: Kind
   /// The skill ID, agent ID, remote file URI, or command name.
   public var value: String
   public var token: String
   public var title: String
+  /// UTF-16 span in the draft.
+  public var start: Int
+  public var end: Int
 
-  public init(id: String, kind: Kind, value: String, token: String, title: String) {
-    self.id = id
+  public var id: String { occurrenceID }
+
+  public init(
+    id suggestionID: String,
+    kind: Kind,
+    value: String,
+    token: String,
+    title: String,
+    occurrenceID: String = UUID().uuidString.lowercased(),
+    start: Int = 0,
+    end: Int = 0
+  ) {
+    self.occurrenceID = occurrenceID
+    self.suggestionID = suggestionID
     self.kind = kind
     self.value = value
     self.token = token
     self.title = title
+    self.start = start
+    self.end = end
   }
 
   public var isMention: Bool { kind != .command }
+
+  public var isValid: Bool { start >= 0 && end > start }
+
+  private enum CodingKeys: String, CodingKey {
+    case occurrenceID, suggestionID, id, kind, value, token, title, start, end
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    occurrenceID =
+      try container.decodeIfPresent(String.self, forKey: .occurrenceID)
+      ?? UUID().uuidString.lowercased()
+    suggestionID =
+      try container.decodeIfPresent(String.self, forKey: .suggestionID)
+      ?? container.decode(String.self, forKey: .id)
+    kind = try container.decode(Kind.self, forKey: .kind)
+    value = try container.decode(String.self, forKey: .value)
+    token = try container.decode(String.self, forKey: .token)
+    title = try container.decode(String.self, forKey: .title)
+    start = try container.decodeIfPresent(Int.self, forKey: .start) ?? 0
+    end = try container.decodeIfPresent(Int.self, forKey: .end) ?? 0
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(occurrenceID, forKey: .occurrenceID)
+    try container.encode(suggestionID, forKey: .suggestionID)
+    try container.encode(kind, forKey: .kind)
+    try container.encode(value, forKey: .value)
+    try container.encode(token, forKey: .token)
+    try container.encode(title, forKey: .title)
+    try container.encode(start, forKey: .start)
+    try container.encode(end, forKey: .end)
+  }
+
+  /// Moves this chip for one UTF-16 replacement. A replacement touching or overlapping the token
+  /// invalidates the occurrence rather than searching for another matching token.
+  public func applyingEdit(range: NSRange, replacementLength: Int) -> ComposerMentionChip? {
+    let editStart = range.location
+    let editEnd = range.location + range.length
+    if editStart < end, editEnd > start { return nil }
+    if editEnd <= start {
+      var copy = self
+      let delta = replacementLength - range.length
+      copy.start = start + delta
+      copy.end = end + delta
+      return copy.isValid ? copy : nil
+    }
+    return self
+  }
 }
 
 public struct ComposerAutocompleteTrigger: Equatable, Sendable {
@@ -61,7 +130,7 @@ public struct ComposerAutocompleteTrigger: Equatable, Sendable {
     let limit = min(max(0, caret ?? units.count), units.count)
     guard limit > 0 else { return nil }
 
-    for range in resolvedRanges(text: text, chips: chips) where range.end == limit
+    for range in ComposerMentionBuilder.ranges(text: text, chips: chips) where range.end == limit
       || (range.start < limit && limit <= range.end)
     {
       return nil
@@ -353,7 +422,7 @@ public enum ComposerCatalogProblem: Equatable, Sendable {
   case couldNotLoad
 }
 
-/// A committed chip's UTF-16 span in the draft.
+/// A committed chip's validated UTF-16 span in the draft.
 public struct ComposerChipRange: Equatable, Sendable {
   public var chip: ComposerMentionChip
   public var start: Int
@@ -361,29 +430,20 @@ public struct ComposerChipRange: Equatable, Sendable {
 }
 
 public enum ComposerMentionBuilder {
-  /// Locates each chip's token in the draft. A chip whose token was edited away contributes no
-  /// mention, so a send can never carry a stale range.
+  /// Validates each chip's stored span against the current text. It never searches for the token:
+  /// an edited, moved or deleted occurrence contributes no mention.
   public static func ranges(text: String, chips: [ComposerMentionChip]) -> [ComposerChipRange] {
     let ns = text as NSString
-    var searchStart = 0
     var result: [ComposerChipRange] = []
     for chip in chips {
-      guard searchStart <= ns.length else { break }
-      let found = ns.range(
-        of: chip.token,
-        options: [],
-        range: NSRange(location: searchStart, length: ns.length - searchStart)
-      )
-      guard found.location != NSNotFound else { continue }
-      let end = found.location + found.length
-      let before = found.location == 0 ? nil : ns.character(at: found.location - 1)
-      let after = end >= ns.length ? nil : ns.character(at: end)
-      if let before, !isBoundary(before) { continue }
-      if let after, !isBoundary(after) { continue }
-      result.append(ComposerChipRange(chip: chip, start: found.location, end: end))
-      searchStart = found.location + found.length
+      guard chip.start >= 0, chip.end > chip.start, chip.end <= ns.length else { continue }
+      let value = ns.substring(with: NSRange(location: chip.start, length: chip.end - chip.start))
+      guard value == chip.token else { continue }
+      if chip.start > 0, !isBoundary(ns.character(at: chip.start - 1)) { continue }
+      if chip.end < ns.length, !isBoundary(ns.character(at: chip.end)) { continue }
+      result.append(ComposerChipRange(chip: chip, start: chip.start, end: chip.end))
     }
-    return result
+    return result.sorted { $0.start < $1.start }
   }
 
   private static func isBoundary(_ unit: unichar) -> Bool {
@@ -423,12 +483,13 @@ public enum ComposerMentionBuilder {
     return AutocompleteMentions(files: files, agents: agents, skills: skills)
   }
 
-  /// Applies a suggestion and returns the new text and chip. The trigger range is replaced in
-  /// UTF-16 offsets, never by searching for display text.
+  /// Applies a suggestion and returns the new text and a fresh occurrence. The trigger range is
+  /// replaced in UTF-16 offsets; the chip owns that exact new span.
   public static func apply(
     _ suggestion: ComposerAutocompleteSuggestion,
     trigger: ComposerAutocompleteTrigger,
-    to text: String
+    to text: String,
+    occurrenceID: String = UUID().uuidString.lowercased()
   ) -> (text: String, chip: ComposerMentionChip)? {
     let ns = text as NSString
     guard trigger.start >= 0, trigger.end >= trigger.start, trigger.end <= ns.length else {
@@ -439,11 +500,19 @@ public enum ComposerMentionBuilder {
       in: NSRange(location: trigger.start, length: trigger.end - trigger.start),
       with: replacement
     )
-    return (updated, suggestion.chip)
+    var chip = suggestion.chip
+    chip.occurrenceID = occurrenceID
+    chip.start = trigger.start
+    chip.end = trigger.start + suggestion.token.utf16.count
+    return (updated, chip)
   }
 
-}
-
-private func resolvedRanges(text: String, chips: [ComposerMentionChip]) -> [ComposerChipRange] {
-  ComposerMentionBuilder.ranges(text: text, chips: chips)
+  /// Moves every valid occurrence for one edit. Chips touched by the edit are removed.
+  public static func applyingEdit(
+    range: NSRange,
+    replacementLength: Int,
+    chips: [ComposerMentionChip]
+  ) -> [ComposerMentionChip] {
+    chips.compactMap { $0.applyingEdit(range: range, replacementLength: replacementLength) }
+  }
 }

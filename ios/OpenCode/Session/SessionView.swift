@@ -95,9 +95,10 @@ struct SessionView: View {
     .sheet(item: $store.scope(state: \.fileViewer, action: \.fileViewer), onDismiss: {
       store.send(.fileViewerClosed)
     }) { viewer in
-      FileViewerView(store: viewer) {
-        store.send(.fileViewerClosed)
-      }
+      FileViewerView(
+        store: viewer,
+        onClose: { store.send(.fileViewerClosed) }
+      )
     }
     .fullScreenCover(item: $store.scope(state: \.mediaViewer, action: \.mediaViewer), onDismiss: {
       store.send(.mediaViewerClosed)

@@ -301,7 +301,11 @@ Media surfaces: `ios/OpenCode/Media/*`, `ios/OpenCode/Composer/{ComposerViews,Ca
   shell reports a result. A failed write is shown, never presented as saved.
 - Preference keys are the audited ones: `appearance-color-scheme`, `return-key-sends`,
   `file-viewer-wraps-lines`, `experimental-in-app-browser`, `onboarding-completed`. A delayed restore
-  fills only untouched fields.
+  fills only untouched fields, and every successful write reaches the App/Session consumers.
+- Return is consumed by the `UITextView` bridge: plain Return sends only when enabled, Shift+Return
+  always inserts a newline, marked text is untouched, and the request-answer bar routes its Return to
+  the request submit action. Wrap Lines is consumed by the file viewer and can be toggled live there;
+  both preferences have before/after-relaunch simulator journeys.
 - Only the In-App Browser experiment is surfaced. Disabling it closes an open browser through
   `SessionFeature.browserExperimentChanged`. Do not add inert switches for features owned by P12/P13.
 - Custom headers are token-character names with no line breaks; `Authorization`, `Proxy-Authorization`,
@@ -320,12 +324,17 @@ Media surfaces: `ios/OpenCode/Media/*`, `ios/OpenCode/Composer/{ComposerViews,Ca
   catalogue is loaded per server+directory; file results carry a generation and are ignored when the
   server, directory or query changed. Marked IME text closes suggestions rather than committing.
 - `SessionFeature.startComposerSend` applies the agent then model once, immediately before the prompt,
-  for ordinary and first sends; queued delivery does not change the run's model. A refused switch fails
-  the send. Model, agent and chips are persisted in the draft, failed send and outbound record.
-- `ComposerMentionBuilder` locates chip tokens in the draft, drops edited tokens, and emits the audited
-  `agents`, `skills` and `files` mention shapes with UTF-16 ranges and `file://` URIs.
+  for ordinary and first sends; queued delivery does not change the run's model. Cancellation is checked
+  after each dependency returns and before every later mutation. A refused switch fails the send. Model,
+  agent and chips are persisted in the draft, failed send and outbound record.
+- Each mention occurrence owns a unique ID and UTF-16 range. The text bridge reports the minimal edit;
+  ranges before it shift, edits touching the token invalidate it, and `ComposerMentionBuilder` never
+  searches for display text at send time. Occurrence identity and ranges are persisted in drafts.
 - `FolderBrowserFeature` reads `fs/list` on demand, keeps remote paths opaque and changes a new session's
   project without clearing the draft. It is a `@Presents` child of the session.
+- `ServerWriteTransaction` writes a Keychain intent before the two saved-server records and rolls both
+  back on failure/restart. Settings and App fence edits by operation UUID and previous identity; active
+  reconnects/removals transfer the composer draft first.
 - Surfaces: `ios/OpenCode/Settings/*`, `ios/OpenCode/Session/FolderBrowserView.swift`,
   `ios/OpenCode/Composer/{ComposerTextInput,ComposerViews}.swift`, `OpenCodeSettings`,
   `OpenCodeComposer/ComposerAutocomplete.swift`, `OpenCodeSession/FolderBrowserFeature.swift`.
@@ -394,6 +403,17 @@ Useful entry points:
 | Reviewed boundary regressions | `OpenCodeKit/Tests/OpenCodeAppTests/AppFeatureTests.swift` (`sessionEventForwarding`), `OpenCodeSessionTests/SessionFeatureTests.swift` (family identity, uncached load, shell poll/range/drain) |
 | Screenshots and scroll trace | `ios/OpenCodeUITests/{HomeScreenshotUITests,SessionScreenshotUITests,HomeScrollTraceUITests}.swift` |
 | Debug frame probe | `ios/OpenCode/Drawer/ScrollFrameProbe.swift` |
+
+### P11 evidence
+
+- `swift test --package-path ios/OpenCodeKit` (correction): 614 tests pass (15 settings, 60 composer,
+  79 session, 209 server, 85 app, 67 core, 41 drawer, 26 transcript, 32 media).
+- Final grouped UI inventory: see `STATUS.md` for the correction run. `PreferenceBehaviorUITests` covers
+  Return before/after relaunch, Return in the request-answer bar, and Wrap Lines live plus relaunch.
+- P11 package regressions include gated catalogue load/reload/navigation, occurrence ranges and Unicode,
+  transaction failure at each step/restart, operation fencing, active/non-active edits, removal draft
+  ownership, late completions and cancellation after an agent switch.
+- Screenshots: `docs/ios-migration/screens/p11-*` (synthetic fixture only).
 
 ### P10 evidence
 

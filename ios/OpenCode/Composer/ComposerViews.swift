@@ -203,12 +203,25 @@ struct ComposerPanel: View {
         focusRequest: composer.focusRequest,
         placeholder: AppCopy.text("composer.placeholder"),
         isEnabled: true,
+        returnSends: store.returnKeySends,
         onSend: { store.send(.composer(.sendTapped)) },
         onPasteImages: { store.send(.composer(.pasteImages($0))) },
         onPasteFiles: { store.send(.composer(.pasteFiles($0))) },
         onPasteText: { store.send(.composer(.pasteText($0))) },
         onCaretChanged: { text, caret, composing in
           store.send(.composer(.caretChanged(text: text, caret: caret, isComposing: composing)))
+        },
+        onTextEdited: { oldText, newText, range, replacementLength in
+          store.send(
+            .composer(
+              .textEdited(
+                oldText: oldText,
+                newText: newText,
+                range: range,
+                replacementLength: replacementLength
+              )
+            )
+          )
         }
       )
       .frame(minHeight: 36, maxHeight: 168)
@@ -289,7 +302,7 @@ struct ComposerPanel: View {
             chipLabel(chip.title, symbol: symbol(for: chip.kind), selected: true)
           }
           .buttonStyle(.plain)
-          .accessibilityIdentifier("composer-chip-\(chip.id)")
+          .accessibilityIdentifier("composer-chip-\(chip.suggestionID)")
         }
       }
       .padding(.vertical, OpenCodeSpacing.s2)
@@ -1081,6 +1094,7 @@ struct RequestAnswerBar: View {
             focusRequest: 0,
             placeholder: placeholder,
             isEnabled: canAnswer,
+            returnSends: store.returnKeySends,
             onSend: { store.send(.requestBarSendTapped) }
           )
           .frame(minHeight: 36, maxHeight: 168)

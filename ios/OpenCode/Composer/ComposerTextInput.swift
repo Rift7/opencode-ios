@@ -1,3 +1,4 @@
+import OpenCodeComposer
 import OpenCodeCore
 import OpenCodeMedia
 import SwiftUI
@@ -12,6 +13,8 @@ struct ComposerTextInput: UIViewRepresentable {
   let focusRequest: Int
   let placeholder: String
   let isEnabled: Bool
+  /// Whether an unmodified Return sends. Shift+Return always inserts a new line.
+  let returnSends: Bool
   let onSend: () -> Void
   var onPasteImages: ([Data]) -> Void = { _ in }
   var onPasteFiles: ([URL]) -> Void = { _ in }
@@ -19,6 +22,9 @@ struct ComposerTextInput: UIViewRepresentable {
   /// Reports the draft, the UTF-16 caret and whether an IME composition is open. The reducer
   /// never queries suggestions or commits text while marked text exists.
   var onCaretChanged: (String, Int?, Bool) -> Void = { _, _, _ in }
+  /// Reports a completed edit as UTF-16 old/new text plus the replaced old range and replacement
+  /// length, so semantic mention ranges can be maintained without searching display text.
+  var onTextEdited: (String, String, NSRange, Int) -> Void = { _, _, _, _ in }
 
   func makeCoordinator() -> Coordinator {
     Coordinator(parent: self)
@@ -70,6 +76,7 @@ struct ComposerTextInput: UIViewRepresentable {
     private var isPublishing = false
     private var pendingExternalText: String?
     private var lastHeight: CGFloat = 0
+    private var lastCommittedText = ""
 
     init(parent: ComposerTextInput) {
       self.parent = parent
@@ -81,7 +88,10 @@ struct ComposerTextInput: UIViewRepresentable {
         if view.text != text { pendingExternalText = text }
         return
       }
-      guard view.text != text else { return }
+      guard view.text != text else {
+        lastCommittedText = view.text
+        return
+      }
       let selection = view.selectedTextRange
       isPublishing = true
       view.text = text
@@ -96,6 +106,7 @@ struct ComposerTextInput: UIViewRepresentable {
           view.selectedTextRange = view.textRange(from: newStart, to: newEnd)
         }
       }
+      lastCommittedText = view.text
       updatePlaceholder(placeholder, isEmpty: view.text.isEmpty)
       scrollCaretIfNeeded(view)
     }
@@ -143,22 +154,48 @@ struct ComposerTextInput: UIViewRepresentable {
 
     func textViewDidChange(_ textView: UITextView) {
       guard !isPublishing else { return }
+      let previous = lastCommittedText
+      let current = textView.text ?? ""
       isPublishing = true
-      parent.text = textView.text
+      parent.text = current
       isPublishing = false
       #if DEBUG
         TypingLatencyProbe.shared.noteChange()
       #endif
       if textView.markedTextRange == nil, let pending = pendingExternalText {
         pendingExternalText = nil
-        if pending != textView.text { syncText(pending, into: textView) }
+        if pending != current { syncText(pending, into: textView) }
       }
-      updatePlaceholder(placeholder, isEmpty: textView.text.isEmpty)
+      if textView.markedTextRange == nil {
+        let edit = Self.difference(from: previous, to: current)
+        lastCommittedText = current
+        if edit.range.length != 0 || edit.replacementLength != 0 {
+          parent.onTextEdited(previous, current, edit.range, edit.replacementLength)
+        }
+      }
+      updatePlaceholder(placeholder, isEmpty: current.isEmpty)
       if let view = textView as? ComposerTextView {
         updateHeight(view, binding: parent.$height)
         scrollCaretIfNeeded(view)
       }
       publishCaret(textView)
+    }
+
+    /// The smallest UTF-16 replacement that turns `old` into `new`; used only to move or invalidate
+    /// mention ranges, never to discover a mention's text.
+    static func difference(from old: String, to new: String) -> (range: NSRange, replacementLength: Int) {
+      let a = Array(old.utf16)
+      let b = Array(new.utf16)
+      var prefix = 0
+      while prefix < a.count, prefix < b.count, a[prefix] == b[prefix] { prefix += 1 }
+      var suffix = 0
+      while suffix < a.count - prefix, suffix < b.count - prefix,
+        a[a.count - 1 - suffix] == b[b.count - 1 - suffix]
+      { suffix += 1 }
+      return (
+        NSRange(location: prefix, length: a.count - prefix - suffix),
+        b.count - prefix - suffix
+      )
     }
 
     func textViewDidChangeSelection(_ textView: UITextView) {
@@ -177,13 +214,23 @@ struct ComposerTextInput: UIViewRepresentable {
       shouldChangeTextIn range: NSRange,
       replacementText text: String
     ) -> Bool {
-      guard text == "\n", textView.markedTextRange == nil else { return true }
-      if let view = textView as? ComposerTextView, view.returnHasShift {
-        view.returnHasShift = false
+      let shift = (textView as? ComposerTextView)?.returnHasShift == true
+      switch ComposerReturnKey.action(
+        replacement: text,
+        markedText: textView.markedTextRange != nil,
+        shift: shift,
+        returnSends: parent.returnSends
+      ) {
+      case .passThrough:
         return true
+      case .insertNewline:
+        (textView as? ComposerTextView)?.returnHasShift = false
+        return true
+      case .send:
+        (textView as? ComposerTextView)?.returnHasShift = false
+        parent.onSend()
+        return false
       }
-      parent.onSend()
-      return false
     }
 
     func paste(from view: ComposerTextView) -> Bool {

@@ -17,6 +17,7 @@ public struct SettingsFeature: Sendable {
     public var preferencesProblem: PreferencesProblem?
     public var saveProblem: SettingsPreference?
     public var serverForm: ServerEditForm?
+    public var serverFormOperation: UUID?
     public var serverFormSaveProblem: PreferencesProblem?
     public var pendingRemoval: OpenCodeServer?
     public var removalProblem: ServerRemovalProblem?
@@ -41,6 +42,7 @@ public struct SettingsFeature: Sendable {
       preferencesProblem: PreferencesProblem? = nil,
       saveProblem: SettingsPreference? = nil,
       serverForm: ServerEditForm? = nil,
+      serverFormOperation: UUID? = nil,
       serverFormSaveProblem: PreferencesProblem? = nil,
       pendingRemoval: OpenCodeServer? = nil,
       removalProblem: ServerRemovalProblem? = nil,
@@ -63,6 +65,7 @@ public struct SettingsFeature: Sendable {
       self.preferencesProblem = preferencesProblem
       self.saveProblem = saveProblem
       self.serverForm = serverForm
+      self.serverFormOperation = serverFormOperation
       self.serverFormSaveProblem = serverFormSaveProblem
       self.pendingRemoval = pendingRemoval
       self.removalProblem = removalProblem
@@ -120,7 +123,11 @@ public struct SettingsFeature: Sendable {
     case serverHeaderRemoved(index: Int)
     case serverFormSubmitted
     case serverFormDismissed
-    case serverSaveResult(previous: OpenCodeServer, result: Result<OpenCodeServer, StorageFailure>)
+    case serverSaveResult(
+      operationID: UUID,
+      previous: OpenCodeServer,
+      result: Result<OpenCodeServer, StorageFailure>
+    )
     case serverRemoveTapped
     case serverRemoveCancelled
     case serverRemoveConfirmed
@@ -147,10 +154,11 @@ public struct SettingsFeature: Sendable {
 
   public enum Delegate: Equatable, Sendable {
     case close
-    case saveServer(previous: OpenCodeServer, updated: OpenCodeServer)
+    case saveServer(operationID: UUID, previous: OpenCodeServer, updated: OpenCodeServer)
     case forgetServer(OpenCodeServer)
     case pairingPayload(String)
     case inAppBrowserChanged(Bool)
+    case preferencesChanged(SettingsPreferences)
   }
 
   enum CancelID: Hashable {
@@ -189,28 +197,34 @@ public struct SettingsFeature: Sendable {
         return .none
 
       case .appearanceChanged(let choice):
-        return savePreference(.appearance, choice, state: &state, write: {
+        let before = state.preferences
+        let write = savePreference(.appearance, choice, state: &state, write: {
           store.write(choice.rawValue, for: SharedKeys.appearanceColorScheme)
         }) { state, value in
           state.preferences.appearance = value
         }
+        return preferencesEffect(before: before, write: write, state: state)
 
       case .returnKeySendsChanged(let enabled):
-        return savePreference(.returnKeySends, enabled, state: &state, write: {
+        let before = state.preferences
+        let write = savePreference(.returnKeySends, enabled, state: &state, write: {
           store.write(enabled, for: SharedKeys.returnKeySends)
         }) { state, value in
           state.preferences.returnKeySends = value
         }
+        return preferencesEffect(before: before, write: write, state: state)
 
       case .fileViewerWrapChanged(let enabled):
-        return savePreference(.fileViewerWrapsLines, enabled, state: &state, write: {
+        let before = state.preferences
+        let write = savePreference(.fileViewerWrapsLines, enabled, state: &state, write: {
           store.write(enabled, for: SharedKeys.fileViewerWrapsLines)
         }) { state, value in
           state.preferences.fileViewerWrapsLines = value
         }
+        return preferencesEffect(before: before, write: write, state: state)
 
       case .inAppBrowserChanged(let enabled):
-        let previous = state.preferences.inAppBrowser
+        let before = state.preferences
         let write = savePreference(.inAppBrowser, enabled, state: &state, write: {
           store.write(enabled, for: SharedKeys.experimentalInAppBrowser)
         }) { state, value in
@@ -218,8 +232,8 @@ public struct SettingsFeature: Sendable {
         }
         guard state.preferences.inAppBrowser == enabled else { return write }
         return .merge(
-          write,
-          enabled == previous ? .none : .send(.delegate(.inAppBrowserChanged(enabled)))
+          preferencesEffect(before: before, write: write, state: state),
+          enabled == before.inAppBrowser ? .none : .send(.delegate(.inAppBrowserChanged(enabled)))
         )
 
       case .saveProblemDismissed:
@@ -234,6 +248,7 @@ public struct SettingsFeature: Sendable {
         state.isPresented = false
         state.path.removeAll()
         state.serverForm = nil
+        state.serverFormOperation = nil
         state.pendingRemoval = nil
         state.scanProblem = nil
         state.isScanning = false
@@ -320,6 +335,7 @@ public struct SettingsFeature: Sendable {
         return .none
 
       case .serverFormSubmitted:
+        guard state.serverFormOperation == nil else { return .none }
         guard var form = state.serverForm else { return .none }
         guard let updated = form.validate() else {
           state.serverForm = form
@@ -327,17 +343,26 @@ public struct SettingsFeature: Sendable {
         }
         state.serverForm = form
         let previous = form.original
+        let operationID = UUID()
+        state.serverFormOperation = operationID
         state.serverFormSaveProblem = nil
-        return .send(.delegate(.saveServer(previous: previous, updated: updated)))
+        return .send(
+          .delegate(.saveServer(operationID: operationID, previous: previous, updated: updated))
+        )
 
       case .serverFormDismissed:
         state.serverForm = nil
+        state.serverFormOperation = nil
         state.serverFormSaveProblem = nil
         if state.page?.kind == .server { state.path.removeLast() }
         return .none
 
-      case .serverSaveResult(let previous, let result):
-        guard let form = state.serverForm, form.original == previous else { return .none }
+      case .serverSaveResult(let operationID, let previous, let result):
+        guard state.serverFormOperation == operationID,
+          let form = state.serverForm,
+          form.original == previous
+        else { return .none }
+        state.serverFormOperation = nil
         switch result {
         case .success(let saved):
           state.server = saved
@@ -490,6 +515,15 @@ public struct SettingsFeature: Sendable {
     }
   }
 
+  private func preferencesEffect(
+    before: SettingsPreferences,
+    write: Effect<Action>,
+    state: State
+  ) -> Effect<Action> {
+    guard state.preferences != before else { return write }
+    return .merge(write, .send(.delegate(.preferencesChanged(state.preferences))))
+  }
+
   private func savePreference<Value>(
     _ preference: SettingsPreference,
     _ value: Value,
@@ -533,10 +567,12 @@ public struct SettingsFeature: Sendable {
 
     var problem: PreferencesProblem?
     var appearance = AppearanceChoice.system
-    let appearanceValue = read(SharedKeys.appearanceColorScheme, "system").0
+    let appearanceRead = read(SharedKeys.appearanceColorScheme, "system")
+    if let issue = appearanceRead.1 { problem = issue }
+    let appearanceValue = appearanceRead.0
     if let parsed = AppearanceChoice(rawValue: appearanceValue) {
       appearance = parsed
-    } else if !appearanceValue.isEmpty {
+    } else if !appearanceValue.isEmpty, problem == nil {
       problem = .corrupt
     }
     let returnKey = read(SharedKeys.returnKeySends, false)

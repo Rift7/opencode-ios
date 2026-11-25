@@ -4631,6 +4631,14 @@
     "whats_new.try_unavailable": {
       "extractionState": "manual",
       "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Unavailable in this build" } } }
+    },
+    "media.file_wrap_lines": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Wrap Lines" } } }
+    },
+    "media.file_wrap_failed": {
+      "extractionState": "manual",
+      "localizations": { "en": { "stringUnit": { "state": "translated", "value": "Couldn’t save the wrap choice." } } }
     }
   },
   "version": "1.0"

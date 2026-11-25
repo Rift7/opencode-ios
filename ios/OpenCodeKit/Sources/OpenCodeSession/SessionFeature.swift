@@ -36,6 +36,9 @@ public struct SessionFeature: Sendable {
     @Presents public var folderBrowser: FolderBrowserFeature.State?
     public var composer: ComposerFeature.State
     public var requestDock: RequestDockState
+    /// Preferences that the native input and file viewer consume directly.
+    public var returnKeySends: Bool
+    public var fileViewerWrapsLines: Bool
 
     public var refresh: SessionRefresh?
     /// Set when a raced-event overflow made the projection incomplete. Survives failed reads.
@@ -53,7 +56,9 @@ public struct SessionFeature: Sendable {
       selection: SessionSelection,
       session: OpenCodeSession? = nil,
       isLive: Bool = true,
-      isPinned: Bool = false
+      isPinned: Bool = false,
+      returnKeySends: Bool = false,
+      fileViewerWrapsLines: Bool = false
     ) {
       self.id = id
       self.server = server
@@ -77,6 +82,8 @@ public struct SessionFeature: Sendable {
       self.browser = nil
       self.folderBrowser = nil
       self.requestDock = RequestDockState()
+      self.returnKeySends = returnKeySends
+      self.fileViewerWrapsLines = fileViewerWrapsLines
       self.refresh = nil
       self.recovery = nil
       self.nextRefreshID = 0
@@ -136,6 +143,8 @@ public struct SessionFeature: Sendable {
         && lhs.recovery == rhs.recovery
         && lhs.composer == rhs.composer
         && lhs.requestDock == rhs.requestDock
+        && lhs.returnKeySends == rhs.returnKeySends
+        && lhs.fileViewerWrapsLines == rhs.fileViewerWrapsLines
     }
 
     // MARK: Derived
@@ -314,6 +323,7 @@ public struct SessionFeature: Sendable {
     case fileViewerClosed
     case browserClosed
     case browserExperimentChanged(enabled: Bool)
+    case preferencesChanged(returnKeySends: Bool, fileViewerWrapsLines: Bool)
 
     case noticeDismissed
     case delegate(Delegate)
@@ -321,6 +331,7 @@ public struct SessionFeature: Sendable {
 
   public enum Delegate: Equatable, Sendable {
     case dismiss
+    case wrapsLinesChanged(Bool)
     case dismissReady(
       requestID: UUID,
       serverID: String,
@@ -430,6 +441,9 @@ public struct SessionFeature: Sendable {
           .cancel(id: CancelID.transcriptEarlier),
           .cancel(id: CancelID.recoveryRetry),
         ]
+        if let operation = state.composerSend {
+          effects.append(.cancel(id: CancelID.composerSend(operation.id)))
+        }
         if let sessionID = state.activeSessionID, var transcript = state.transcripts[sessionID],
           case .loading(let cursor, let reached) = transcript.earlier
         {
@@ -1148,7 +1162,8 @@ public struct SessionFeature: Sendable {
         state.fileViewer = FileViewerFeature.State(
           file: file,
           server: state.server,
-          directory: state.activeSession?.directory
+          directory: state.activeSession?.directory,
+          wrapsLines: state.fileViewerWrapsLines
         )
         return .send(.fileViewer(.presented(.task)))
 
@@ -1203,6 +1218,10 @@ public struct SessionFeature: Sendable {
       case .mediaViewer:
         return .none
 
+      case .fileViewer(.presented(.delegate(.wrapsLinesChanged(let enabled)))):
+        state.fileViewerWrapsLines = enabled
+        return .send(.delegate(.wrapsLinesChanged(enabled)))
+
       case .fileViewer:
         return .none
 
@@ -1235,6 +1254,10 @@ public struct SessionFeature: Sendable {
         return .none
       case .browserExperimentChanged(let enabled):
         if !enabled { state.browser = nil }
+        return .none
+      case .preferencesChanged(let returnKeySends, let wrapsLines):
+        state.returnKeySends = returnKeySends
+        state.fileViewerWrapsLines = wrapsLines
         return .none
 
       case .noticeDismissed:
@@ -2077,6 +2100,7 @@ extension SessionFeature {
         {
           do {
             try await client.switchAgent(server, sessionID, agent)
+            guard !Task.isCancelled else { return }
           } catch is CancellationError {
             return
           } catch {
@@ -2098,6 +2122,7 @@ extension SessionFeature {
         {
           do {
             try await client.switchModel(server, sessionID, model)
+            guard !Task.isCancelled else { return }
           } catch is CancellationError {
             return
           } catch {

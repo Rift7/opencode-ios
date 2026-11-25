@@ -73,14 +73,18 @@ struct SessionSelectionTests {
       kind: .skill,
       value: "review",
       token: "@review",
-      title: "review"
+      title: "review",
+      start: 4,
+      end: 11
     )
     let agent = ComposerMentionChip(
       id: "agent:build",
       kind: .agent,
       value: "build",
       token: "@build",
-      title: "build"
+      title: "build",
+      start: 17,
+      end: 23
     )
     let send = ComposerSend(
       target: .session(id: "root"),
@@ -155,6 +159,43 @@ struct SessionSelectionTests {
     #expect(calls.all == ["prompt:none:none"])
   }
 
+  @Test("cancellation after an agent switch prevents the model and prompt")
+  func cancellationAfterAgentPreventsLaterMutations() async {
+    let calls = Calls()
+    let gate = AgentGate()
+    var client = OpenCodeClient.testValue
+    client.switchAgent = { _, _, agent in
+      calls.append("agent:\(agent)")
+      await gate.wait()
+    }
+    client.switchModel = { _, _, model in
+      calls.append("model:\(model.id)")
+    }
+    client.sendPrompt = { _, _, body in
+      calls.append("prompt:\(body.text)")
+    }
+    let store = store(client)
+    let send = ComposerSend(
+      target: .session(id: "root"),
+      messageID: "m-cancel",
+      text: "hello",
+      quotes: [],
+      delivery: .steer,
+      revision: 1,
+      model: ModelRef(id: "opus", providerID: "anthropic"),
+      agent: "build"
+    )
+    await store.send(.composer(.delegate(.send(send))))
+    #expect(await gate.waitUntilStarted())
+    await store.send(.connectionChanged(isConnected: false))
+    await gate.release()
+    for _ in 0..<20 {
+      await store.skipReceivedActions(strict: false)
+      try? await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(calls.all == ["agent:build"])
+  }
+
   @Test("a refused switch fails the send without posting it")
   func refusedSwitchDoesNotPost() async {
     let calls = Calls()
@@ -180,5 +221,29 @@ struct SessionSelectionTests {
     }
     #expect(calls.all.isEmpty)
     #expect(!store.state.composer.isSending)
+  }
+}
+
+
+private actor AgentGate {
+  private var started = false
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  func wait() async {
+    started = true
+    await withCheckedContinuation { continuation = $0 }
+  }
+
+  func waitUntilStarted() async -> Bool {
+    for _ in 0..<100 {
+      if started { return true }
+      try? await Task.sleep(for: .milliseconds(5))
+    }
+    return started
+  }
+
+  func release() {
+    continuation?.resume()
+    continuation = nil
   }
 }

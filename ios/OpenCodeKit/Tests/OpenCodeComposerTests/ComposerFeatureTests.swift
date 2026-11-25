@@ -532,6 +532,53 @@ struct ComposerFeatureTests {
     #expect(prompt.metadata?.displayText == "Explain this")
   }
 
+  @Test("editor replacements shift or invalidate mention occurrences")
+  func editorReplacementMaintainsMentions() async {
+    var state = ComposerFeature.State(serverID: "server", target: .session(id: "s1"))
+    state.draft = "Use @review"
+    state.chips = [
+      ComposerMentionChip(
+        id: "skill:review",
+        kind: .skill,
+        value: "review",
+        token: "@review",
+        title: "review",
+        occurrenceID: "one",
+        start: 4,
+        end: 11
+      )
+    ]
+    let store = TestStore(initialState: state) {
+      ComposerFeature()
+    } withDependencies: {
+      $0.composerDrafts = .testValue
+      $0.clock = .testValue
+      $0.dateClient = DateClient { Date(timeIntervalSince1970: 1_700_000_000) }
+      $0.haptics = .testValue
+    }
+    store.exhaustivity = .off
+    await store.send(.textChanged("1234 Use @review"))
+    await store.send(
+      .textEdited(
+        oldText: "Use @review",
+        newText: "1234 Use @review",
+        range: NSRange(location: 0, length: 0),
+        replacementLength: 4
+      )
+    )
+    #expect(store.state.chips.first?.start == 8)
+
+    await store.send(
+      .textEdited(
+        oldText: "1234 Use @review",
+        newText: "1234 Use @revieX",
+        range: NSRange(location: 12, length: 1),
+        replacementLength: 1
+      )
+    )
+    #expect(store.state.chips.isEmpty)
+  }
+
   @Test("marked text closes suggestions instead of committing a query")
   func markedTextClosesAutocomplete() async {
     let store = TestStore(

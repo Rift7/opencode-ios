@@ -582,16 +582,16 @@ The 421 package tests are the sum of the six target runs the package runner prin
 
 | Area | New or changed path | Gate |
 | --- | --- | --- |
-| Settings reducer, typed preferences, navigation, server editing, diagnostics, onboarding, scan gate | `OpenCodeKit/Sources/OpenCodeSettings/SettingsModels.swift`, `SettingsFeature.swift` | `OpenCodeSettingsTests` — 13 cases: defaults, restore race, failed write, experiment change, header policy, invalid form, save failure, diagnostics privacy, offline onboarding, exactly-once scan, camera denial, cache scope |
+| Settings reducer, typed preferences, navigation, server editing, diagnostics, onboarding, scan gate | `OpenCodeKit/Sources/OpenCodeSettings/SettingsModels.swift`, `SettingsFeature.swift` | `OpenCodeSettingsTests` — 15 cases: defaults, restore race, failed written preference, unavailable/corrupt appearance, experiment change, header policy, invalid form, save failure, operation fencing, diagnostics privacy, offline onboarding, exactly-once scan, camera denial, cache scope |
 | Camera QR boundary | `OpenCodeSettings/QRCameraScanner.swift` | AVFoundation metadata output behind `PairingScannerClient`; simulator injects payloads through the same boundary |
 | Appearance application | `ios/OpenCode/App/OpenCodeApp.swift` | `@AppStorage("appearance-color-scheme")` drives `preferredColorScheme`, with the UI-test appearance still winning |
 | Settings UI, server form, diagnostics, onboarding/help, scanner presentation | `ios/OpenCode/Settings/SettingsView.swift` | `SettingsUITests` — 5 journeys: relaunch persistence, diagnostics collect/copy, onboarding offline, header edit/save, injected QR confirmation; 12 light/dark screenshots |
-| Drawer entry and full-screen host | `ios/OpenCode/Drawer/HomeView.swift`, `App/RootView.swift`, `OpenCodeApp/AppFeature.swift` | Gear opens a full-screen Settings surface; server save/remove delegates write only after validation and preserve an unreadable list |
+| Drawer entry and full-screen host | `ios/OpenCode/Drawer/HomeView.swift`, `App/RootView.swift`, `OpenCodeApp/AppFeature.swift` | Gear opens a full-screen Settings surface; edit/removal writes are operation-fenced, intent-backed and transfer the composer before reconnect/disconnect |
 | Custom-header policy and cache scope | `OpenCodeServer/Address/OpenCodeServer.swift`, `OpenCodeMedia/MediaReferences.swift` | token/newline/forbidden-header validation; `authenticationScopeMaterial` includes sendable headers so a header change starts a new authenticated scope |
 | Model, agent and reasoning catalogue | `OpenCodeServer/Models/ModelCatalog.swift`, `Client/CatalogOperations.swift`, `Client/OpenCodeClient.swift` | `/api/model`, optional `/api/model/default`, `/api/agent`, `/api/skill`, `/api/command`, `/api/fs/find`, and the model/agent switch posts; request shapes through the client seam |
 | Composer model/agent selection, durable snapshot | `OpenCodeComposer/{ComposerFeature,ComposerModels}.swift` | picker state, variant ordering, chips/model/agent persisted in the draft, failed send and outbound record |
-| Apply before send | `OpenCodeSession/SessionFeature.swift` | agent then model applied once before the prompt for ordinary and first sends; skipped for queued delivery; a refused switch fails the send; `SessionSelectionTests` records the payload order |
-| Autocomplete, mentions and trigger safety | `OpenCodeComposer/ComposerAutocomplete.swift`, `ios/OpenCode/Composer/ComposerTextInput.swift`, `ComposerViews.swift` | UTF-16 triggers, chip ranges, composition guard, bounded rows, 250 ms file debounce, generation/server/directory/query fencing, exact mention ranges and `file://` URIs; 7 pure tests plus UI suggestion journey |
+| Apply before send | `OpenCodeSession/SessionFeature.swift` | agent then model applied once before the prompt for ordinary and first sends; skipped for queued delivery; cancellation is checked after each dependency returns; a refused switch fails the send; `SessionSelectionTests` records order and cancellation |
+| Autocomplete, mentions and trigger safety | `OpenCodeComposer/ComposerAutocomplete.swift`, `ios/OpenCode/Composer/ComposerTextInput.swift`, `ComposerViews.swift` | UTF-16 triggers, occurrence identities and maintained ranges, composition guard, bounded rows, 250 ms file debounce, generation/server/directory/query fencing, exact mention ranges and `file://` URIs; 11 pure tests, reducer edit test and UI suggestion journey |
 | Remote folder browser | `OpenCodeSession/FolderBrowserFeature.swift`, `ios/OpenCode/Session/FolderBrowserView.swift` | on-demand `fs/list`, back/cancel/retry/loading/empty/error, remote-only paths, draft-preserving project switch; 5 reducer tests plus UI select/cancel journey |
 | Shipped What's New catalogue | `OpenCodeDrawer/WhatsNewCatalogue.swift`, `HomeModels.swift`, `HomeView.swift` | 182 entries reconstructed from the audited Kotlin files and English resources; unique IDs/days; seen state; Try It routes are implemented or explicitly unavailable; 3 catalogue tests |
 | Copy | `ios/OpenCode/Resources/Localizable.xcstrings` | 80 new settings, helper, folder and What's New keys; no translated text compared or stored |
@@ -600,12 +600,13 @@ The 421 package tests are the sum of the six target runs the package runner prin
 
 | Check | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | 591 tests pass (settings 13, composer 52, session 78, server 209, core 67, app 75, drawer 41, transcript 26, media 30) |
+| `swift test --package-path ios/OpenCodeKit` | 614 tests pass (settings 15, composer 60, session 79, server 209, app 85, core 67, drawer 41, transcript 26, media 32) |
 | `xcodebuild ... build` | app target builds for iPhone 18 Pro Max, iOS 27.2 |
 | `SettingsUITests` | 5/5 pass (preference relaunch, diagnostics collect/copy, onboarding, header edit/save, injected QR confirmation) |
+| `PreferenceBehaviorUITests` | 3/3 pass — Return before/after relaunch, Return answering a request without chat, Wrap Lines live toggle and before/after relaunch |
 | `ComposerContextUITests` | 2/2 pass (model/agent/mention selection, folder select/cancel with draft) |
 | `SettingsScreenshotUITests` | 12 light/dark captures |
-| `xcodebuild … test` (P11 final) | **78/78 UI tests pass in one grouped run** on the final code; the command is the same test action `scripts/verify.sh` invokes. Earlier grouped runs exposed three harness timing failures (media mosaic, large-image viewer and one long-transcript autocomplete probe); the first two were viewport/dismissal waits made taller by the P11 composer, and the latency probe was removed from the grouped inventory. Focused media suites then passed 8/8 and 3/3. |
+| `xcodebuild … test` (P11 correction) | **81/81 UI tests pass in one grouped run** on the final corrected code. This includes the new preference-behaviour journeys; earlier grouped runs exposed harness timing failures (media mosaic, large-image viewer, one long-transcript autocomplete probe) that were fixed as viewport/dismissal waits, and the unreliable latency probe was removed from the grouped inventory. Focused media suites pass 8/8 and 3/3. |
 | Autocomplete trace (implementation probe) | `connected-composer-long`, 900 fixture transcript entries; focused UI-test elapsed from typing `@rev` through the first skill suggestion **about 2.0 s**, including XCTest input and expectation polling; simulator only. The probe was not retained in the final grouped inventory to avoid an XCUITest input flake; autocomplete itself is covered by `testModelAgentAndMentionSelection`. |
 | Existing regressions | full package suite passes; P8/P9/P10 suites unchanged apart from additive fields with decoding defaults. The P10 media UI/perf harnesses now scroll rows clear of the taller P11 composer inset and wait for viewer dismissal; product behaviour is unchanged. `MediaUITests` passes 8/8 and `MediaPerformanceUITests` 3/3 with that adjustment; the large-image loop measured 5.12 s including UI-test waits. |
 | Screenshots | `docs/ios-migration/screens/p11-{settings,diagnostics,onboarding,model-picker,autocomplete,folder-browser}-{light,dark}.png`, captured from `SettingsScreenshotUITests` on the iPhone 18 Pro Max simulator with the synthetic `Fixture` server and `/work/opencode` paths |
@@ -616,8 +617,8 @@ The 421 package tests are the sum of the six target runs the package runner prin
   browser close; server/header validation and save-failure retention; diagnostics allowlist;
   onboarding completion; injected QR parsing/confirmation/exactly-once forwarding; catalogue
   completeness and destinations; model/agent selection, payload order, refused switch and durable
-  snapshot; autocomplete triggers, composition guard and mention encoding; folder navigation and
-  draft preservation.
+  snapshot; autocomplete triggers, composition guard, occurrence ranges and mention encoding;
+  folder navigation and draft preservation; server edit/removal transactions and draft handoff.
 - **Hardware-unverified (P12):** real camera capture and permission prompts, physical Keychain on a
   signed build, haptics, IME marked text and hardware Shift+Return, VoiceOver, photo/file provider
   eviction, playback interruptions/share, memory pressure and device performance. See
@@ -628,8 +629,8 @@ The 421 package tests are the sum of the six target runs the package runner prin
 - Only the In-App Browser experiment is surfaced. Other audited experiments belong to P12/P13 or have
   no iOS implementation; no inert switches were added.
 - Session mentions (`@session:<id>`) are not reproduced. Commands, skills, agents and files are.
-- `Return Sends` and `Wrap Lines` are persisted and surfaced, but the P9 Return behaviour and the
-  file viewer's wrapping remain their owners' work.
+- Return and Wrap Lines now drive the native composer input, request-answer bar and code viewer;
+  no inert preference remains.
 - Try It destinations for voice, notifications, developer tools, model-list shortcuts and prompts
   are labelled unavailable rather than navigating nowhere.
 - No live V2 server with the model/agent/skill/command/find routes was available; fixture and

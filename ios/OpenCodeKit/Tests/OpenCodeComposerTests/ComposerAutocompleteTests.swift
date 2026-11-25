@@ -9,6 +9,27 @@ struct ComposerAutocompleteTests {
   private let agent = ServerAgent(id: "build", name: "build", description: "Build things", mode: "subagent")
   private let primary = ServerAgent(id: "plan", name: "plan", mode: "primary")
 
+  private func chip(
+    _ token: String,
+    at start: Int,
+    kind: ComposerMentionChip.Kind = .skill,
+    value: String = "review",
+    title: String = "review",
+    suggestion: String = "skill:review",
+    occurrence: String = UUID().uuidString.lowercased()
+  ) -> ComposerMentionChip {
+    ComposerMentionChip(
+      id: suggestion,
+      kind: kind,
+      value: value,
+      token: token,
+      title: title,
+      occurrenceID: occurrence,
+      start: start,
+      end: start + token.utf16.count
+    )
+  }
+
   @Test("a mention is detected at a word boundary and a command only at the start")
   func triggerDetection() {
     let mention = ComposerAutocompleteTrigger.detect(text: "Please @rev")
@@ -25,18 +46,12 @@ struct ComposerAutocompleteTests {
     #expect(ComposerAutocompleteTrigger.detect(text: "hello /com") == nil)
   }
 
-  @Test("a caret inside a committed token does not reopen the list")
+  @Test("a caret inside a committed occurrence does not reopen the list")
   func committedChipIsNotATrigger() {
-    let chip = ComposerMentionChip(
-      id: "skill:review",
-      kind: .skill,
-      value: "review",
-      token: "@review",
-      title: "review"
-    )
+    let review = chip("@review", at: 4)
     let text = "Use @review "
-    #expect(ComposerAutocompleteTrigger.detect(text: text, caret: 10, chips: [chip]) == nil)
-    #expect(ComposerAutocompleteTrigger.detect(text: text + "@bu", chips: [chip])?.query == "bu")
+    #expect(ComposerAutocompleteTrigger.detect(text: text, caret: 10, chips: [review]) == nil)
+    #expect(ComposerAutocompleteTrigger.detect(text: text + "@bu", chips: [review])?.query == "bu")
   }
 
   @Test("rows are bounded and ignore hidden agents")
@@ -52,11 +67,12 @@ struct ComposerAutocompleteTests {
     #expect(state.suggestions.first?.title == "review")
   }
 
-  @Test("a suggestion replaces the trigger by UTF-16 offsets")
-  func appliesByUTF16Offset() {
-    let text = "Hi 👋 @rev"
-    let trigger = ComposerAutocompleteTrigger.detect(text: text)
-    #expect(trigger != nil)
+  @Test("repeated selections are distinct occurrences with exact UTF-16 ranges")
+  func repeatedSelections() {
+    let text = "One 👋 @rev and @rev"
+    let at = (text as NSString).range(of: "@rev").location
+    let firstTrigger = ComposerAutocompleteTrigger.detect(text: text, caret: at + 4)!
+    #expect(firstTrigger.start == at)
     let suggestion = ComposerAutocompleteSuggestion(
       id: "skill:review",
       title: "review",
@@ -64,77 +80,167 @@ struct ComposerAutocompleteTests {
       token: "@review",
       payload: .skill(skill)
     )
-    let applied = ComposerMentionBuilder.apply(suggestion, trigger: trigger!, to: text)
-    #expect(applied?.text == "Hi 👋 @review ")
-    #expect(applied?.chip.kind == .skill)
-    #expect(applied?.chip.value == "review")
+    let first = ComposerMentionBuilder.apply(
+      suggestion,
+      trigger: firstTrigger,
+      to: text,
+      occurrenceID: "occurrence-1"
+    )!
+    #expect(first.chip.start == at)
+    #expect(first.chip.end == at + "@review".utf16.count)
+    #expect(first.chip.occurrenceID == "occurrence-1")
+
+    let secondTrigger = ComposerAutocompleteTrigger.detect(text: first.text)!
+    let second = ComposerMentionBuilder.apply(
+      suggestion,
+      trigger: secondTrigger,
+      to: first.text,
+      occurrenceID: "occurrence-2"
+    )!
+    #expect(second.chip.start == secondTrigger.start)
+    #expect(second.chip.occurrenceID == "occurrence-2")
+    #expect(second.chip.occurrenceID != first.chip.occurrenceID)
+
+    let mentions = ComposerMentionBuilder.mentions(
+      text: second.text,
+      chips: [first.chip, second.chip]
+    )
+    #expect(mentions.skills.map(\.mention?.start) == [first.chip.start, secondTrigger.start])
   }
 
-  @Test("mentions carry exact wire ranges and a file URI, never a display label alone")
-  func mentionWireShape() {
-    let file = ServerFileSuggestion(path: "/work/box/Sources/App.swift")
-    let chip = ComposerMentionChip(
-      id: "file:/work/box/Sources/App.swift",
-      kind: .file,
-      value: file.uri,
-      token: "@App.swift",
-      title: "App.swift"
-    )
-    let text = "Look at @App.swift and @review"
-    let skillChip = ComposerMentionChip(
-      id: "skill:review",
-      kind: .skill,
-      value: "review",
-      token: "@review",
-      title: "review"
-    )
-    let mentions = ComposerMentionBuilder.mentions(text: text, chips: [chip, skillChip])
-    #expect(mentions.files.count == 1)
-    #expect(mentions.files[0].uri.hasPrefix("file:///work/box/"))
-    #expect(mentions.files[0].name == "App.swift")
-    #expect(mentions.files[0].mention?.start == 8)
-    #expect(mentions.files[0].mention?.end == 18)
-    #expect(mentions.skills.first?.mention?.text == "@review")
+  @Test("duplicate filenames keep their own remote identities and ranges")
+  func duplicateFilenames() {
+    let firstURI = "file:///work/a/App.swift"
+    let secondURI = "file:///work/b/App.swift"
+    let text = "Use @App.swift then @App.swift now"
+    let ns = text as NSString
+    let firstStart = ns.range(of: "@App.swift").location
+    let secondStart = ns.range(of: "@App.swift", options: [], range: NSRange(location: firstStart + 10, length: ns.length - firstStart - 10)).location
+    let firstChip = chip("@App.swift", at: firstStart, kind: .file, value: firstURI, title: "App.swift", suggestion: "file:\(firstURI)")
+    let secondChip = chip("@App.swift", at: secondStart, kind: .file, value: secondURI, title: "App.swift", suggestion: "file:\(secondURI)")
+    let mentions = ComposerMentionBuilder.mentions(text: text, chips: [firstChip, secondChip])
+    #expect(mentions.files.map(\.uri) == [firstURI, secondURI])
+    #expect(mentions.files.map(\.mention?.start) == [firstStart, secondStart])
+    #expect(mentions.files.map(\.mention?.end) == [firstStart + 10, secondStart + 10])
   }
 
-  @Test("an edited token contributes no stale mention")
-  func editedTokenDropsMention() {
-    let chip = ComposerMentionChip(
-      id: "skill:review",
-      kind: .skill,
-      value: "review",
-      token: "@review",
-      title: "review"
+  @Test("identical ordinary text is not a mention")
+  func ordinaryTextDoesNotBecomeAMention() {
+    let text = "The word @review appears without a chosen chip."
+    #expect(
+      ComposerMentionBuilder.mentions(text: text, chips: []).isEmpty
     )
-    let mentions = ComposerMentionBuilder.mentions(text: "Use @reviewed", chips: [chip])
-    #expect(mentions.isEmpty)
+    let shifted = chip("@review", at: 4)
+    #expect(
+      ComposerMentionBuilder.mentions(
+        text: "Use @reviewed instead",
+        chips: [shifted]
+      ).isEmpty
+    )
   }
 
-  @Test("the prompt carries agents, skills and file mentions in the audited fields")
-  func promptShape() {
-    let chip = ComposerMentionChip(
-      id: "skill:review",
-      kind: .skill,
-      value: "review",
-      token: "@review",
-      title: "review"
+  @Test("edits before an occurrence shift it; edits inside invalidate it")
+  func editMaintenance() {
+    let text = "Use @review now"
+    let review = chip("@review", at: 4)
+    let shifted = ComposerMentionBuilder.applyingEdit(
+      range: NSRange(location: 0, length: 0),
+      replacementLength: 4,
+      chips: [review]
     )
-    let send = ComposerSend(
-      target: .session(id: "s1"),
-      messageID: "m1",
-      text: "Use @review",
-      quotes: [],
-      delivery: .steer,
-      revision: 1,
-      chips: [chip],
-      model: ModelRef(id: "model", providerID: "provider", variant: "high"),
-      agent: "build"
+    #expect(shifted.first?.start == 8)
+    #expect(
+      ComposerMentionBuilder.mentions(text: "1234" + text, chips: shifted).skills.first?.mention?.start
+        == 8
     )
-    let body = send.prompt()
-    #expect(body.agents == nil)
-    #expect(body.skills?.first?.id == "review")
-    #expect(body.skills?.first?.mention?.start == 4)
-    #expect(send.model?.variant == "high")
-    #expect(send.agent == "build")
+
+    let inside = ComposerMentionBuilder.applyingEdit(
+      range: NSRange(location: 5, length: 1),
+      replacementLength: 1,
+      chips: [review]
+    )
+    #expect(inside.isEmpty)
+
+    let deleted = ComposerMentionBuilder.applyingEdit(
+      range: NSRange(location: 4, length: 7),
+      replacementLength: 0,
+      chips: [review]
+    )
+    #expect(deleted.isEmpty)
+
+    let insertionAfter = ComposerMentionBuilder.applyingEdit(
+      range: NSRange(location: 14, length: 0),
+      replacementLength: 3,
+      chips: [review]
+    )
+    #expect(insertionAfter.first?.start == 4)
+    #expect(insertionAfter.first?.end == 11)
+  }
+
+  @Test("Unicode before and inside text keeps exact UTF-16 wire spans")
+  func unicodeSpans() {
+    let text = "👩‍💻 hello @review"
+    let start = (text as NSString).range(of: "@review").location
+    let review = chip("@review", at: start)
+    let mentions = ComposerMentionBuilder.mentions(text: text, chips: [review])
+    #expect(mentions.skills.first?.mention?.start == start)
+    #expect(mentions.skills.first?.mention?.end == start + 7)
+  }
+
+  @Test("an invalid stored range contributes nothing")
+  func invalidRange() {
+    var review = chip("@review", at: 4)
+    review.end = 99
+    #expect(ComposerMentionBuilder.mentions(text: "Use @review", chips: [review]).isEmpty)
+  }
+
+  @Test("occurrences and ranges survive draft encoding and restore")
+  func draftPersistence() throws {
+    let text = "First @review and second @review"
+    let ns = text as NSString
+    let firstStart = ns.range(of: "@review").location
+    let secondStart = ns.range(
+      of: "@review",
+      options: [],
+      range: NSRange(location: firstStart + 7, length: ns.length - firstStart - 7)
+    ).location
+    let draft = ComposerDraft(
+      text: text,
+      chips: [
+        chip("@review", at: firstStart, occurrence: "occurrence-1"),
+        chip("@review", at: secondStart, occurrence: "occurrence-2"),
+      ],
+      revision: 3,
+      updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let data = try JSONEncoder().encode(draft)
+    let restored = try JSONDecoder().decode(ComposerDraft.self, from: data)
+    #expect(restored.chips.map(\.occurrenceID) == ["occurrence-1", "occurrence-2"])
+    let mentions = ComposerMentionBuilder.mentions(text: restored.text, chips: restored.chips)
+    #expect(mentions.skills.map(\.mention?.start) == [firstStart, secondStart])
+  }
+
+  @Test("Return follows the preference, Shift always inserts, marked text passes through")
+  func returnKeyDecision() {
+    #expect(
+      ComposerReturnKey.action(replacement: "\n", markedText: false, shift: false, returnSends: true)
+        == .send
+    )
+    #expect(
+      ComposerReturnKey.action(replacement: "\n", markedText: false, shift: false, returnSends: false)
+        == .insertNewline
+    )
+    #expect(
+      ComposerReturnKey.action(replacement: "\n", markedText: false, shift: true, returnSends: true)
+        == .insertNewline
+    )
+    #expect(
+      ComposerReturnKey.action(replacement: "\n", markedText: true, shift: false, returnSends: true)
+        == .passThrough
+    )
+    #expect(
+      ComposerReturnKey.action(replacement: "x", markedText: false, shift: false, returnSends: true)
+        == .passThrough
+    )
   }
 }

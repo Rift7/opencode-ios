@@ -72,11 +72,20 @@ public struct FileViewerFeature: Sendable {
     public var load: FileViewerLoad
     public var server: OpenCodeServer?
     public var directory: String?
+    public var wrapsLines: Bool
+    public var wrapLinesProblem: Bool
 
-    public init(file: TranscriptFile, server: OpenCodeServer?, directory: String?) {
+    public init(
+      file: TranscriptFile,
+      server: OpenCodeServer?,
+      directory: String?,
+      wrapsLines: Bool = false
+    ) {
       self.file = file
       self.server = server
       self.directory = directory
+      self.wrapsLines = wrapsLines
+      self.wrapLinesProblem = false
       self.title = file.name ?? "File"
       self.detail = [file.mime, file.byteCount.map { MediaFileType.byteCount(Int64($0)) }]
         .compactMap { $0 }.joined(separator: " · ")
@@ -119,18 +128,22 @@ public struct FileViewerFeature: Sendable {
     case task
     case retryTapped
     case closeTapped
+    case wrapLinesToggled
+    case wrapLinesProblemDismissed
     case loaded(FileViewerLoad)
     case delegate(Delegate)
   }
 
   public enum Delegate: Equatable, Sendable {
     case dismiss
+    case wrapsLinesChanged(Bool)
   }
 
   enum CancelID: Hashable { case load }
 
   @Dependency(\.openCodeClient) private var client
   @Dependency(\.mediaScratch) private var scratch
+  @Dependency(\.sharedStore) private var store
 
   public init() {}
 
@@ -144,6 +157,19 @@ public struct FileViewerFeature: Sendable {
         return load(state: &state)
       case .closeTapped:
         return .send(.delegate(.dismiss))
+      case .wrapLinesToggled:
+        let next = !state.wrapsLines
+        let write = store.write(next, for: SharedKeys.fileViewerWrapsLines)
+        guard case .success = write else {
+          state.wrapLinesProblem = true
+          return .none
+        }
+        state.wrapsLines = next
+        state.wrapLinesProblem = false
+        return .send(.delegate(.wrapsLinesChanged(next)))
+      case .wrapLinesProblemDismissed:
+        state.wrapLinesProblem = false
+        return .none
       case .loaded(let load):
         state.load = load
         return .none

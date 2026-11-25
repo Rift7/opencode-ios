@@ -1244,3 +1244,56 @@ are separate from P10's staged attachment imports.
 
 - Gate: `FolderBrowserTests` (on-demand reads, cached back, typed failure, ancestors, draft-preserving
   selection), `ComposerContextUITests.testFolderBrowseSelectionAndCancelKeepTheDraft`.
+
+### D-102 Return and Wrap Lines are consumed by their native surfaces
+`ComposerTextInput` takes the stored `return-key-sends` value and applies one rule: plain Return
+sends when enabled and inserts a newline when disabled, Shift+Return always inserts a newline, and
+a marked IME composition is never interrupted. The request-answer bar uses the same boundary but
+its send closure is the request submit action, so a keyboard send can never become a chat message.
+`FileViewerFeature` owns `wraps-lines`: the Settings switch and the viewer's own toolbar write the
+same key, and the open viewer switches immediately between wrapped vertical layout and horizontal
+scrolling. App and Session states receive the loaded values and every successful Settings change.
+
+- Replaces the P11 partial rows that persisted the toggles without consumers.
+- Gate: `ComposerReturnKey` tests, `FileViewerTests.wrapTogglePersists`/`wrapFailureKeepsMode`,
+  `PreferenceBehaviorUITests` (composer relaunch, request bar, live viewer toggle and relaunch).
+
+### D-103 Server records commit through a recoverable Keychain intent
+`savedServer` and `savedServers` are separate Keychain items. `ServerWriteTransaction` writes a
+Keychain `ServerWriteIntent` with both before and after states, writes the list then the selected
+record, and clears the intent only after both succeed. Any failure rolls both records back; a
+leftover intent from termination is rolled back by `AppRestoreResult.read` before the app trusts
+either record. A concurrent newer selection is not overwritten.
+
+- Intent values carry credentials, so they live in the Keychain, never in logs or UserDefaults.
+- Gate: `ServerWriteTransactionTests` (failure at each write/delete step, removal, restart recovery)
+  and `ServerEditIntegrationTests.secondWriteFailureAndRestart`.
+
+### D-104 Server edit/removal operations are identity-fenced and draft-safe
+Settings attaches an edit-operation UUID to each submission and refuses a second submission while
+one is pending; a result is accepted only for the current form and operation. App stores its own
+`ServerWriteOperation`, ignores duplicate work, and checks the originating server's previous
+identity at completion, not the updated persistence ID. An active edit or removal transfers the
+composer through the existing durable draft-transfer path before reconnect/disconnect; a late
+completion after a server switch updates records but never reconnects the old server.
+
+- Gate: `ServerEditIntegrationTests` for active address/credential changes, non-active edits,
+  active removal, late completion and duplicate submissions; Settings fencing test.
+
+### D-105 Mention occurrences own identity and ranges
+`ComposerMentionChip.id` is a generated occurrence identity; `suggestionID` names the catalogue row.
+Each occurrence stores its UTF-16 range. The native text bridge reports the minimal edit between
+committed text states; ranges before the edit shift, edits touching the token invalidate it, and no
+code searches for a display token at send time. Draft encoding persists occurrence IDs and ranges;
+restore uses those exact spans. Repeated selections of one suggestion and duplicate filenames are
+distinct occurrences.
+
+- Gate: envelope/trigger tests for duplicate filenames, repeated picks, identical ordinary text,
+  deletion/retyping, edits before/inside, Unicode, invalid spans and persistence.
+
+### D-106 Composer catalogue requests have independent ownership
+Model/agent/autocomplete loads use separate cancellation identities (`modelCatalog`,
+`agentCatalog`, `autocompleteCatalog`) and the autocomplete request no longer duplicates the agent
+catalogue call. A repeated load cancels its previous request set; results are fenced by server and
+directory. The gated reducer tests hold every real client operation open and prove both model and
+autocomplete results arrive, repeated loads replace earlier ones and navigation discards late work.
