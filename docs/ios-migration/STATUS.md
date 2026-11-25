@@ -670,3 +670,10 @@ One product fix landed: the scanner full-screen cover now remains presented whil
 problem is shown (`isScanPresented`), with regression tests for denial, dismissal and cancel. A
 minimal LAN fixture also needed `{data: …}` envelopes and a valid new-session payload; that was
 tooling, not an app change.
+
+Owner review follow-up: the initial disconnected screen had no QR scan entry, so it now has a
+**Scan QR Code** action that opens the existing scanner/confirmation flow (D-109). The new device
+UI test and package test pass. An owner-reported “Couldn’t send message.” on an already
+stopped/aborted real-server session and a layered code-block appearance are recorded as open
+observations in `DEVICE_VALIDATION.md`; neither was reproduced against the synthetic fixture and no
+additional paid prompt was sent.

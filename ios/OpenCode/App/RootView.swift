@@ -158,7 +158,8 @@ struct RootView: View {
         pasteProblem: store.pasteProblem,
         select: { store.send(.savedServerTapped($0)) },
         enterManually: { store.send(.manualEntryTapped) },
-        paste: { store.send(.pastePairingTapped) }
+        paste: { store.send(.pastePairingTapped) },
+        scan: { store.send(.scanSetupTapped) }
       )
     }
   }
@@ -240,6 +241,7 @@ private struct DisconnectedView: View {
   let select: (OpenCodeServer) -> Void
   let enterManually: () -> Void
   let paste: () -> Void
+  let scan: () -> Void
 
   var body: some View {
     ScrollView {
@@ -274,6 +276,8 @@ private struct DisconnectedView: View {
         VStack(spacing: OpenCodeSpacing.s12) {
           PrimaryButton(title: AppCopy.text("connection.disconnected.enter_manually"), action: enterManually)
             .accessibilityIdentifier("connection-enter-manually")
+          SecondaryButton(title: AppCopy.text("settings.server.scan"), action: scan)
+            .accessibilityIdentifier("connection-scan-qr")
           SecondaryButton(title: AppCopy.text("connection.disconnected.paste"), action: paste)
             .accessibilityIdentifier("connection-paste")
         }

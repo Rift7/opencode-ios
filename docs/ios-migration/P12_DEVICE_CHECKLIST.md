@@ -30,7 +30,7 @@ device pass.
 | Real-socket foreground/background recovery (P5) | Connect to a fixture; background the app, change the network, foreground it | The single shell stream reconnects; Home re-reads REST; no duplicate stream | Fixture connection count and observation | **passed** — same process; one stream; full REST re-read; header retained |
 | Camera permission denied (P11) | Settings → Scan QR Code; deny camera access | Typed denied state, no crash, paste alternative remains available | Screenshot of typed state | **passed after fix** — cover stayed up with typed copy and Done/Cancel. The first build dismissed the cover; D-107 fixes it |
 | Camera restricted/unavailable (P11) | Use a device with camera restriction or no camera | Typed restricted/unavailable state; no redemption | Screenshot and classification | **unverified** — not reproducible without changing restrictions or enrolling the phone |
-| QR scan and confirmation (P11) | Display a synthetic QR on a second display; scan it; confirm Pair | Confirmation appears before redemption; the code is redeemed exactly once; duplicate frames do not redeem again | Screen recording/screenshot and fixture pairing log with code redacted | **passed** — confirmation before any request; exactly one redemption; scanner stops after the first frame |
+| QR scan and confirmation (P11) | Display a synthetic QR on a second display; scan it; confirm Pair | Confirmation appears before redemption; the code is redeemed exactly once; duplicate frames do not redeem again | Screen recording/screenshot and fixture pairing log with code redacted | **passed** — confirmation before any request; exactly one redemption; scanner stops after the first frame; also reachable from the initial setup screen after the D-109 fix |
 | Expired/used pairing code (P11) | Scan a code twice or wait for expiry | Typed expired/unsupported message; no credentials saved | Screenshot and redacted fixture log | **passed** — confirmation first; Pair returned 401; typed expired copy; no new credentials |
 | Header persistence and Keychain (P11) | Save a synthetic proxy header; relaunch; inspect Server Details; exercise the Keychain probe | Header persists and is sent only to the server origin; a failed write keeps the old server usable | Keychain probe classification and request header names only | **passed, one sub-check unverified** — Keychain round-trip and relaunch persistence passed; header reached only the origin and not a refused cross-origin redirect; denied-write injection was not run |
 | Photo/file permission and provider eviction (P10) | Pick a photo and a file; revoke Photos/Files access; evict the provider; reopen the draft | Failed import is typed; staged files remain owned; no picker URL is persisted | Recording and draft probe; no file contents | **blocked** — personal libraries were not browsed; no synthetic-only picker/provider environment |
@@ -47,6 +47,9 @@ device pass.
 
 ## Checklist corrections
 
+- **Initial setup scan:** the disconnected screen originally had no scanner; it now has a **Scan QR
+  Code** action that reuses Settings' scanner and confirmation (D-109). The injected-scan device test
+  verifies confirmation without redemption.
 - **Return Sends** is a preference (default off). Plain Return sends only when it is enabled;
   Shift+Return always inserts a newline. The older wording that plain Return always sends is stale.
 - The unreachable copy depends on the failure: a refused port shows “Couldn’t reach the OpenCode

@@ -67,7 +67,10 @@ struct SettingsView: View {
     } message: {
       Text(AppCopy.text("settings.onboarding.done.message"))
     }
-    .task { store.send(.task) }
+    .task {
+      store.send(.task)
+      if store.scanOnOpen { store.send(.scanTapped) }
+    }
     .accessibilityIdentifier("settings-root")
   }
 

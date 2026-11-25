@@ -172,3 +172,25 @@ No device identifier, signing identity, server address, pairing code, credential
 message body or file content is included in this document or its committed artifacts. Raw traces,
 fixture logs, QR images and device screenshots remain outside the repository. Screenshots that
 showed the home screen, personal contacts or the server address were deleted rather than committed.
+
+## Owner review follow-ups
+
+These came from the owner after the first device record was published. They are kept separate from
+the checklist rows above.
+
+- **Initial setup had no QR scan.** The disconnected screen offered manual entry and paste only; the
+  scanner was reachable only inside Settings. Added a **Scan QR Code** button that presents Settings
+  with a one-shot `scanOnOpen` flag, so the existing scanner, typed problems and confirmation flow
+  are reused. Covered by `LaunchSmokeTests.testSetupScanShowsConfirmationWithoutRedeeming` and
+  `SettingsFeatureTests.setupScanStartsOnOpen`; both passed on the device. The initial screen did
+  not contact a server before confirmation.
+- **“Couldn’t send message.” on an existing real-server session.** The observed screen was already
+  showing a stopped/aborted run with one queued message; the app left the typed text in the
+  composer. This was not reproduced against the synthetic fixture, and no additional paid prompt was
+  sent to investigate. It is treated as an open product/server question, not a checklist pass or a
+  validation fix. The server response status and whether a fresh session behaves differently are
+  still needed.
+- **Layered transcript text.** The observed frame showed a code block at a scrolled position under
+  the translucent navigation bar, which can look doubled. It was not reproduced with synthetic
+  content and is not classified as a defect without a reproducible case; a screenshot after
+  scrolling away and back, or a synthetic transcript that shows the same overlap, would settle it.

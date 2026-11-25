@@ -1340,3 +1340,16 @@ repository.
 - See `DEVICE_VALIDATION.md` and `P12_DEVICE_CHECKLIST.md` for the per-row results and the remaining
   blocked checks (photo/file providers, playback interruption, hardware Shift+Return, real memory
   pressure, denied-Keychain injection, compatible live server, push).
+
+### D-109 Initial setup can start the pairing scanner
+The disconnected screen exposes **Scan QR Code** next to manual entry and paste. The action opens
+the existing Settings surface with a one-shot `scanOnOpen` flag; `SettingsView` sends `.scanTapped`
+when it first appears, so the scanner starts after presentation instead of racing the cover. The
+existing scanner boundary, typed camera problems and confirmation-before-redemption flow are reused;
+no second scanner or confirmation path is added. The QR payload still reaches confirmation before
+any `/auth/connect` request.
+
+- Gate: `LaunchSmokeTests.testFirstLaunchShowsDisconnectedState` (button present),
+  `testSetupScanShowsConfirmationWithoutRedeeming` (injected scan → confirmation, no redemption) and
+  `SettingsFeatureTests.setupScanStartsOnOpen`; the UI test passed on the physical iPhone.
+- Follow-up to the owner-reported setup gap in `DEVICE_VALIDATION.md`.

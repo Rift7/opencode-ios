@@ -27,6 +27,8 @@ public struct SettingsFeature: Sendable {
     public var onboardingStep: Int
     public var isScanning: Bool
     public var scanProblem: PairingScanProblem?
+    /// Set when the setup screen opens Settings only to scan; the first task starts the scanner.
+    public var scanOnOpen: Bool
     /// The scanner cover remains presented while a typed problem is shown, so a denial is visible
     /// instead of dismissing the cover with the scan.
     public var isScanPresented: Bool { isScanning || scanProblem != nil }
@@ -55,6 +57,7 @@ public struct SettingsFeature: Sendable {
       onboardingStep: Int = 0,
       isScanning: Bool = false,
       scanProblem: PairingScanProblem? = nil,
+      scanOnOpen: Bool = false,
       handledScans: Set<String> = [],
       notice: SettingsNotice? = nil,
       edited: Set<SettingsPreference> = [],
@@ -78,6 +81,7 @@ public struct SettingsFeature: Sendable {
       self.onboardingStep = onboardingStep
       self.isScanning = isScanning
       self.scanProblem = scanProblem
+      self.scanOnOpen = scanOnOpen
       self.handledScans = handledScans
       self.notice = notice
       self.edited = edited
@@ -255,6 +259,7 @@ public struct SettingsFeature: Sendable {
         state.pendingRemoval = nil
         state.scanProblem = nil
         state.isScanning = false
+        state.scanOnOpen = false
         return .merge(.cancel(id: CancelID.scan), stopScanner())
 
       case .pagePushed(let page):
@@ -465,6 +470,7 @@ public struct SettingsFeature: Sendable {
         state.scanGeneration += 1
         let generation = state.scanGeneration
         state.isScanning = true
+        state.scanOnOpen = false
         state.scanProblem = nil
         let scanner = scanner
         return .run { send in

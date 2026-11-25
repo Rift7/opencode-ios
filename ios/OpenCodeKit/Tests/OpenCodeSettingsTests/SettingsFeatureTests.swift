@@ -255,6 +255,15 @@ struct SettingsFeatureTests {
     #expect(!store.state.isScanPresented)
   }
 
+  @Test("a setup scan starts the scanner and clears its one-shot flag")
+  func setupScanStartsOnOpen() async {
+    let store = store(state: SettingsFeature.State(scanOnOpen: true))
+    await store.send(.task)
+    await store.send(.scanTapped)
+    #expect(store.state.isScanning)
+    #expect(!store.state.scanOnOpen)
+  }
+
   @Test("the injected deep link is a valid pairing payload")
   func injectedPairingPayloadDecodes() {
     let payload = "opencode-ios://pair?code=Pair-123_xyz&url=https%3A%2F%2Fstudio.invalid"
