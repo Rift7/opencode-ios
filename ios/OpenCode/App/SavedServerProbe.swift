@@ -18,14 +18,11 @@ import OpenCodeServer
       let first = OpenCodeServer(url: "http://127.0.0.1:1", password: "probe-one")
       let second = OpenCodeServer(url: "http://127.0.0.1:2", password: "probe-two")
 
-      let wroteSaved = store.write(first, for: ServerSharedKeys.savedServer) == .success
-      let wroteList = store.write([first, second], for: ServerSharedKeys.savedServers) == .success
+      let wrote = ServerWriteTransaction.save(server: first, servers: [first, second], store: store)
       let restored = AppRestoreResult.read(store)
+      _ = ServerWriteTransaction.remove(server: nil, servers: [], store: store)
 
-      _ = store.delete(ServerSharedKeys.savedServer)
-      _ = store.delete(ServerSharedKeys.savedServers)
-
-      guard wroteSaved, wroteList, case .restored(let server, let servers, _, _) = restored else {
+      guard case .success = wrote, case .restored(let server, let servers, _, _) = restored else {
         return "failed"
       }
       return server == first && servers == [first, second] ? "passed" : "failed"

@@ -579,6 +579,50 @@ struct FileViewerTests {
     #expect(calls.first?.directory == "/work/app")
     #expect(calls.first?.path == "Sources/main.swift")
   }
+
+  @Test("wrapping is written to the shared key and reported to the session")
+  func wrapTogglePersists() async {
+    let defaults = OpenCodeCore.InMemoryStorage()
+    let store = TestStore(
+      initialState: FileViewerFeature.State(
+        file: TranscriptFile(id: "f", name: "main.swift", mime: "text/plain", path: "main.swift"),
+        server: fixtureServer(),
+        directory: "/work/app"
+      )
+    ) {
+      FileViewerFeature()
+    } withDependencies: {
+      $0.sharedStore = SharedStore(defaults: defaults, keychain: OpenCodeCore.InMemoryStorage())
+    }
+    await store.send(.wrapLinesToggled) {
+      $0.wrapsLines = true
+    }
+    await store.receive(.delegate(.wrapsLinesChanged(true)))
+    let shared = SharedStore(defaults: defaults, keychain: OpenCodeCore.InMemoryStorage())
+    #expect(shared.result(SharedKeys.fileViewerWrapsLines) == .success(true))
+  }
+
+  @Test("a failed wrap write keeps the previous viewer mode")
+  func wrapFailureKeepsMode() async {
+    let store = TestStore(
+      initialState: FileViewerFeature.State(
+        file: TranscriptFile(id: "f", name: "main.swift", mime: "text/plain", path: "main.swift"),
+        server: fixtureServer(),
+        directory: "/work/app"
+      )
+    ) {
+      FileViewerFeature()
+    } withDependencies: {
+      $0.sharedStore = SharedStore(
+        defaults: FailingStorage(failure: .denied),
+        keychain: OpenCodeCore.InMemoryStorage()
+      )
+    }
+    await store.send(.wrapLinesToggled) {
+      $0.wrapLinesProblem = true
+    }
+    #expect(store.state.wrapsLines == false)
+  }
 }
 
 private actor RequestRecorder {

@@ -94,6 +94,29 @@ public struct SharedStore: Sendable {
     storage(for: key).delete(key.name)
   }
 
+  /// Raw access for an explicit recovery transaction that must preserve bytes it cannot decode.
+  /// Ordinary feature code should use the typed API above.
+  public func readRaw(name: String, storage kind: SharedStorage) -> StorageRead {
+    storage(kind).read(name)
+  }
+
+  /// Writes exact bytes, or deletes when nil. Explicit recovery transactions use this only for
+  /// rollback of records they could not decode.
+  @discardableResult
+  public func writeRaw(_ data: Data?, name: String, storage kind: SharedStorage) -> StorageWrite {
+    if let data {
+      return storage(kind).write(data, for: name)
+    }
+    return storage(kind).delete(name)
+  }
+
+  private func storage(_ kind: SharedStorage) -> any KeyValueStorage {
+    switch kind {
+    case .userDefaults: defaults
+    case .keychain: keychain
+    }
+  }
+
   private func storage<Value>(for key: SharedKey<Value>) -> any KeyValueStorage {
     switch key.storage {
     case .userDefaults: defaults
@@ -146,6 +169,34 @@ public enum SharedKeys {
     storage: .userDefaults
   )
 
+  /// Settings › Experimental's In-App Browser switch. Off by default; the audited key is stable.
+  public static let experimentalInAppBrowser = SharedKey<Bool>(
+    name: "experimental-in-app-browser",
+    defaultValue: false,
+    storage: .userDefaults
+  )
+
+  /// The file viewer's Wrap Lines choice, kept across files and launches.
+  public static let fileViewerWrapsLines = SharedKey<Bool>(
+    name: "file-viewer-wraps-lines",
+    defaultValue: false,
+    storage: .userDefaults
+  )
+
+  /// The selected appearance: `system`, `light` or `dark`.
+  public static let appearanceColorScheme = SharedKey<String>(
+    name: "appearance-color-scheme",
+    defaultValue: "system",
+    storage: .userDefaults
+  )
+
+  /// A person who has completed the first-run welcome.
+  public static let onboardingCompleted = SharedKey<Bool>(
+    name: "onboarding-completed",
+    defaultValue: false,
+    storage: .userDefaults
+  )
+
   public static let pairedServers = SharedKey<Data?>(
     name: "paired-servers",
     defaultValue: nil,
@@ -156,6 +207,10 @@ public enum SharedKeys {
   public static let names: [String] = [
     returnKeySends.name,
     sidebarShown.name,
+    experimentalInAppBrowser.name,
+    fileViewerWrapsLines.name,
+    appearanceColorScheme.name,
+    onboardingCompleted.name,
     lastViewedSession.name,
     pairedServers.name,
   ]

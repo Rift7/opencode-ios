@@ -16,11 +16,11 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | P5 | App shell: launch, connection, pairing, reconnect | done — merged into `ios` as `3b34932c` (PR #4) | `STATUS.md`, `PARITY.md` App shell, `ConnectionFeatureTests`, UI tests |
 | P6 | Home, drawer, projects, Catch Up, What's New | done — merged into `ios` as `7966dcfe` (PR #5, tree `25b6d297`) | `STATUS.md` Phase 6, `PARITY.md` Home, `HomeFeatureTests`, 8 UI tests, screenshots, scroll trace |
 | **P7** | **Session, subagents, background work, request review** | **done on `ios-session`** (draft PR) | `STATUS.md` Phase 7, `PARITY.md` Session, `SessionFeatureTests`, request-model and family tests, 5 UI tests, screenshots |
-| P8 | Transcript | done — merged as `2823c06e` (PR #7); merged tree `1147dca8` equals reviewed head `5ea6ea65` | `STATUS.md` Phase 8, `PARITY.md` Transcript, 26 grouping/Markdown + 19 session + 11 decoding tests, 9 UI journeys, 2 scroll traces, 6 screenshots |
+| P8 | Transcript | done — merged as `2823c06e` (PR #7); merged tree `1147dca8` equals reviewed head `5ea6ea65` | `STATUS.md` Phase 8, `PARITY.md` Transcript, 26 grouping/Markdown + 19 session + 11 decoding tests, 8 UI journeys, 2 scroll traces, 6 screenshots |
 | **P9** | **Composer, drafts, sends, queue, request dock, quotes** | **done on `ios-composer`** (draft PR, base `ios`) | `STATUS.md` Phase 9, `PARITY.md` Composer, 26 composer + 22 session + 9 server tests, 11 UI journeys, typing traces, 10 screenshots |
 | P10 | Media | **done on `ios-media`** (draft PR, base `ios`) | `STATUS.md` Phase 10, `P10_MATRIX.md`, `PARITY.md` Media, 532 package tests, 8 media journeys, 16 screenshots, three performance traces |
-| P11 | Settings, experiments, diagnostics, onboarding | not started | folders only; P9 model/agent/mentions deferral recorded |
-| P12 | System integrations | not started | folders only |
+| P11 | Settings, experiments, diagnostics, onboarding, QR pairing, models, autocomplete, files | **done on `ios-settings`** (draft PR, base `ios`) | `P11_MATRIX.md`, `STATUS.md` Phase 11, `PARITY.md` Settings, 34 new settings, catalogue, autocomplete, selection, header and folder tests, 8 UI journeys, 12 screenshots, autocomplete trace |
+| P12 | System integrations | not started | [P12_DEVICE_CHECKLIST.md](P12_DEVICE_CHECKLIST.md) carries the physical-phone checks |
 | P13 | Voice (Experimental, off) | not started | folders only |
 | P14 | Hardening | not started | — |
 
@@ -99,6 +99,7 @@ P10 started from `origin/ios` at `e42cb455`; the merged P9 tree `62d44987` equal
 1. P9 owns composer editing, drafts, sends, the queued-input sheet, the request dock and quote-to-composer.
 2. P10 owns media, file opening, image/tool mosaics, the browser, math typesetting and Mermaid, plus the
    deferred composer attachment boundary.
-3. P11 owns model/agent/mode pickers, autocomplete, mentions, commands, settings and the file browser.
-5. Production identifiers, device VoiceOver/IME/selection, hardware keyboard and the local-network prompt still
-   need the documented checks; they remain unverified.
+3. P11 owns model/agent/mode pickers, autocomplete, mentions, commands, settings, diagnostics, the shipped What's New catalogue, QR pairing presentation and the remote folder browser.
+5. Production identifiers, device VoiceOver/IME/selection, camera capture, haptics, hardware keyboard,
+   photo/file permissions, playback/share and the local-network prompt still need the checks in
+   `P12_DEVICE_CHECKLIST.md`; they remain unverified.

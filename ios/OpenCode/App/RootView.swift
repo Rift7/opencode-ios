@@ -4,6 +4,7 @@ import OpenCodeCore
 import OpenCodeDrawer
 import OpenCodeServer
 import OpenCodeSession
+import OpenCodeSettings
 import SwiftUI
 #if canImport(UIKit)
   import UIKit
@@ -93,6 +94,13 @@ struct RootView: View {
         SessionView(store: sessionStore)
       }
     }
+    .fullScreenCover(isPresented: settingsPresented, onDismiss: {
+      store.send(.settingsCoverDismissed)
+    }) {
+      if let settingsStore = store.scope(state: \.settings, action: \.settings) {
+        SettingsView(store: settingsStore)
+      }
+    }
     #if canImport(UIKit)
       .onReceive(
         NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)
@@ -123,7 +131,8 @@ struct RootView: View {
       HomeView(
         store: homeStore,
         savedServers: store.savedServers,
-        disconnect: { store.send(.disconnectTapped) }
+        disconnect: { store.send(.disconnectTapped) },
+        openSettings: { store.send(.settingsOpened) }
       )
     } else if let connectionStore = store.scope(state: \.connection, action: \.connection) {
       ConnectionView(
@@ -152,6 +161,15 @@ struct RootView: View {
         paste: { store.send(.pastePairingTapped) }
       )
     }
+  }
+
+  private var settingsPresented: Binding<Bool> {
+    Binding(
+      get: { store.settings != nil },
+      set: {
+        if !$0, store.settings != nil { store.send(.settings(.delegate(.close))) }
+      }
+    )
   }
 
   private var formPresented: Binding<Bool> {

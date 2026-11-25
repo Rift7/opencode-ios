@@ -18,6 +18,8 @@ struct ComposerPanel: View {
   @State private var showsFileImporter = false
   @State private var showsCamera = false
   @State private var showsAttachmentActions = false
+  @State private var showsModelPicker = false
+  @State private var showsAgentPicker = false
 
   private var composer: ComposerFeature.State { store.composer }
 
@@ -28,6 +30,10 @@ struct ComposerPanel: View {
       }
       if !composer.quotes.isEmpty {
         quoteChips
+      }
+      contextChips
+      if composer.autocomplete.isOpen {
+        autocompleteList
       }
       if let problem = composer.problem {
         problemLine(problem)
@@ -50,6 +56,7 @@ struct ComposerPanel: View {
           .foregroundStyle(.clear)
           .frame(width: 1, height: 1)
           .accessibilityIdentifier("composer-typing-probe")
+
       #endif
     }
     .padding(.horizontal, OpenCodeSpacing.s12)
@@ -78,6 +85,12 @@ struct ComposerPanel: View {
       } onCancel: {
         showsCamera = false
       }
+    }
+    .sheet(isPresented: $showsModelPicker) {
+      ModelPickerSheet(store: store)
+    }
+    .sheet(isPresented: $showsAgentPicker) {
+      AgentPickerSheet(store: store)
     }
     .sheet(item: $commentingQuote) { quote in
       QuoteCommentSheet(quote: quote) { comment in
@@ -190,10 +203,26 @@ struct ComposerPanel: View {
         focusRequest: composer.focusRequest,
         placeholder: AppCopy.text("composer.placeholder"),
         isEnabled: true,
+        returnSends: store.returnKeySends,
         onSend: { store.send(.composer(.sendTapped)) },
         onPasteImages: { store.send(.composer(.pasteImages($0))) },
         onPasteFiles: { store.send(.composer(.pasteFiles($0))) },
-        onPasteText: { store.send(.composer(.pasteText($0))) }
+        onPasteText: { store.send(.composer(.pasteText($0))) },
+        onCaretChanged: { text, caret, composing in
+          store.send(.composer(.caretChanged(text: text, caret: caret, isComposing: composing)))
+        },
+        onTextEdited: { oldText, newText, range, replacementLength in
+          store.send(
+            .composer(
+              .textEdited(
+                oldText: oldText,
+                newText: newText,
+                range: range,
+                replacementLength: replacementLength
+              )
+            )
+          )
+        }
       )
       .frame(minHeight: 36, maxHeight: 168)
       .frame(height: height)
@@ -231,6 +260,156 @@ struct ComposerPanel: View {
       .accessibilityHint(
         store.isRunning ? AppCopy.text("composer.send_steer_hint") : AppCopy.text("composer.send_hint")
       )
+    }
+  }
+
+  private var contextChips: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: OpenCodeSpacing.s6) {
+        Button {
+          showsModelPicker = true
+          store.send(.composer(.modelPickerOpened))
+        } label: {
+          chipLabel(
+            modelTitle,
+            symbol: "cpu",
+            selected: composer.selectedModel != nil
+          )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("composer-model")
+        Button {
+          showsAgentPicker = true
+          store.send(.composer(.modelPickerOpened))
+        } label: {
+          chipLabel(agentTitle, symbol: "person.2", selected: composer.selectedAgent != nil)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("composer-agent")
+        if composer.target.isNewSession {
+          Button {
+            store.send(.folderBrowserOpened)
+          } label: {
+            chipLabel(projectTitle, symbol: "folder", selected: true)
+          }
+          .buttonStyle(.plain)
+          .accessibilityIdentifier("composer-project-folder")
+        }
+        ForEach(composer.chips) { chip in
+          Button {
+            store.send(.composer(.chipRemoved(chip.id)))
+          } label: {
+            chipLabel(chip.title, symbol: symbol(for: chip.kind), selected: true)
+          }
+          .buttonStyle(.plain)
+          .accessibilityIdentifier("composer-chip-\(chip.suggestionID)")
+        }
+      }
+      .padding(.vertical, OpenCodeSpacing.s2)
+    }
+    .accessibilityIdentifier("composer-context")
+  }
+
+  private var autocompleteList: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      ForEach(composer.autocomplete.suggestions) { suggestion in
+        Button {
+          if composer.autocomplete.selectedID != suggestion.id {
+            if let current = composer.autocomplete.suggestions.firstIndex(where: { $0.id == composer.autocomplete.selectedID }),
+              let target = composer.autocomplete.suggestions.firstIndex(where: { $0.id == suggestion.id })
+            {
+              store.send(.composer(.autocompleteMove(target - current)))
+            }
+          }
+          store.send(.composer(.autocompleteConfirm))
+        } label: {
+          HStack(spacing: OpenCodeSpacing.s8) {
+            Image(systemName: symbol(for: suggestion.chipKind))
+              .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+              Text(suggestion.title)
+                .font(OpenCodeFonts.font(.footnote))
+                .foregroundStyle(OpenCodeColors.color(.textStrong))
+                .lineLimit(1)
+              if !suggestion.subtitle.isEmpty {
+                Text(suggestion.subtitle)
+                  .font(OpenCodeFonts.font(.caption2))
+                  .foregroundStyle(OpenCodeColors.color(.textWeak))
+                  .lineLimit(1)
+              }
+            }
+            Spacer(minLength: 0)
+          }
+          .padding(.horizontal, OpenCodeSpacing.s8)
+          .padding(.vertical, OpenCodeSpacing.s6)
+          .background(
+            composer.autocomplete.selectedID == suggestion.id
+              ? OpenCodeColors.color(.codeBand) : .clear
+          )
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("composer-suggestion-\(suggestion.id)")
+      }
+      if composer.autocomplete.isLoadingFiles {
+        ProgressView().controlSize(.small).padding(OpenCodeSpacing.s6)
+      }
+    }
+    .overlay {
+      RoundedRectangle(cornerRadius: OpenCodeRadius.control)
+        .strokeBorder(OpenCodeColors.color(.border), lineWidth: 0.5)
+    }
+  }
+
+  private var modelTitle: String {
+    if let model = composer.selectedModel,
+      let known = composer.catalog?.models.first(where: { $0.matches(model) })
+    {
+      return known.shortName
+    }
+    return composer.selectedModel?.id ?? AppCopy.text("composer.model")
+  }
+
+  private var projectTitle: String {
+    guard let directory = composer.target.directory, !directory.isEmpty else {
+      return AppCopy.text("composer.project")
+    }
+    return directory.split(separator: "/").last.map(String.init) ?? directory
+  }
+
+  private var agentTitle: String {
+    if let id = composer.selectedAgent,
+      let agent = composer.autocomplete.agents.first(where: { $0.id == id })
+    {
+      return agent.displayName
+    }
+    return AppCopy.text("composer.agent")
+  }
+
+  private func chipLabel(_ title: String, symbol: String, selected: Bool) -> some View {
+    HStack(spacing: OpenCodeSpacing.s4) {
+      Image(systemName: symbol)
+        .font(.caption2)
+      Text(title)
+        .font(OpenCodeFonts.font(.caption))
+        .lineLimit(1)
+      Image(systemName: "xmark")
+        .font(.system(size: 8, weight: .bold))
+        .foregroundStyle(OpenCodeColors.color(.textWeak))
+    }
+    .foregroundStyle(OpenCodeColors.color(selected ? .textStrong : .textWeak))
+    .padding(.horizontal, OpenCodeSpacing.s8)
+    .padding(.vertical, OpenCodeSpacing.s4)
+    .background(OpenCodeColors.color(.codeBand), in: .rect(cornerRadius: OpenCodeRadius.sm))
+    .contentShape(Rectangle())
+  }
+
+  private func symbol(for kind: ComposerMentionChip.Kind) -> String {
+    switch kind {
+    case .skill: "sparkles"
+    case .agent: "person.2"
+    case .file: "doc"
+    case .command: "terminal"
     }
   }
 
@@ -915,6 +1094,7 @@ struct RequestAnswerBar: View {
             focusRequest: 0,
             placeholder: placeholder,
             isEnabled: canAnswer,
+            returnSends: store.returnKeySends,
             onSend: { store.send(.requestBarSendTapped) }
           )
           .frame(minHeight: 36, maxHeight: 168)
@@ -1230,5 +1410,157 @@ private struct SelectableText: UIViewRepresentable {
         }
       }
     }
+  }
+}
+
+
+private struct ModelPickerSheet: View {
+  let store: StoreOf<SessionFeature>
+  @Environment(\.dismiss) private var dismiss
+
+  private var composer: ComposerFeature.State { store.composer }
+
+  var body: some View {
+    NavigationStack {
+      List {
+        if composer.isLoadingCatalog, composer.catalog == nil {
+          ProgressView(AppCopy.text("composer.model.loading"))
+        } else if composer.catalogProblem != nil, composer.catalog == nil {
+          Button(AppCopy.text("common.try_again")) {
+            store.send(.composer(.modelPickerOpened))
+          }
+          .accessibilityIdentifier("composer-model-retry")
+        } else if let catalog = composer.catalog {
+          if catalog.models.isEmpty {
+            Text(AppCopy.text("composer.model.empty"))
+              .foregroundStyle(OpenCodeColors.color(.textWeak))
+          }
+          ForEach(catalog.models) { model in
+            modelRow(model)
+          }
+          if let selected = composer.selectedModel,
+            catalog.model(selected) == nil
+          {
+            Text(AppCopy.text("composer.model.unavailable"))
+              .font(OpenCodeFonts.font(.footnote))
+              .foregroundStyle(OpenCodeColors.color(.warning))
+          }
+        } else {
+          Text(AppCopy.text("composer.model.empty"))
+            .foregroundStyle(OpenCodeColors.color(.textWeak))
+        }
+      }
+      .navigationTitle(AppCopy.text("composer.model.title"))
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button(AppCopy.text("common.done")) { dismiss() }
+        }
+      }
+    }
+    .presentationDetents([.medium, .large])
+    .accessibilityIdentifier("composer-model-picker")
+    .onAppear { store.send(.composer(.modelPickerOpened)) }
+  }
+
+  @ViewBuilder
+  private func modelRow(_ model: ServerModel) -> some View {
+    let selected = composer.selectedModel.map { model.matches($0) } ?? false
+    VStack(alignment: .leading, spacing: OpenCodeSpacing.s4) {
+      Button {
+        store.send(.composer(.modelPicked(model.ref(selectedVariant(model)))))
+      } label: {
+        HStack {
+          VStack(alignment: .leading, spacing: 2) {
+            Text(model.shortName)
+              .foregroundStyle(OpenCodeColors.color(.textStrong))
+            Text(model.providerID)
+              .font(OpenCodeFonts.font(.caption2))
+              .foregroundStyle(OpenCodeColors.color(.textWeak))
+          }
+          Spacer()
+          if selected {
+            Image(systemName: "checkmark")
+              .foregroundStyle(OpenCodeColors.color(.accent))
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("composer-model-\(model.id)")
+      if selected, !model.variants.isEmpty {
+        HStack(spacing: OpenCodeSpacing.s6) {
+          ForEach(ModelVariant.sorted(model.variants), id: \.self) { variant in
+            Button(ModelVariant.label(variant)) {
+              store.send(.composer(.modelPicked(model.ref(variant))))
+            }
+            .font(OpenCodeFonts.font(.caption))
+            .buttonStyle(.bordered)
+            .tint(
+              composer.selectedModel?.variant == variant
+                ? OpenCodeColors.color(.accent) : OpenCodeColors.color(.textWeak)
+            )
+          }
+        }
+      }
+    }
+  }
+
+  private func selectedVariant(_ model: ServerModel) -> String? {
+    guard let selected = composer.selectedModel, model.matches(selected) else { return nil }
+    return selected.variant
+  }
+}
+
+private struct AgentPickerSheet: View {
+  let store: StoreOf<SessionFeature>
+  @Environment(\.dismiss) private var dismiss
+
+  private var composer: ComposerFeature.State { store.composer }
+
+  var body: some View {
+    NavigationStack {
+      List {
+        Button {
+          store.send(.composer(.agentPicked(nil)))
+          dismiss()
+        } label: {
+          HStack {
+            Text(AppCopy.text("composer.agent.server_default"))
+            Spacer()
+            if composer.selectedAgent == nil {
+              Image(systemName: "checkmark")
+            }
+          }
+        }
+        ForEach(composer.autocomplete.agents.filter(\.isChoosable)) { agent in
+          Button {
+            store.send(.composer(.agentPicked(agent.id)))
+            dismiss()
+          } label: {
+            HStack {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(agent.displayName)
+                if let description = agent.description, !description.isEmpty {
+                  Text(description)
+                    .font(OpenCodeFonts.font(.caption2))
+                    .foregroundStyle(OpenCodeColors.color(.textWeak))
+                }
+              }
+              Spacer()
+              if composer.selectedAgent == agent.id {
+                Image(systemName: "checkmark")
+              }
+            }
+          }
+          .accessibilityIdentifier("composer-agent-\(agent.id)")
+        }
+      }
+      .navigationTitle(AppCopy.text("composer.agent.title"))
+      .navigationBarTitleDisplayMode(.inline)
+    }
+    .presentationDetents([.medium, .large])
+    .accessibilityIdentifier("composer-agent-picker")
   }
 }

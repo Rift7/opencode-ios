@@ -62,11 +62,27 @@ final class MediaUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Chart.png"].waitForExistence(timeout: 10))
     app.buttons["media-viewer-close"].tap()
     XCTAssertFalse(app.descendants(matching: .any)["media-viewer"].waitForExistence(timeout: 5))
+    // Let the full-screen dismissal finish before the next transcript tap.
+    Thread.sleep(forTimeInterval: 0.8)
 
     let group = app.buttons["group-media-tool-images"]
     XCTAssertTrue(group.waitForExistence(timeout: 10))
+    // The P11 composer is taller (model/agent/mention chips), so the group can sit at the bottom
+    // edge of the transcript viewport after a viewer closes.
+    // Move the group clear of the composer's safe-area inset rather than trusting `isHittable`,
+    // which can be true while the composer covers the row.
+    app.scrollViews["transcript-list"].swipeUp()
+    Thread.sleep(forTimeInterval: 0.4)
+    for _ in 0..<3 where !group.isHittable {
+      app.scrollViews["transcript-list"].swipeUp()
+    }
+    XCTAssertTrue(group.isHittable)
     group.tap()
+    Thread.sleep(forTimeInterval: 0.8)
     let mosaicImage = app.buttons["tool-image-tool-image-1"]
+    for _ in 0..<3 where !mosaicImage.exists {
+      app.scrollViews["transcript-list"].swipeUp()
+    }
     XCTAssertTrue(mosaicImage.waitForExistence(timeout: 10))
     mosaicImage.tap()
     XCTAssertTrue(app.descendants(matching: .any)["media-viewer"].waitForExistence(timeout: 10))

@@ -116,6 +116,11 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
   public var failedSends: [FailedComposerSend]
   /// An admitted or possibly admitted send whose outcome is not settled. At most one is in flight.
   public var outbound: [ComposerOutbound]
+  /// Semantic autocomplete choices. A chip whose token no longer appears contributes no mention.
+  public var chips: [ComposerMentionChip]
+  /// The model and agent chosen for the next send.
+  public var model: ModelRef?
+  public var agent: String?
   /// Monotonic content revision. A late transfer or migration may not replace a newer record.
   public var revision: Int
   public var updatedAt: Date
@@ -128,6 +133,9 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
     createdSessionID: String? = nil,
     failedSends: [FailedComposerSend] = [],
     outbound: [ComposerOutbound] = [],
+    chips: [ComposerMentionChip] = [],
+    model: ModelRef? = nil,
+    agent: String? = nil,
     revision: Int = 0,
     updatedAt: Date = Date(timeIntervalSince1970: 0)
   ) {
@@ -138,13 +146,16 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
     self.createdSessionID = createdSessionID
     self.failedSends = failedSends
     self.outbound = outbound
+    self.chips = chips
+    self.model = model
+    self.agent = agent
     self.revision = revision
     self.updatedAt = updatedAt
   }
 
   private enum CodingKeys: String, CodingKey {
     case text, quotes, attachments, projectDirectory, createdSessionID, failedSends, outbound
-    case revision, updatedAt
+    case chips, model, agent, revision, updatedAt
   }
 
   public init(from decoder: Decoder) throws {
@@ -156,6 +167,9 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
     createdSessionID = try container.decodeIfPresent(String.self, forKey: .createdSessionID)
     failedSends = try container.decodeIfPresent([FailedComposerSend].self, forKey: .failedSends) ?? []
     outbound = try container.decodeIfPresent([ComposerOutbound].self, forKey: .outbound) ?? []
+    chips = try container.decodeIfPresent([ComposerMentionChip].self, forKey: .chips) ?? []
+    model = try container.decodeIfPresent(ModelRef.self, forKey: .model)
+    agent = try container.decodeIfPresent(String.self, forKey: .agent)
     revision = try container.decodeIfPresent(Int.self, forKey: .revision) ?? 0
     updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
       ?? Date(timeIntervalSince1970: 0)
@@ -170,6 +184,9 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
     try container.encodeIfPresent(createdSessionID, forKey: .createdSessionID)
     try container.encode(failedSends, forKey: .failedSends)
     try container.encode(outbound, forKey: .outbound)
+    try container.encode(chips, forKey: .chips)
+    try container.encodeIfPresent(model, forKey: .model)
+    try container.encodeIfPresent(agent, forKey: .agent)
     try container.encode(revision, forKey: .revision)
     try container.encode(updatedAt, forKey: .updatedAt)
   }
@@ -191,6 +208,9 @@ public struct ComposerDraft: Codable, Equatable, Sendable {
       && createdSessionID == other.createdSessionID
       && failedSends == other.failedSends
       && outbound == other.outbound
+      && chips == other.chips
+      && model == other.model
+      && agent == other.agent
   }
 
   public var isEmpty: Bool {
@@ -297,6 +317,9 @@ public struct FailedComposerSend: Codable, Identifiable, Equatable, Sendable {
   public var target: ComposerTarget
   public var reason: ComposerProblem
   public var failure: ComposerSendFailure
+  public var chips: [ComposerMentionChip]
+  public var model: ModelRef?
+  public var agent: String?
 
   public init(
     messageID: String,
@@ -306,7 +329,10 @@ public struct FailedComposerSend: Codable, Identifiable, Equatable, Sendable {
     delivery: Delivery,
     target: ComposerTarget,
     reason: ComposerProblem,
-    failure: ComposerSendFailure
+    failure: ComposerSendFailure,
+    chips: [ComposerMentionChip] = [],
+    model: ModelRef? = nil,
+    agent: String? = nil
   ) {
     self.messageID = messageID
     self.text = text
@@ -316,10 +342,13 @@ public struct FailedComposerSend: Codable, Identifiable, Equatable, Sendable {
     self.target = target
     self.reason = reason
     self.failure = failure
+    self.chips = chips
+    self.model = model
+    self.agent = agent
   }
 
   private enum CodingKeys: String, CodingKey {
-    case messageID, text, quotes, attachments, delivery, target, reason, failure
+    case messageID, text, quotes, attachments, delivery, target, reason, failure, chips, model, agent
   }
 
   public init(from decoder: Decoder) throws {
@@ -332,6 +361,9 @@ public struct FailedComposerSend: Codable, Identifiable, Equatable, Sendable {
     target = try container.decode(ComposerTarget.self, forKey: .target)
     reason = try container.decode(ComposerProblem.self, forKey: .reason)
     failure = try container.decode(ComposerSendFailure.self, forKey: .failure)
+    chips = try container.decodeIfPresent([ComposerMentionChip].self, forKey: .chips) ?? []
+    model = try container.decodeIfPresent(ModelRef.self, forKey: .model)
+    agent = try container.decodeIfPresent(String.self, forKey: .agent)
   }
 
   public var send: ComposerSend {
@@ -342,7 +374,10 @@ public struct FailedComposerSend: Codable, Identifiable, Equatable, Sendable {
       quotes: quotes,
       attachments: attachments,
       delivery: delivery,
-      revision: 0
+      revision: 0,
+      chips: chips,
+      model: model,
+      agent: agent
     )
   }
 }
@@ -359,6 +394,9 @@ public struct ComposerOutbound: Codable, Identifiable, Equatable, Sendable {
   public var delivery: Delivery
   public var revision: Int
   public var createdAt: Date
+  public var chips: [ComposerMentionChip]
+  public var model: ModelRef?
+  public var agent: String?
 
   public init(
     target: ComposerTarget,
@@ -368,7 +406,10 @@ public struct ComposerOutbound: Codable, Identifiable, Equatable, Sendable {
     attachments: [MediaAttachment] = [],
     delivery: Delivery,
     revision: Int,
-    createdAt: Date = Date(timeIntervalSince1970: 0)
+    createdAt: Date = Date(timeIntervalSince1970: 0),
+    chips: [ComposerMentionChip] = [],
+    model: ModelRef? = nil,
+    agent: String? = nil
   ) {
     self.target = target
     self.messageID = messageID
@@ -378,10 +419,13 @@ public struct ComposerOutbound: Codable, Identifiable, Equatable, Sendable {
     self.delivery = delivery
     self.revision = revision
     self.createdAt = createdAt
+    self.chips = chips
+    self.model = model
+    self.agent = agent
   }
 
   private enum CodingKeys: String, CodingKey {
-    case target, messageID, text, quotes, attachments, delivery, revision, createdAt
+    case target, messageID, text, quotes, attachments, delivery, revision, createdAt, chips, model, agent
   }
 
   public init(from decoder: Decoder) throws {
@@ -395,6 +439,9 @@ public struct ComposerOutbound: Codable, Identifiable, Equatable, Sendable {
     revision = try container.decode(Int.self, forKey: .revision)
     createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
       ?? Date(timeIntervalSince1970: 0)
+    chips = try container.decodeIfPresent([ComposerMentionChip].self, forKey: .chips) ?? []
+    model = try container.decodeIfPresent(ModelRef.self, forKey: .model)
+    agent = try container.decodeIfPresent(String.self, forKey: .agent)
   }
 
   public var send: ComposerSend {
@@ -405,7 +452,10 @@ public struct ComposerOutbound: Codable, Identifiable, Equatable, Sendable {
       quotes: quotes,
       attachments: attachments,
       delivery: delivery,
-      revision: revision
+      revision: revision,
+      chips: chips,
+      model: model,
+      agent: agent
     )
   }
 }
@@ -420,6 +470,9 @@ public struct ComposerSend: Equatable, Sendable {
   public var attachments: [MediaAttachment]
   public var delivery: Delivery
   public var revision: Int
+  public var chips: [ComposerMentionChip]
+  public var model: ModelRef?
+  public var agent: String?
 
   public init(
     target: ComposerTarget,
@@ -428,7 +481,10 @@ public struct ComposerSend: Equatable, Sendable {
     quotes: [ComposerQuote],
     attachments: [MediaAttachment] = [],
     delivery: Delivery,
-    revision: Int
+    revision: Int,
+    chips: [ComposerMentionChip] = [],
+    model: ModelRef? = nil,
+    agent: String? = nil
   ) {
     self.target = target
     self.messageID = messageID
@@ -437,6 +493,9 @@ public struct ComposerSend: Equatable, Sendable {
     self.attachments = attachments
     self.delivery = delivery
     self.revision = revision
+    self.chips = chips
+    self.model = model
+    self.agent = agent
   }
 
   public var hasContent: Bool {
@@ -485,10 +544,16 @@ public struct ComposerSend: Equatable, Sendable {
         comments: comments.isEmpty ? nil : comments,
         attachments: uploaded.isEmpty ? nil : uploaded
       )
+    let mentions = ComposerMentionBuilder.mentions(text: text, chips: chips)
+    let mentionFiles = mentions.files.map {
+      PromptBody.File(uri: $0.uri, name: $0.name, description: $0.description, mention: $0.mention)
+    }
     return PromptBody(
       id: messageID,
       text: modelText,
-      files: files.isEmpty ? nil : files,
+      files: (files + mentionFiles).isEmpty ? nil : files + mentionFiles,
+      agents: mentions.agents.isEmpty ? nil : mentions.agents,
+      skills: mentions.skills.isEmpty ? nil : mentions.skills,
       delivery: delivery,
       metadata: metadata
     )

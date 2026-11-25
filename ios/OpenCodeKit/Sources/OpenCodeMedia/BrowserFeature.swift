@@ -22,7 +22,7 @@ public struct MediaExperiments: Sendable {
         #if DEBUG
           if ProcessInfo.processInfo.arguments.contains("-uiTestInAppBrowser") { return true }
         #endif
-        return UserDefaults.standard.bool(forKey: "in-app-browser")
+        return UserDefaults.standard.bool(forKey: SharedKeys.experimentalInAppBrowser.name)
       },
       browserAllowsLoopback: {
         #if DEBUG

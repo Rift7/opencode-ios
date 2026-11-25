@@ -14,7 +14,9 @@ struct SharedStoreTests {
   func registryIsComplete() {
     #expect(
       Set(SharedKeys.names) == [
-        "return-key-sends", "sidebar-shown", "last-viewed-session", "paired-servers",
+        "return-key-sends", "sidebar-shown", "experimental-in-app-browser",
+        "file-viewer-wraps-lines", "appearance-color-scheme", "onboarding-completed",
+        "last-viewed-session", "paired-servers",
       ]
     )
     #expect(SharedKeys.names.count == Set(SharedKeys.names).count)
@@ -26,6 +28,10 @@ struct SharedStoreTests {
     #expect(SharedKeys.sidebarShown.defaultValue == true)
     #expect(SharedKeys.lastViewedSession.defaultValue == nil)
     #expect(SharedKeys.pairedServers.defaultValue == nil)
+    #expect(SharedKeys.experimentalInAppBrowser.defaultValue == false)
+    #expect(SharedKeys.fileViewerWrapsLines.defaultValue == false)
+    #expect(SharedKeys.appearanceColorScheme.defaultValue == "system")
+    #expect(SharedKeys.onboardingCompleted.defaultValue == false)
     #expect(ServerSharedKeys.savedServer.defaultValue == nil)
     #expect(ServerSharedKeys.savedServers.defaultValue == [])
     #expect(ServerSharedKeys.cachedSummaries.defaultValue == [:])

@@ -80,12 +80,25 @@ struct SessionView: View {
     .sheet(isPresented: $showsBackground) {
       BackgroundWorkSheet(store: store) { showsBackground = false }
     }
+    .sheet(item: $store.scope(state: \.folderBrowser, action: \.folderBrowser), onDismiss: {
+      store.send(.folderBrowserClosed)
+    }) { browser in
+      FolderBrowserView(
+        store: browser,
+        onClose: { store.send(.folderBrowserClosed) },
+        onSelect: { directory in
+          store.send(.composer(.projectDirectoryChosen(directory)))
+          store.send(.folderBrowserClosed)
+        }
+      )
+    }
     .sheet(item: $store.scope(state: \.fileViewer, action: \.fileViewer), onDismiss: {
       store.send(.fileViewerClosed)
     }) { viewer in
-      FileViewerView(store: viewer) {
-        store.send(.fileViewerClosed)
-      }
+      FileViewerView(
+        store: viewer,
+        onClose: { store.send(.fileViewerClosed) }
+      )
     }
     .fullScreenCover(item: $store.scope(state: \.mediaViewer, action: \.mediaViewer), onDismiss: {
       store.send(.mediaViewerClosed)

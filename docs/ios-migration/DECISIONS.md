@@ -1157,3 +1157,157 @@ cannot substitute different bytes for a requested hash.
 
 - Gate: same-hash two-server isolation, second-scope mismatch, credential change, corrupt disk, fetch
   mismatch, coalescing and normal disk hits.
+
+### D-94 Settings surfaces only experiments this build implements
+`SettingsFeature` lists the In-App Browser switch, the supported appearance choice and the audited
+Return/Wrap keys. Android's remaining experiments gate P12/P13 features or have no iOS
+implementation; they are not displayed as inert controls. All Experiments was not adopted because a
+single supported experiment makes the bulk control misleading. The registry's key names remain
+available for future phases.
+
+- Evidence: `ExperimentalFeature.kt`, `ExperimentalSettingsView.kt`, `SharedKeys.kt`.
+- Gate: `SettingsFeatureTests.browserExperimentChanged`, `SettingsUITests.testPreferenceSurvivesRelaunch`.
+
+### D-95 A saved header is validated, origin-bound and part of the cache scope
+Custom header names must be RFC 9110 tokens; values may not contain line breaks; blank rows are
+refused; `Authorization`, `Proxy-Authorization`, `Host`, framing, connection and upgrade fields are
+transport-owned and refused. Saving happens only after validation and a successful Keychain write,
+so a failed save leaves the prior server editable and usable. Existing same-origin redirect rules
+keep headers from travelling to another origin. `authenticationScopeMaterial` hashes the sorted
+sendable headers with the server identity and credentials, so a header change starts a new
+authenticated media-cache scope instead of reusing bytes authorized by the old header set.
+
+- Replaces the P10 scope that hashed only server identity, username and password.
+- Gate: `headerPolicy`, `saveFailureKeepsPriorServer`, `headerChangeInvalidatesAuthenticationScope`,
+  P10 `MediaReferenceCacheTests`.
+
+### D-96 Copied diagnostics are an allow-list of typed facts
+`DiagnosticFacts` contains app version/build, phase, failure kind, HTTP status and bounded counts.
+`DiagnosticReport` emits a fixed field order. It has no string field for an error, URL, address,
+header, pairing code, message or path, so a call site cannot accidentally dump one. Collection is
+user initiated and Copy uses the existing pasteboard dependency.
+
+- Gate: `diagnosticsPrivacy` rejects synthetic credentials, header names/values, addresses, pairing
+  text and content markers; `SettingsUITests.testDiagnosticsCollectAndCopy`.
+
+### D-97 QR scanning is a payload boundary, never a redemption path
+`PairingScannerClient` emits decoded QR payloads (or typed camera states). Production uses
+AVFoundation metadata output; simulator tests inject payloads through the same client. The scanner
+does not parse, confirm or redeem. `SettingsFeature` forwards the first payload for a scan and
+ignores duplicates until a new scan; the app shell still shows the existing confirmation before
+spending the one-time code. When a code arrives, Settings leaves the screen and the shell opens
+confirmation after the cover dismisses.
+
+- Physical camera, permission prompts and duplicate real-world frames remain P12 checks.
+- Gate: `scanIsForwardedExactlyOnce`, `cameraDenied`,
+  `SettingsUITests.testInjectedQRShowsConfirmationExactlyOnce`.
+
+### D-98 The shipped What's New catalogue is reconstructed, not invented
+`WhatsNewCatalogue` contains the 182 audited Kotlin entries with their permanent IDs, days, titles,
+summaries, details, examples, symbols and tints. IDs and days are copied, not regenerated. Seen state
+continues in `whats-new-seen`. Try It routes to a new session or the relevant Settings surface where
+this build implements one; every other destination is rendered as explicitly unavailable instead of
+a dead button.
+
+- Gate: `WhatsNewCatalogueTests`, `WhatsNewView` UI journeys, P6 seen-state tests.
+
+### D-99 Model and agent choices are applied once and snapshotted
+The composer owns the pending model, reasoning variant and agent. A send applies the agent first,
+then the model, immediately before the prompt for ordinary and first sends, with one application per
+dispatch. A queued message does not change the run's model. A refused switch fails the send and
+keeps the draft. Model, agent and chips are written into the composer draft, the failed-send record
+and the outbound record before dispatch, so restart/retry cannot silently send with another choice.
+
+- The catalogue's default route is optional for older servers.
+- Gate: `SessionSelectionTests.sendAppliesSelectionBeforePrompt`, `refusedSwitchDoesNotPost`,
+  existing outbound/retry tests, `ComposerAutocompleteTests.promptShape`.
+
+### D-100 Autocomplete fences queries and sends semantic mentions only for intact tokens
+Triggers are detected in UTF-16 at the caret; a caret inside a committed chip does not reopen the
+list, and marked IME text closes it rather than committing. Skill, agent, command and file rows are
+bounded to eight; file searches debounce 250 ms and carry a generation plus server, directory and
+query identity, so a stale result cannot replace rows or text. A chip is stored as semantic kind,
+value, token and title. At send time its token is located by exact UTF-16 range and boundary; an
+edited token contributes no mention. The prompt carries the audited `agents`, `skills` and file
+`files` shapes with `file://` URIs. Session mentions are deliberately not reproduced.
+
+- Gate: `ComposerAutocompleteTests`, `ComposerMentions` prompt tests,
+  `ComposerContextUITests.testModelAgentAndMentionSelection`.
+
+### D-101 The folder browser reads only remote paths and preserves the draft
+`FolderBrowserFeature` starts at the server's default directory and reads a route only when opened,
+one `GET /api/fs/list` through the authenticated client. Paths are opaque server strings; no
+`FileManager` path is derived. Loading, failure/retry, empty and back states are explicit. Selecting
+a folder changes a new session's project target in place, without clearing text, quotes,
+attachments, chips or failed sends; cancel changes nothing. File autocomplete and folder selection
+are separate from P10's staged attachment imports.
+
+- Gate: `FolderBrowserTests` (on-demand reads, cached back, typed failure, ancestors, draft-preserving
+  selection), `ComposerContextUITests.testFolderBrowseSelectionAndCancelKeepTheDraft`.
+
+### D-102 Return and Wrap Lines are consumed by their native surfaces
+`ComposerTextInput` takes the stored `return-key-sends` value and applies one rule: plain Return
+sends when enabled and inserts a newline when disabled, Shift+Return always inserts a newline, and
+a marked IME composition is never interrupted. The request-answer bar uses the same boundary but
+its send closure is the request submit action, so a keyboard send can never become a chat message.
+`FileViewerFeature` owns `wraps-lines`: the Settings switch and the viewer's own toolbar write the
+same key, and the open viewer switches immediately between wrapped vertical layout and horizontal
+scrolling. App and Session states receive the loaded values and every successful Settings change.
+
+- Replaces the P11 partial rows that persisted the toggles without consumers.
+- Gate: `ComposerReturnKey` tests, `FileViewerTests.wrapTogglePersists`/`wrapFailureKeepsMode`,
+  `PreferenceBehaviorUITests` (composer relaunch, request bar, live viewer toggle and relaunch).
+
+### D-103 Server records commit through one serialized recoverable boundary
+`savedServer`, `savedServers` and the Keychain `ServerWriteIntent` are owned by one process-wide
+`ServerWriteTransaction` boundary. Settings edits/removals, pairing/connection persistence, forget-all
+and explicit saved-data replacement all enter it; a launch read uses its `read` path. A mutex makes
+the intent/list/selected sequence serial, so an unfinished intent is never overwritten. The intent
+records both before and after states. A failed write rolls both records back; if rollback itself
+fails, the intent and its original recovery information remain and a later read retries before
+trusting either record. Rollback merges a newer selected server/list entry that was never part of
+the failed operation, and the selected server is always present in the returned list. Successful
+outcomes re-read and return the actual committed pair.
+
+- Intent values carry credentials, so they live in the Keychain, never in logs or UserDefaults.
+- Preserves partial-corruption facts through `ServerWriteTransaction.read` so the existing
+  explicit saved-data recovery UI remains available.
+- Explicit recovery operations (`replaceRecoveringCorrupt`, `forgetRecoveringCorrupt`) are the only
+  paths allowed to overwrite records that do not decode. They snapshot the exact raw bytes in the
+  intent so a partial failure restores the corrupt records rather than silently treating them as
+  empty. Ordinary saves/removals still refuse corrupt records and a corrupt/unfinished intent.
+- Gate: `ServerWriteTransactionTests` (failure at every step, newer-selection collision, actual
+  success outcome, failed rollback/restart, unresolved-intent overwrite prevention, corrupt-intent
+  blocking), `SavedDataRecoveryTests` (corrupt list/selected/both, manual connection then replace,
+  Forget All, failed replacement/removal retries) and `ServerEditIntegrationTests` (second-write
+  failure, active/non-active edits, removal, late completion, duplicate submission and connection
+  persistence through the boundary).
+
+### D-104 Server edit/removal operations are identity-fenced and draft-safe
+Settings attaches an edit-operation UUID to each submission and refuses a second submission while
+one is pending; a result is accepted only for the current form and operation. App stores its own
+`ServerWriteOperation`, ignores duplicate work, and checks the originating server's previous
+identity at completion, not the updated persistence ID. An active edit or removal transfers the
+composer through the existing durable draft-transfer path before reconnect/disconnect; a late
+completion after a server switch updates records but never reconnects the old server.
+
+- Gate: `ServerEditIntegrationTests` for active address/credential changes, non-active edits,
+  active removal, late completion and duplicate submissions; Settings fencing test.
+
+### D-105 Mention occurrences own identity and ranges
+`ComposerMentionChip.id` is a generated occurrence identity; `suggestionID` names the catalogue row.
+Each occurrence stores its UTF-16 range. The native text bridge reports the minimal edit between
+committed text states; ranges before the edit shift, edits touching the token invalidate it, and no
+code searches for a display token at send time. Draft encoding persists occurrence IDs and ranges;
+restore uses those exact spans. Repeated selections of one suggestion and duplicate filenames are
+distinct occurrences.
+
+- Gate: envelope/trigger tests for duplicate filenames, repeated picks, identical ordinary text,
+  deletion/retyping, edits before/inside, Unicode, invalid spans and persistence.
+
+### D-106 Composer catalogue requests have independent ownership
+Model/agent/autocomplete loads use separate cancellation identities (`modelCatalog`,
+`agentCatalog`, `autocompleteCatalog`) and the autocomplete request no longer duplicates the agent
+catalogue call. A repeated load cancels its previous request set; results are fenced by server and
+directory. The gated reducer tests hold every real client operation open and prove both model and
+autocomplete results arrive, repeated loads replace earlier ones and navigation discards late work.

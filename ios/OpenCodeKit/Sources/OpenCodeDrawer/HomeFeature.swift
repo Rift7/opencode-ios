@@ -479,6 +479,7 @@ public struct HomeFeature {
     case whatsNewTapped
     case whatsNewViewed
     case whatsNewDismissed
+    case whatsNewTryTapped(WhatsNewDestination)
 
     case delegate(Delegate)
   }
@@ -488,6 +489,7 @@ public struct HomeFeature {
     case newSession(directory: String)
     case switchServer(OpenCodeServer)
     case disconnect
+    case whatsNewDestination(WhatsNewDestination)
   }
 
   enum CancelID: Hashable {
@@ -935,6 +937,11 @@ public struct HomeFeature {
         state.whatsNew.isPresented = false
         markWhatsNewSeen(&state)
         return .none
+
+      case .whatsNewTryTapped(let destination):
+        state.whatsNew.isPresented = false
+        markWhatsNewSeen(&state)
+        return .send(.delegate(.whatsNewDestination(destination)))
 
       case .delegate:
         return .none

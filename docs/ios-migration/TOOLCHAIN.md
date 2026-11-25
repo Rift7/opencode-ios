@@ -130,3 +130,6 @@ therefore runs in the app process through a DEBUG-only `-uiTestKeychainProbe` la
 | `xcodebuild … test` (P9) | app build succeeds; 58 UI tests pass |
 | Device build (iPhone Air, iOS 27.2) | succeeds with `-allowProvisioningUpdates DEVELOPMENT_TEAM=<team> -skipMacroValidation`; automatic signing registered the app |
 
+| `swift test --package-path OpenCodeKit` (P11 saved-data recovery) | 626 tests pass (209 server, 67 core, 97 app, 41 drawer, 79 session, 26 transcript, 60 composer, 32 media, 15 settings) |
+| `xcodebuild … test` (P11 saved-data recovery) | 81/81 grouped UI tests pass on the final code; the earlier known P8 anchor flake remains recorded in `STATUS.md` |
+| Phase 11 simulator measurements | iPhone 18 Pro Max, iOS 27.2 (runtime `24B8117`); no physical iPhone, camera, signing team or provisioning change was used |

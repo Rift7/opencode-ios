@@ -35,6 +35,17 @@ public struct ComposerFeature: Sendable {
     /// Persisted before dispatch. At most one operation is in flight; an unresolved record restored
     /// from disk becomes a failed ambiguous send and is never replayed as ordinary text.
     public var outbound: [ComposerOutbound]
+    /// Committed autocomplete choices, with their visible tokens.
+    public var chips: [ComposerMentionChip]
+    /// The next send's model and agent. They are applied before the prompt and snapshotted into
+    /// the outbound record, so a restart cannot silently send with a different choice.
+    public var selectedModel: ModelRef?
+    public var selectedAgent: String?
+    public var catalog: ModelCatalog?
+    public var catalogDirectory: String?
+    public var isLoadingCatalog: Bool
+    public var catalogProblem: ComposerCatalogProblem?
+    public var autocomplete: ComposerAutocompleteState
 
     /// Typing and quote edits bump this, so a send that started earlier cannot clear newer text.
     public var revision: Int
@@ -110,6 +121,14 @@ public struct ComposerFeature: Sendable {
       self.problem = nil
       self.failedSends = []
       self.outbound = []
+      self.chips = []
+      self.selectedModel = nil
+      self.selectedAgent = nil
+      self.catalog = nil
+      self.catalogDirectory = nil
+      self.isLoadingCatalog = false
+      self.catalogProblem = nil
+      self.autocomplete = ComposerAutocompleteState()
       self.revision = 0
       self.contentRevision = 0
       self.contentUpdatedAt = Date(timeIntervalSince1970: 0)
@@ -163,6 +182,9 @@ public struct ComposerFeature: Sendable {
         createdSessionID: target.isNewSession ? nil : target.sessionID,
         failedSends: failedSends,
         outbound: outbound,
+        chips: chips,
+        model: selectedModel,
+        agent: selectedAgent,
         revision: contentRevision,
         updatedAt: contentUpdatedAt
       )
@@ -173,6 +195,36 @@ public struct ComposerFeature: Sendable {
     case task
     case restoreRetried
     case textChanged(String)
+    case textEdited(
+      oldText: String,
+      newText: String,
+      range: NSRange,
+      replacementLength: Int
+    )
+    case caretChanged(text: String, caret: Int?, isComposing: Bool)
+    case modelPickerOpened
+    case modelPicked(ModelRef?)
+    case agentPicked(String?)
+    case catalogLoaded(serverID: String, directory: String?, result: Result<ModelCatalog, OpenCodeClientError>)
+    case agentsLoaded(serverID: String, directory: String?, result: Result<[ServerAgent], OpenCodeClientError>)
+    case autocompleteCatalogLoaded(
+      serverID: String,
+      directory: String?,
+      skills: [ServerSkill],
+      commands: [ServerCommand]
+    )
+    case autocompleteCatalogFailed
+    case autocompleteFilesLoaded(
+      generation: Int,
+      serverID: String,
+      directory: String,
+      query: String,
+      result: Result<[ServerFileSuggestion], OpenCodeClientError>
+    )
+    case autocompleteMove(Int)
+    case autocompleteConfirm
+    case autocompleteDismissed
+    case chipRemoved(String)
     case focusChanged(Bool)
     case focusRequested
     case quoteInserted(text: String)
@@ -211,6 +263,7 @@ public struct ComposerFeature: Sendable {
     case attachmentPreviewDismissed
     case drawingAdded(Data)
     case uploadDirectoryChanged(String?)
+    case projectDirectoryChosen(String)
     case serverChanged(OpenCodeServer)
     case sendTapped
     case queueTapped
@@ -280,6 +333,10 @@ public struct ComposerFeature: Sendable {
     case upload(ComposerDraftKey, String)
     case preview(String)
     case release
+    case autocompleteCatalog(serverID: String, directory: String?)
+    case modelCatalog(serverID: String, directory: String?)
+    case autocompleteFiles(Int)
+    case agentCatalog(serverID: String, directory: String?)
   }
 
   @Dependency(\.clock) private var clock
@@ -312,6 +369,137 @@ public struct ComposerFeature: Sendable {
         state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         state.isRestoring = false
         state.problem = nil
+        let autocomplete = updateAutocomplete(text: text, caret: text.utf16.count, isComposing: false, state: &state)
+        return .merge(autocomplete, scheduleSave(state: &state))
+
+      case .textEdited(_, _, let range, let replacementLength):
+        let next = ComposerMentionBuilder.applyingEdit(
+          range: range,
+          replacementLength: replacementLength,
+          chips: state.chips
+        )
+        guard next != state.chips else { return .none }
+        state.chips = next
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+        return scheduleSave(state: &state)
+
+      case .caretChanged(let text, let caret, let isComposing):
+        if text != state.draft {
+          state.draft = text
+          state.revision += 1
+          state.contentRevision += 1
+          state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+          state.isRestoring = false
+        }
+        let autocomplete = updateAutocomplete(text: text, caret: caret, isComposing: isComposing, state: &state)
+        return .merge(autocomplete, text == state.draft ? scheduleSave(state: &state) : .none)
+
+      case .modelPickerOpened:
+        return loadCatalog(state: &state)
+
+      case .modelPicked(let model):
+        state.selectedModel = model
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+        return scheduleSave(state: &state)
+
+      case .agentPicked(let agent):
+        state.selectedAgent = agent
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+        return scheduleSave(state: &state)
+
+      case .catalogLoaded(let serverID, let directory, let result):
+        guard serverID == state.serverID, directory == catalogKey(state) else { return .none }
+        state.isLoadingCatalog = false
+        switch result {
+        case .success(let catalog):
+          state.catalog = catalog
+          state.catalogDirectory = directory
+          state.catalogProblem = nil
+          if state.selectedModel == nil {
+            state.selectedModel = catalog.newSessionModel(levels: [:])
+          }
+        case .failure:
+          state.catalogProblem = .couldNotLoad
+        }
+        return .none
+
+      case .agentsLoaded(let serverID, let directory, let result):
+        guard serverID == state.serverID, directory == catalogKey(state) else { return .none }
+        state.isLoadingCatalog = false
+        switch result {
+        case .success(let agents):
+          state.autocomplete.agents = agents
+          if state.selectedAgent == nil, let first = agents.first(where: \.isChoosable) {
+            state.selectedAgent = first.id
+          }
+        case .failure:
+          state.catalogProblem = .couldNotLoad
+        }
+        return .none
+
+      case .autocompleteCatalogLoaded(let serverID, let directory, let skills, let commands):
+        guard serverID == state.serverID, directory == state.uploadDirectory else { return .none }
+        state.autocomplete.isLoadingCatalog = false
+        state.autocomplete.skills = skills
+        state.autocomplete.commands = commands
+        state.autocomplete.loadedDirectory = directory
+        state.autocomplete.problem = nil
+        state.autocomplete.recompute()
+        return .none
+
+      case .autocompleteCatalogFailed:
+        state.autocomplete.isLoadingCatalog = false
+        state.autocomplete.problem = .couldNotLoad
+        return .none
+
+      case .autocompleteFilesLoaded(let generation, let serverID, let directory, let query, let result):
+        guard generation == state.autocomplete.fileGeneration,
+          serverID == state.serverID,
+          directory == state.uploadDirectory,
+          state.autocomplete.fileQuery == query
+        else { return .none }
+        state.autocomplete.isLoadingFiles = false
+        switch result {
+        case .success(let files):
+          state.autocomplete.files = files
+          state.autocomplete.problem = nil
+          state.autocomplete.recompute()
+        case .failure:
+          state.autocomplete.problem = .couldNotSearchFiles
+        }
+        return .none
+
+      case .autocompleteMove(let delta):
+        state.autocomplete.move(by: delta)
+        return .none
+
+      case .autocompleteConfirm:
+        guard let trigger = state.autocomplete.trigger,
+          let suggestion = state.autocomplete.selected(),
+          let applied = ComposerMentionBuilder.apply(suggestion, trigger: trigger, to: state.draft)
+        else { return .none }
+        state.chips.append(applied.chip)
+        state.draft = applied.text
+        state.revision += 1
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+        state.autocomplete.close()
+        state.focusRequest += 1
+        haptics.play(.selection)
+        return scheduleSave(state: &state)
+
+      case .autocompleteDismissed:
+        state.autocomplete.dismissedKey = state.autocomplete.trigger?.key
+        state.autocomplete.close()
+        return .none
+
+      case .chipRemoved(let id):
+        state.chips.removeAll { $0.id == id }
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
         return scheduleSave(state: &state)
 
       case .focusChanged(let focused):
@@ -529,6 +717,14 @@ public struct ComposerFeature: Sendable {
         state.uploadDirectory = directory
         return .none
 
+      case .projectDirectoryChosen(let directory):
+        guard case .newSession(let id, _) = state.target else { return .none }
+        state.target = .newSession(id: id, directory: directory)
+        state.uploadDirectory = directory
+        state.contentRevision += 1
+        state.contentUpdatedAt = max(state.contentUpdatedAt, date.now())
+        return scheduleSave(state: &state)
+
       case .serverChanged(let server):
         state.server = server
         return .none
@@ -601,7 +797,10 @@ public struct ComposerFeature: Sendable {
             delivery: outbound.delivery,
             target: outbound.target,
             reason: .couldNotVerifySend,
-            failure: .ambiguous
+            failure: .ambiguous,
+            chips: outbound.chips,
+            model: outbound.model,
+            agent: outbound.agent
           )
         )
         state.outbound.removeAll { $0.messageID == outbound.messageID }
@@ -632,6 +831,9 @@ public struct ComposerFeature: Sendable {
           state.draft = outbound.text
           state.quotes = outbound.quotes
           state.attachments = outbound.attachments
+          state.chips = outbound.chips
+          state.selectedModel = outbound.model
+          state.selectedAgent = outbound.agent
           state.revision += 1
           state.focusRequest += 1
         } else {
@@ -644,7 +846,10 @@ public struct ComposerFeature: Sendable {
               delivery: outbound.delivery,
               target: outbound.target,
               reason: state.problem ?? .couldNotSend,
-              failure: failure
+              failure: failure,
+              chips: outbound.chips,
+              model: outbound.model,
+              agent: outbound.agent
             )
           )
         }
@@ -673,7 +878,10 @@ public struct ComposerFeature: Sendable {
           quotes: failed.quotes,
           attachments: failed.attachments,
           delivery: failed.delivery,
-          revision: state.revision
+          revision: state.revision,
+          chips: failed.chips,
+          model: failed.model,
+          agent: failed.agent
         )
         return begin(
           send,
@@ -1110,6 +1318,144 @@ public struct ComposerFeature: Sendable {
     return names
   }
 
+  private func catalogKey(_ state: State) -> String? {
+    state.uploadDirectory
+  }
+
+  private func loadCatalog(state: inout State) -> Effect<Action> {
+    guard let server = state.server else {
+      state.catalogProblem = .couldNotLoad
+      return .none
+    }
+    let directory = catalogKey(state)
+    let serverID = state.serverID
+    let client = client
+    state.isLoadingCatalog = true
+    state.catalogProblem = nil
+    state.autocomplete.isLoadingCatalog = true
+    return .merge(
+      .run { send in
+        do {
+          let catalog = try await client.modelCatalog(server, directory)
+          await send(.catalogLoaded(serverID: serverID, directory: directory, result: .success(catalog)))
+        } catch let error as OpenCodeClientError {
+          await send(.catalogLoaded(serverID: serverID, directory: directory, result: .failure(error)))
+        } catch {
+          await send(.catalogLoaded(serverID: serverID, directory: directory, result: .failure(.init(.unreachable))))
+        }
+      }
+      .cancellable(id: CancelID.modelCatalog(serverID: serverID, directory: directory), cancelInFlight: true),
+      .run { send in
+        do {
+          let agents = try await client.agents(server, directory, false)
+          await send(.agentsLoaded(serverID: serverID, directory: directory, result: .success(agents)))
+        } catch let error as OpenCodeClientError {
+          await send(.agentsLoaded(serverID: serverID, directory: directory, result: .failure(error)))
+        } catch {
+          await send(.agentsLoaded(serverID: serverID, directory: directory, result: .failure(.init(.unreachable))))
+        }
+      }
+      .cancellable(id: CancelID.agentCatalog(serverID: serverID, directory: directory), cancelInFlight: true),
+      .run { send in
+        do {
+          async let skills = client.skills(server, directory)
+          async let commands = client.commands(server, directory)
+          await send(
+            .autocompleteCatalogLoaded(
+              serverID: serverID,
+              directory: directory,
+              skills: try await skills,
+              commands: try await commands
+            )
+          )
+        } catch {
+          await send(.autocompleteCatalogFailed)
+        }
+      }
+      .cancellable(id: CancelID.autocompleteCatalog(serverID: serverID, directory: directory), cancelInFlight: true)
+    )
+  }
+
+  private func updateAutocomplete(
+    text: String,
+    caret: Int?,
+    isComposing: Bool,
+    state: inout State
+  ) -> Effect<Action> {
+    guard !isComposing else {
+      state.autocomplete.close()
+      return .none
+    }
+    guard let trigger = ComposerAutocompleteTrigger.detect(text: text, caret: caret, chips: state.chips),
+      trigger.key != state.autocomplete.dismissedKey
+    else {
+      state.autocomplete.close()
+      return .none
+    }
+    state.autocomplete.trigger = trigger
+    state.autocomplete.recompute()
+
+    var effects: [Effect<Action>] = []
+    if state.autocomplete.loadedDirectory != state.uploadDirectory, state.server != nil {
+      effects.append(loadCatalog(state: &state))
+    }
+    if trigger.mode == .mention, !trigger.query.isEmpty, let server = state.server,
+      let directory = state.uploadDirectory
+    {
+      state.autocomplete.fileGeneration += 1
+      let generation = state.autocomplete.fileGeneration
+      let query = trigger.query
+      let serverID = state.serverID
+      state.autocomplete.fileQuery = query
+      state.autocomplete.isLoadingFiles = true
+      let client = client
+      effects.append(
+        .run { send in
+          try? await Task.sleep(for: .milliseconds(250))
+          guard !Task.isCancelled else { return }
+          do {
+            let files = try await client.findFiles(server, directory, query, 12)
+            await send(
+              .autocompleteFilesLoaded(
+                generation: generation,
+                serverID: serverID,
+                directory: directory,
+                query: query,
+                result: .success(files)
+              )
+            )
+          } catch let error as OpenCodeClientError {
+            await send(
+              .autocompleteFilesLoaded(
+                generation: generation,
+                serverID: serverID,
+                directory: directory,
+                query: query,
+                result: .failure(error)
+              )
+            )
+          } catch {
+            await send(
+              .autocompleteFilesLoaded(
+                generation: generation,
+                serverID: serverID,
+                directory: directory,
+                query: query,
+                result: .failure(.init(.unreachable))
+              )
+            )
+          }
+        }
+        .cancellable(id: CancelID.autocompleteFiles(generation), cancelInFlight: true)
+      )
+    } else {
+      state.autocomplete.files = []
+      state.autocomplete.fileQuery = nil
+      state.autocomplete.isLoadingFiles = false
+    }
+    return .merge(effects)
+  }
+
   private func makeSend(delivery: Delivery, state: State) -> ComposerSend? {
     let text = state.draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty || !state.quotes.isEmpty || !state.attachments.isEmpty else { return nil }
@@ -1121,7 +1467,10 @@ public struct ComposerFeature: Sendable {
       quotes: state.quotes,
       attachments: state.attachments,
       delivery: delivery,
-      revision: state.revision
+      revision: state.revision,
+      chips: state.chips,
+      model: state.selectedModel,
+      agent: state.selectedAgent
     )
   }
 
@@ -1150,7 +1499,10 @@ public struct ComposerFeature: Sendable {
         attachments: send.attachments,
         delivery: send.delivery,
         revision: send.revision,
-        createdAt: date.now()
+        createdAt: date.now(),
+        chips: send.chips,
+        model: send.model,
+        agent: send.agent
       )
     ]
     state.contentRevision += 1
@@ -1170,6 +1522,7 @@ public struct ComposerFeature: Sendable {
       state.draft = ""
       state.quotes = []
       state.attachments = []
+      state.chips = []
       state.preview = nil
       state.revision += 1
       state.contentRevision += 1
@@ -1493,6 +1846,9 @@ public struct ComposerFeature: Sendable {
       return restored
     }
     state.failedSends = draft.failedSends
+    state.chips = draft.chips
+    state.selectedModel = draft.model
+    state.selectedAgent = draft.agent
     state.outbound = []
     state.retryDispatch = nil
     state.contentRevision = max(state.contentRevision, draft.revision)
@@ -1507,7 +1863,10 @@ public struct ComposerFeature: Sendable {
           delivery: first.delivery,
           target: first.target,
           reason: .couldNotVerifySend,
-          failure: .ambiguous
+          failure: .ambiguous,
+          chips: first.chips,
+          model: first.model,
+          agent: first.agent
         )
       )
       if keyMatches(first.target, key: state.draftKey) {
@@ -1525,7 +1884,10 @@ public struct ComposerFeature: Sendable {
             delivery: extra.delivery,
             target: extra.target,
             reason: .couldNotVerifySend,
-            failure: .ambiguous
+            failure: .ambiguous,
+            chips: extra.chips,
+            model: extra.model,
+            agent: extra.agent
           )
         )
       }

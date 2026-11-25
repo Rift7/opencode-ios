@@ -2,6 +2,7 @@ import OpenCodeApp
 import ComposableArchitecture
 import OpenCodeComposer
 import OpenCodeCore
+import OpenCodeSettings
 import OpenCodeTranscript
 import SwiftUI
 #if canImport(UIKit)
@@ -12,6 +13,7 @@ import SwiftUI
 struct OpenCodeApp: App {
   @State private var store: StoreOf<AppFeature>
   @Environment(\.scenePhase) private var scenePhase
+  @AppStorage("appearance-color-scheme") private var appearanceChoice = "system"
   private let configuration: AppLaunchConfiguration
   private let keychainSelfTest: String?
   private let savedServerProbe: String?
@@ -32,6 +34,16 @@ struct OpenCodeApp: App {
           $0.dateClient = DateClient { Date(timeIntervalSince1970: 1_700_000_000) }
           $0.pasteboard = .liveValue
           $0.composerDrafts = UITestFixture.draftClient()
+          if let payload = Self.uiTestPairingPayload {
+            $0.pairingScanner = PairingScannerClient(
+              start: {
+                AsyncStream { continuation in
+                  continuation.yield(.code(payload))
+                  continuation.finish()
+                }
+              }
+            )
+          }
         } operation: {
           Store(initialState: configuration.initialState) { AppFeature() }
         }
@@ -62,11 +74,28 @@ struct OpenCodeApp: App {
     #endif
   }
 
+  private static var uiTestPairingPayload: String? {
+    #if DEBUG
+      let arguments = ProcessInfo.processInfo.arguments
+      guard let index = arguments.firstIndex(of: "-uiTestPairingPayload"),
+        arguments.indices.contains(index + 1)
+      else { return nil }
+      return arguments[index + 1]
+    #else
+      return nil
+    #endif
+  }
+
   private var preferredColorScheme: ColorScheme? {
     switch configuration.uiTestAppearance {
-    case "dark": .dark
-    case "light": .light
-    default: nil
+    case "dark": return .dark
+    case "light": return .light
+    default: break
+    }
+    switch appearanceChoice {
+    case "dark": return .dark
+    case "light": return .light
+    default: return nil
     }
   }
 

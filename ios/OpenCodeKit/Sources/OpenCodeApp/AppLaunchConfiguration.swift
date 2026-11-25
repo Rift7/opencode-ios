@@ -72,7 +72,8 @@ public struct AppLaunchConfiguration: Sendable {
         home: pinnedHome,
         savedServer: pinnedServer,
         savedServers: [pinnedServer],
-        isPinnedForUITest: true
+        isPinnedForUITest: true,
+        savedData: .read
       )
     case .reconnecting:
       return AppFeature.State(
