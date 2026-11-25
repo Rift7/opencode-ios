@@ -30,7 +30,7 @@
 | P11 branch | `ios-settings`, created from `origin/ios` after `git fetch origin` |
 | P11 review-correction head | `f553cbd7` (preference consumers, mention occurrences, catalogue ownership, server transaction and cancellation checks) |
 | P11 storage-correction head | `c9cb1602` (serialized server-record ownership, collision/rollback tests) |
-| P11 saved-data-recovery head | recorded on the branch and draft PR after this evidence commit |
+| P11 saved-data-recovery head | `7170e91a` (explicit corrupt-record recovery, raw rollback, final 81/81 UI run) |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
 `git fetch origin` moved `origin/ios` to `e42cb455`; PR #8 (`ios: add the native composer, drafts, sends, queue,
