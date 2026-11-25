@@ -1615,8 +1615,13 @@ extension SessionFeature {
   }
 
   private func apply(snapshot: SessionSnapshot, for sessionID: String, state: inout State) {
+    let adoptingRoot = state.root == nil
     if state.root == nil || state.root?.id == sessionID || sessionID == state.selection.sessionID {
       state.root = snapshot.session
+    }
+    if adoptingRoot {
+      if let agent = snapshot.session.agent { state.composer.selectedAgent = agent }
+      if let model = snapshot.session.model { state.composer.selectedModel = model }
     }
     if let incoming = snapshot.family, case .success(let family) = incoming {
       if let previous = state.family, previous.root.id != family.root.id {

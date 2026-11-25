@@ -50,6 +50,13 @@ device pass.
 - **Initial setup scan:** the disconnected screen originally had no scanner; it now has a **Scan QR
   Code** action that reuses Settings' scanner and confirmation (D-109). The injected-scan device test
   verifies confirmation without redemption.
+- **Agent selector:** the catalogue now loads on the composer's first task and the loaded session's
+  agent/model is adopted, so the chip shows the session agent before the picker opens (D-110).
+- **Read receipt:** opening an already-viewed session no longer sends a view receipt, so a late
+  rejection cannot show “Couldn’t mark … as read.” Device-verified on an already-read real session.
+- **Send failure (open):** “Couldn’t send message.” reproduced on a new real-server session with the
+  owner-authorized DeepSeek V4.1 Flash/Build combination; the app hides the HTTP status, so the server
+  response/log is still needed. No speculative send change was made.
 - **Return Sends** is a preference (default off). Plain Return sends only when it is enabled;
   Shift+Return always inserts a newline. The older wording that plain Return always sends is stale.
 - The unreachable copy depends on the failure: a refused port shows “Couldn’t reach the OpenCode

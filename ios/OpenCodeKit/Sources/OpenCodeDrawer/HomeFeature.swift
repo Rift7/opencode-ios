@@ -1381,7 +1381,8 @@ public struct HomeFeature {
     }
     _ = store.write(state.readDates, for: HomeSharedKeys.sessionReadDates)
     _ = store.write(state.manuallyUnreadKeys, for: HomeSharedKeys.manuallyUnreadSessions)
-    guard let idle = session.idleMilliseconds, idle > 0 else {
+    let alreadyViewed = (session.viewedMilliseconds ?? 0) >= (session.idleMilliseconds ?? 0)
+    guard let idle = session.idleMilliseconds, idle > 0, !alreadyViewed else {
       return (backup, .none)
     }
     let receiptID = uuid.uuid()

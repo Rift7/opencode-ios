@@ -56,7 +56,7 @@ the OS mismatch is recorded rather than hidden.
 | Device share-sheet presentation | 1 | sheet presented; the automated query could not see the system share-sheet process |
 | Device performance traces | 6 | 6 passed |
 | Device final affected suite after the fix | 12 | 12 passed |
-| Host package suite | 628 | 628 passed on a clean full run of the follow-up code (626 at the initial device run; two new setup-scan tests) |
+| Host package suite | 630 | 630 passed on a clean full run of the follow-up code (626 at the initial device run; setup-scan, agent-prefetch and read-receipt tests added) |
 
 The three grouped-run failures were reproduced in isolation with two iterations each and passed
 6/6:
@@ -186,11 +186,22 @@ the checklist rows above.
   not contact a server before confirmation.
 - **“Couldn’t send message.” on an existing real-server session.** The observed screen was already
   showing a stopped/aborted run with one queued message; the app left the typed text in the
-  composer. This was not reproduced against the synthetic fixture, and no additional paid prompt was
-  sent to investigate. It is treated as an open product/server question, not a checklist pass or a
-  validation fix. The server response status and whether a fresh session behaves differently are
-  still needed.
+  composer. It was later reproduced on a **new** real-server session with the owner-authorized
+  DeepSeek V4.1 Flash and the Build agent: the app showed the same generic definite failure. One
+  synthetic paid prompt was sent with that authorization; no further prompts were sent. The app does
+  not expose the HTTP status behind the generic copy, so the server response/server log is still
+  needed. It is an open product/server question, not a checklist pass or a validation fix.
 - **Layered transcript text.** The observed frame showed a code block at a scrolled position under
   the translucent navigation bar, which can look doubled. It was not reproduced with synthetic
   content and is not classified as a defect without a reproducible case; a screenshot after
   scrolling away and back, or a synthetic transcript that shows the same overlap, would settle it.
+- **Agent selector stayed generic until opened.** The agent catalogue was fetched only when a
+  picker opened, and a session’s agent was not adopted when the session arrived asynchronously. The
+  composer now loads models/agents/skills/commands on its first task and adopts the loaded session’s
+  model/agent on the initial snapshot. Verified on the real server: the chip showed **Build** before
+  the picker was opened; `ComposerCatalogTests.taskLoadsAgentsBeforePicker` covers the load.
+- **“Couldn’t mark … as read” on an already-read session.** Opening a row sent a view receipt even
+  when `viewed >= idle`; a late rejection then showed the error and restored unread. Opening an
+  already-viewed session now updates only local read state and sends no receipt. Verified on the
+  real server by opening and leaving an already-read session; `HomeFeatureTests.alreadyReadSessionSkipsReceipt`
+  covers it.

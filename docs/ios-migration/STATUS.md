@@ -656,7 +656,7 @@ development signing. Full setup, evidence categories and measurements are in
 
 | Check | Result |
 | --- | --- |
-| Host package suite | 628/628 on a clean full run of the follow-up code (626 at the initial device run); two pre-existing timing-sensitive tests failed in other runs and are recorded, not relabelled |
+| Host package suite | 630/630 on a clean full run of the follow-up code (626 at the initial device run); two pre-existing timing-sensitive tests failed in other runs and are recorded, not relabelled |
 | Device core/probes | 20/20 — Keychain round trip, saved-server restore, launch states, preferences |
 | Device feature journeys | 46/49 pass in the grouped run; the three failures passed 2/2 each in isolation and remain recorded as unresolved device-timing failures |
 | Device real LAN | connect, header persistence/relaunch, foreground/background recovery, Local Network denial/allow, expired QR and unreachable hint passed; one SSE stream per reconnect |
@@ -677,3 +677,11 @@ UI test and package test pass. An owner-reported “Couldn’t send message.” 
 stopped/aborted real-server session and a layered code-block appearance are recorded as open
 observations in `DEVICE_VALIDATION.md`; neither was reproduced against the synthetic fixture and no
 additional paid prompt was sent.
+
+Follow-up fixes from owner review: the composer now loads its model/agent catalogue on first task and
+adopts a loaded session's model/agent before the picker is opened (D-110). Opening an already-read
+session no longer sends a redundant view receipt, so a late rejection cannot show “Couldn’t mark …
+as read.” Both are covered by package tests and were checked on the real server. A “Couldn’t send
+message.” failure was reproduced on a new real-server session with the owner-authorized DeepSeek
+V4.1 Flash/Build combination, but the app hides the HTTP status; it remains open pending the server
+response/log.

@@ -135,7 +135,7 @@ therefore runs in the app process through a DEBUG-only `-uiTestKeychainProbe` la
 | Device performance (P12) | Home 83–84.6 fps/0 hitches; transcript p95 25–26 ms; streaming/media p95 16.7 ms; peak memory ≈18.2–18.5 MB |
 
 | `swift test --package-path OpenCodeKit` (P11 saved-data recovery) | 626 tests pass (209 server, 67 core, 97 app, 41 drawer, 79 session, 26 transcript, 60 composer, 32 media, 15 settings) |
-| `swift test --package-path OpenCodeKit` (P12 follow-up) | 628 tests pass; adds two setup-scan tests on top of the P11 count |
+| `swift test --package-path OpenCodeKit` (P12 follow-up) | 630 tests pass; adds setup-scan, agent-prefetch and read-receipt tests on top of the P11 count |
 | `xcodebuild … test` (P11 saved-data recovery) | 81/81 grouped UI tests pass on the final code; the earlier known P8 anchor flake remains recorded in `STATUS.md` |
 | Phase 11 simulator measurements | iPhone 18 Pro Max, iOS 27.2 (runtime `24B8117`); no physical iPhone, camera, signing team or provisioning change was used |
 
@@ -146,3 +146,8 @@ device; no 27.2 phone was connected. The 27.2 SDK still builds and installs onto
 checks whose applicability is clear across the minor version were run. No simulator was substituted,
 no beta was installed and the phone was not upgraded or enrolled for this task. Results in
 [DEVICE_VALIDATION.md](DEVICE_VALIDATION.md) are therefore **iOS 27.3 device results**, not 27.2.
+
+The P12 follow-up fixes add three package tests (`ComposerCatalogTests.taskLoadsAgentsBeforePicker`,
+`HomeFeatureTests.alreadyReadSessionSkipsReceipt`, and the setup-scan Settings test), taking the full
+package run to 630 tests. The real-server follow-up used the owner-authorized DeepSeek V4.1 Flash for
+one synthetic prompt; no prompts were sent to other models.

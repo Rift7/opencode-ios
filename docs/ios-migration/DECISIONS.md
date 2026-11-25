@@ -1353,3 +1353,17 @@ any `/auth/connect` request.
   `testSetupScanShowsConfirmationWithoutRedeeming` (injected scan → confirmation, no redemption) and
   `SettingsFeatureTests.setupScanStartsOnOpen`; the UI test passed on the physical iPhone.
 - Follow-up to the owner-reported setup gap in `DEVICE_VALIDATION.md`.
+
+### D-110 Composer selection loads eagerly and read receipts skip already-viewed sessions
+The composer starts its model/agent/skill/command catalogue load on its first task instead of waiting
+for a picker, and the first session snapshot adopts that session's model/agent when present. The chip
+therefore has a real label and the picker has rows before it is opened. The session snapshot wins over
+a catalogue default; a later user choice still wins because adoption happens only on the initial
+root. Separately, `HomeFeature.markRead` still updates local read state but sends no `POST /view` when
+the session's `viewed` watermark already covers its `idle` watermark, so an already-read row cannot
+surface a late receipt failure.
+
+- Gate: `ComposerCatalogTests.taskLoadsAgentsBeforePicker`,
+  `HomeFeatureTests.alreadyReadSessionSkipsReceipt`; real-server device checks showed the Build chip
+  before opening the picker and no read error on leaving an already-read session.
+- See `DEVICE_VALIDATION.md` owner follow-ups.
