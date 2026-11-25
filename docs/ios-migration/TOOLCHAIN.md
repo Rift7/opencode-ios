@@ -9,6 +9,7 @@ Verified on the audit machine with the requested toolchain; no substitution was 
 | iOS SDK | 27.2 |
 | iOS simulator runtimes | 27.2, 27.0, 26.5 |
 | macOS | 27.2.1, arm64 |
+| Physical device for P12 | iPhone Air, **iOS 27.3 (24C5049f)** |
 
 Dependency resolution for the app (via `ios/OpenCodeKit`):
 
@@ -129,7 +130,18 @@ therefore runs in the app process through a DEBUG-only `-uiTestKeychainProbe` la
 | `swift test --package-path OpenCodeKit` (P9) | 492 tests pass (194 server, 67 core, 75 app, 38 drawer, 66 session, 26 transcript, 26 composer) |
 | `xcodebuild … test` (P9) | app build succeeds; 58 UI tests pass |
 | Device build (iPhone Air, iOS 27.2) | succeeds with `-allowProvisioningUpdates DEVELOPMENT_TEAM=<team> -skipMacroValidation`; automatic signing registered the app |
+| Device build and install (P12, iPhone Air iOS 27.3) | same existing signing/profile and unchanged bundle id; installed in place without uninstalling the container |
+| `xcodebuild … test` (P12) | 20/20 core device tests, 46/49 grouped feature journeys (three intermittent, pass 2/2 individually), 2/2 real-LAN checks, 12/12 final affected tests after the scanner fix |
+| Device performance (P12) | Home 83–84.6 fps/0 hitches; transcript p95 25–26 ms; streaming/media p95 16.7 ms; peak memory ≈18.2–18.5 MB |
 
 | `swift test --package-path OpenCodeKit` (P11 saved-data recovery) | 626 tests pass (209 server, 67 core, 97 app, 41 drawer, 79 session, 26 transcript, 60 composer, 32 media, 15 settings) |
 | `xcodebuild … test` (P11 saved-data recovery) | 81/81 grouped UI tests pass on the final code; the earlier known P8 anchor flake remains recorded in `STATUS.md` |
 | Phase 11 simulator measurements | iPhone 18 Pro Max, iOS 27.2 (runtime `24B8117`); no physical iPhone, camera, signing team or provisioning change was used |
+
+## Physical-device OS mismatch (P12)
+
+The connected validation phone runs iOS 27.3 (24C5049f). The Phase 12 request named an iOS 27.2
+device; no 27.2 phone was connected. The 27.2 SDK still builds and installs onto 27.3, and the
+checks whose applicability is clear across the minor version were run. No simulator was substituted,
+no beta was installed and the phone was not upgraded or enrolled for this task. Results in
+[DEVICE_VALIDATION.md](DEVICE_VALIDATION.md) are therefore **iOS 27.3 device results**, not 27.2.

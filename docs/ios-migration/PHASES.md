@@ -19,7 +19,7 @@ finished. Statuses here are the same vocabulary as `PARITY.md`: `not started`, `
 | P8 | Transcript | done — merged as `2823c06e` (PR #7); merged tree `1147dca8` equals reviewed head `5ea6ea65` | `STATUS.md` Phase 8, `PARITY.md` Transcript, 26 grouping/Markdown + 19 session + 11 decoding tests, 8 UI journeys, 2 scroll traces, 6 screenshots |
 | **P9** | **Composer, drafts, sends, queue, request dock, quotes** | **done on `ios-composer`** (draft PR, base `ios`) | `STATUS.md` Phase 9, `PARITY.md` Composer, 26 composer + 22 session + 9 server tests, 11 UI journeys, typing traces, 10 screenshots |
 | P10 | Media | **done on `ios-media`** (draft PR, base `ios`) | `STATUS.md` Phase 10, `P10_MATRIX.md`, `PARITY.md` Media, 532 package tests, 8 media journeys, 16 screenshots, three performance traces |
-| P11 | Settings, experiments, diagnostics, onboarding, QR pairing, models, autocomplete, files | **done on `ios-settings`** (draft PR, base `ios`) | `P11_MATRIX.md`, `STATUS.md` Phase 11, `PARITY.md` Settings, 34 new settings, catalogue, autocomplete, selection, header and folder tests, 8 UI journeys, 12 screenshots, autocomplete trace |
+| P11 | Settings, experiments, diagnostics, onboarding, QR pairing, models, autocomplete, files | **done on `ios`** — PR #10 merged as `6681feed`; tree `b49d0917` equals `d0fcee29` | `P11_MATRIX.md`, `STATUS.md` Phase 11, `PARITY.md` Settings, 34 new settings, catalogue, autocomplete, selection, header and folder tests, 8 UI journeys, 12 screenshots, autocomplete trace |
 | P12 | System integrations | not started | [P12_DEVICE_CHECKLIST.md](P12_DEVICE_CHECKLIST.md) carries the physical-phone checks |
 | P13 | Voice (Experimental, off) | not started | folders only |
 | P14 | Hardening | not started | — |

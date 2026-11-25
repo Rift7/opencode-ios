@@ -31,6 +31,8 @@
 | P11 review-correction head | `f553cbd7` (preference consumers, mention occurrences, catalogue ownership, server transaction and cancellation checks) |
 | P11 storage-correction head | `c9cb1602` (serialized server-record ownership, collision/rollback tests) |
 | P11 saved-data-recovery head | `7170e91a` (explicit corrupt-record recovery, raw rollback, final 81/81 UI run) |
+| P11 merged head | `6681feed` (PR #10 squash merge); merged tree `b49d0917` equals corrected `d0fcee29` |
+| P12 device-validation branch | `ios-device-validation`, created from updated `origin/ios` after `git fetch origin` |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
 `git fetch origin` moved `origin/ios` to `e42cb455`; PR #8 (`ios: add the native composer, drafts, sends, queue,
@@ -59,8 +61,8 @@ is the hand-off check.
 | 8 | Transcript | complete — merged as `2823c06e` (PR #7); merged tree `1147dca8` equals reviewed head `5ea6ea65` |
 | 9 | Composer | complete on `ios` — PR #8 merged as `e42cb455`; merged tree `62d44987` equals reviewed `1fd90423` |
 | 10 | Media | complete — merged as `0ec10ba4` (PR #9); merged tree `02dad71e` equals reviewed `9880eeb9` |
-| 11 | Settings, experiments, diagnostics, onboarding, QR pairing, models, autocomplete, files | **complete on `ios-settings`** (draft PR, base `ios`); see [P11_MATRIX.md](P11_MATRIX.md) and [P12_DEVICE_CHECKLIST.md](P12_DEVICE_CHECKLIST.md) |
-| 12 | System integrations | not started |
+| 11 | Settings, experiments, diagnostics, onboarding, QR pairing, models, autocomplete, files | complete on `ios` — PR #10 merged as `6681feed`; tree `b49d0917` equals `d0fcee29`; see [P11_MATRIX.md](P11_MATRIX.md) |
+| 12 | System integrations | **not started**; the deferred P3–P11 device checklist is complete on `ios-device-validation` — see [DEVICE_VALIDATION.md](DEVICE_VALIDATION.md) |
 | 13 | Voice (Experimental, off) | not started |
 | 14 | Hardening | not started |
 
@@ -301,7 +303,7 @@ reviewed P8 head `5ea6ea65`; the P8 overflow-recovery corrections survived the m
 | --- | --- | --- |
 | Composer state, draft scope, send eligibility, quote chips, failed-send recovery | `OpenCodeKit/Sources/OpenCodeComposer/{ComposerModels,ComposerFeature}.swift` | `OpenCodeComposerTests` — 10 cases (restore, delayed race, failed save, size bound, duplicate tap, newer typing, unverified, failure recovery, quote metadata) |
 | Debounced, per-scope draft persistence with explicit outcomes | `.../OpenCodeComposer/ComposerDraftStore.swift` | actor store, 500 ms reducer debounce, flush, atomic file storage, `tooLarge` without truncation |
-| Focused UIKit text input: selection, marked text, hardware Return and Shift+Return, dynamic height | `ios/OpenCode/Composer/ComposerTextInput.swift` | UI journeys; marked text/hardware keyboard need device checks |
+| Focused UIKit text input: selection, marked text, hardware Return and Shift+Return, dynamic height | `ios/OpenCode/Composer/ComposerTextInput.swift` | UI journeys; Japanese marked text and chip editing device-verified under P12; hardware Shift+Return blocked (no keyboard) |
 | Native composer, request dock, answer bar, queued sheet and quote selection | `ios/OpenCode/Composer/{ComposerViews}.swift` | 10 `ComposerUITests` journeys, 10 screenshots |
 | First-send creation, ordinary sends, reconciliation, wait loop, inbox operations, request-bar routing, quote handoff, late-result fencing | `OpenCodeKit/Sources/OpenCodeSession/{SessionFeature,SessionModels,RequestDockState}.swift` | `ComposerSessionTests` — 14 cases |
 | Prompt/create/wait/cancel routes and one wait retry owner | `OpenCodeServer/Client/{PromptOperations,OpenCodeClient}.swift`, `Retry/SessionWaitLoop.swift` | `ComposerClientTests` — 4 route/body cases; `SessionWaitLoopTests` — 5 bounded/cancellation cases |
@@ -313,7 +315,7 @@ reviewed P8 head `5ea6ea65`; the P8 overflow-recovery corrections survived the m
 
 | Contract | Current `dev` source (`7358160e`) | Adopted behaviour | Evidence |
 | --- | --- | --- | --- |
-| Composer text, selection, composition | `ComposerTextInput.kt` (`ImagePasteTextView` bridge, selection restore, `finishCompositionIfNeeded`) | UIKit `UITextView` bridge; external draft sync is deferred while marked text exists; selection clamped; Return sends, Shift+Return inserts a newline; caret moves to end on a focus request | `ComposerTextInput`; UI typing/relaunch journeys; marked text/hardware keyboard reported unverified on device |
+| Composer text, selection, composition | `ComposerTextInput.kt` (`ImagePasteTextView` bridge, selection restore, `finishCompositionIfNeeded`) | UIKit `UITextView` bridge; external draft sync is deferred while marked text exists; selection clamped; Return follows the Return Sends preference, Shift+Return inserts a newline; caret moves to end on a focus request | `ComposerTextInput`; UI typing/relaunch journeys; Japanese marked text, suggestion insertion and chip editing device-verified under P12; hardware Shift+Return blocked (no keyboard) |
 | Draft identity and persistence | `ComposerPersistence*.kt` (`serverID|sessionID`, `composer-state.json`, 500 ms debounce, New Session project, stale entries) | Key = server persistence ID + session, or server + project for a new session; 500 ms debounce; flush on Done and background; 128 KiB text / 64 KiB quotes / 200 quotes; a too-large draft is reported and kept, never truncated | `ComposerFeatureTests.draftRestorationAndIsolation`, `delayedRestorationLosesToTyping`, `failedSaveIsReported`, `tooLargeDraft`; UI relaunch and session-switch journeys |
 | New-session entry and first send | `HomeFeatureDrawer.kt` (`NewSessionTapped`), `HomeFeature.kt` (`openingDraft`) | Home toolbar and each project row start a new composer; the first send creates `POST /api/session` under a client-made id, then posts the prompt under a client-made message id | `ComposerSessionTests.firstSendCreatesSession`, `createThenSendFailure`; UI new-session journey |
 | Ordinary sends, duplicate taps, partial failure | `SessionFeatureSend.kt` (`sendComposer`, `submit`), `SessionFeatureDelivery.kt` | Composer blocks a second tap while a send is in flight; a created session is retained if the prompt fails; the failed text returns to the composer (or a Retry/Edit row if newer text exists) | `duplicateSendTapSendsOnce`, `createThenSendFailure`, `failureRestoresDraft`, `failureWithNewerTyping` |
@@ -449,7 +451,7 @@ dock and queued sheet show fixture-only questions and messages.
 | Contract | Status | Evidence or limit |
 | --- | --- | --- |
 | Photo import | done for images via `PhotosPicker` | picker videos are not imported; Files can attach a video and server videos play |
-| Camera import | done through the system capture UI | deliberate native adaptation of the audited custom camera; physical camera unverified |
+| Camera import | done through the system capture UI | deliberate native adaptation of the audited custom camera; composer camera capture was not exercised on device; QR capture was verified under P12 |
 | Document import | done with the system file importer and an app-owned copy | iCloud/file-provider latency and eviction unverified on device |
 | Paste | images, files and long text; >1,000 chars or >12 lines becomes Pasted Text | ordinary typing is never converted |
 | Staging/validation/upload | 20 MB images, 100 MB files, actual MIME sniff, progress, stable upload path, retry, unsupported server | live `/api/info` + `/api/experimental/fs/write` not run against a real V2 server |
@@ -613,7 +615,7 @@ The 421 package tests are the sum of the six target runs the package runner prin
 | Existing regressions | full package suite passes; P8/P9/P10 suites unchanged apart from additive fields with decoding defaults. The P10 media UI/perf harnesses now scroll rows clear of the taller P11 composer inset and wait for viewer dismissal; product behaviour is unchanged. `MediaUITests` passes 8/8 and `MediaPerformanceUITests` 3/3 with that adjustment; the large-image loop measured 5.12 s including UI-test waits. |
 | Screenshots | `docs/ios-migration/screens/p11-{settings,diagnostics,onboarding,model-picker,autocomplete,folder-browser}-{light,dark}.png`, captured from `SettingsScreenshotUITests` on the iPhone 18 Pro Max simulator with the synthetic `Fixture` server and `/work/opencode` paths |
 
-### P11 simulator-tested vs hardware-unverified
+### P11 simulator evidence and the P12 device follow-up
 
 - **Simulator-tested:** preference defaults/migration/save failure/restore race; experiment write and
   browser close; server/header validation and save-failure retention; diagnostics allowlist;
@@ -622,10 +624,14 @@ The 421 package tests are the sum of the six target runs the package runner prin
   snapshot; autocomplete triggers, composition guard, occurrence ranges and mention encoding;
   folder navigation and draft preservation; server edit/removal transactions, collision/restart
   recovery and draft handoff.
-- **Hardware-unverified (P12):** real camera capture and permission prompts, physical Keychain on a
-  signed build, haptics, IME marked text and hardware Shift+Return, VoiceOver, photo/file provider
-  eviction, playback interruptions/share, memory pressure and device performance. See
-  [P12_DEVICE_CHECKLIST.md](P12_DEVICE_CHECKLIST.md).
+- **Verified on device under P12:** real camera QR capture, confirmation before redemption, exactly
+  once, expired code, denied camera after the scanner-cover fix; signed-app Keychain and relaunch
+  persistence; all eleven haptics; Japanese marked text and real LAN suggestion insertion; VoiceOver;
+  share presentation; real LAN connect/header/foreground-background recovery; performance traces.
+- **Still blocked/unverified:** camera restriction, photo/file provider permissions and eviction,
+  playback interruption, hardware Shift+Return, real memory pressure, denied-Keychain write injection,
+  compatible live-server read-only and push (P13). See
+  [DEVICE_VALIDATION.md](DEVICE_VALIDATION.md) and [P12_DEVICE_CHECKLIST.md](P12_DEVICE_CHECKLIST.md).
 
 ### P11 limitations and deferrals
 
@@ -639,3 +645,28 @@ The 421 package tests are the sum of the six target runs the package runner prin
 - No live V2 server with the model/agent/skill/command/find routes was available; fixture and
   request-shape coverage is recorded, not live compatibility.
 - The autocomplete measurement includes XCTest input overhead and is not a device-performance claim.
+
+## Phase 12 — physical-iPhone validation
+
+The deferred P3–P11 device checklist was run on the connected iPhone Air (**iOS 27.3, 24C5049f**;
+the requested 27.2 device was not available) with Xcode 27.2/Swift 6.4.2 and the existing
+development signing. Full setup, evidence categories and measurements are in
+[DEVICE_VALIDATION.md](DEVICE_VALIDATION.md); the per-row result is in
+[P12_DEVICE_CHECKLIST.md](P12_DEVICE_CHECKLIST.md).
+
+| Check | Result |
+| --- | --- |
+| Host package suite | 626/626 on a clean full run; two pre-existing timing-sensitive tests failed in other runs and are recorded, not relabelled |
+| Device core/probes | 20/20 — Keychain round trip, saved-server restore, launch states, preferences |
+| Device feature journeys | 46/49 pass in the grouped run; the three failures passed 2/2 each in isolation and remain recorded as unresolved device-timing failures |
+| Device real LAN | connect, header persistence/relaunch, foreground/background recovery, Local Network denial/allow, expired QR and unreachable hint passed; one SSE stream per reconnect |
+| Device final affected suite | 12/12 after the scanner fix |
+| Camera and haptics | physical QR confirmation/redeem, expired code, camera denial and all eleven haptics passed; camera denial required a fix |
+| VoiceOver and IME | owner-confirmed VoiceOver order/names/states/focus; Japanese marked text suppressed suggestions until commit, then real LAN suggestions and insertion worked |
+| Performance | Home 83–84.6 fps, 0 hitches; transcript scroll p95 25–26 ms/max 33–39 ms; media/streaming p95 16.7 ms; peak memory ≈18.2–18.5 MB |
+| Remaining | photo/file provider permissions and eviction, playback interruption, hardware Shift+Return, real memory pressure, denied-Keychain injection, compatible live-server read-only, push (P13) |
+
+One product fix landed: the scanner full-screen cover now remains presented while a typed camera
+problem is shown (`isScanPresented`), with regression tests for denial, dismissal and cancel. A
+minimal LAN fixture also needed `{data: …}` envelopes and a valid new-session payload; that was
+tooling, not an app change.

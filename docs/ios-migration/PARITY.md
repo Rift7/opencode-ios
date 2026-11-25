@@ -47,7 +47,7 @@ Baselines:
 | Reducer/store semantics | `core/.../store/{Reducer,Effect,Store,TestStore}.kt` | TCA | `ComposableArchitecture` 1.26.2 (exact) | done — sibling order, effect order, cancellation identity, child-first `ifLet`, presentation dismissal and path-indexed cancellation tested on representative compositions (`OpenCodeAppTests/StoreSemanticsTests.swift`) |
 | Dependency clients | `core/.../dependencies/DependencyValues.kt` | `Core/Dependencies` | `ios/OpenCodeKit/Sources/OpenCodeCore/{Dependencies,Transport,Haptics,Storage,Network}` (date, id, pasteboard, shared store, network path, haptics, HTTP transport) | done — every test value inert, guarded by `DependencyIsolationTests` |
 | Shared keys and storage | `core/.../sharing/{Shared,SharedKeys}.kt` | `Core/SharedKeys.swift`, `Keychain.swift` | `.../Storage/{KeyValueStorage,SharedKeys}.swift` | done — four foundation keys, defaults, storage routing, round-trip and failure propagation tested |
-| Keychain | `core/.../sharing/LiveSharedBytes.kt` | `Core/Keychain.swift` | `.../Storage/{KeyValueStorage,KeychainStorage}.swift` | done — typed `value`/`missing`/`failure` outcomes, failure mapping unit-tested, round-trip verified in the app process |
+| Keychain | `core/.../sharing/LiveSharedBytes.kt` | `Core/Keychain.swift` | `.../Storage/{KeyValueStorage,KeychainStorage}.swift` | done — typed `value`/`missing`/`failure` outcomes, failure mapping unit-tested, round-trip verified in the signed app process and saved credentials/headers restored across relaunch on device |
 | Semantic colour tokens | `core/.../ui/{BrandPalette,OpenCodeColors}.kt` | `Core/Theme/Theme.swift` (system colours) | `.../Design/OpenCodeColorTokens.swift` | done |
 | Type tokens | `core/.../ui/OpenCodeTypography.kt` | system text styles | `.../Design/OpenCodeTypeTokens.swift` | done |
 | Spacing and radius tokens | `core/.../ui/OpenCodeShapes.kt` (`OpenCodeSpacing`, `OpenCodeRadius`, `OpenCodeShapeGeometry`) | not recoverable — native decision (D-17) | `.../Design/OpenCodeLayoutTokens.swift` | done — grid, radius scale and corner clamp tested |
@@ -55,7 +55,7 @@ Baselines:
 | Logging | `core/.../log/AppLog.kt` | `Core/AppLog.swift` | `.../Logging/AppLog.swift` | scaffold — structured public fields only (numbers/booleans), free text private; not the full Android journal |
 | Test isolation and network guard | (test-only `TestNetworkBlock`) | `TestIsolationGuard` | `.../OpenCodeTestSupport` | done — isolated storage, network guard, and a transport seam whose test value blocks |
 | Preview states | n/a | SwiftUI previews | `ios/OpenCode/App/RootView.swift` (`#Preview` × 2) | scaffold |
-| Haptics vocabulary | `core/.../haptics/HapticsClient.kt` | not recoverable — native decision (D-19) | `.../Haptics/HapticsClient.swift` | done for the seam and vocabulary; physical-device feel unverified |
+| Haptics vocabulary | `core/.../haptics/HapticsClient.kt` | not recoverable — native decision (D-19) | `.../Haptics/HapticsClient.swift` | done for the seam and vocabulary; all eleven verified on a physical iPhone (distinct; `tap` lighter than warning/error) |
 
 ## Server
 
@@ -68,7 +68,7 @@ Baselines:
 | Wire models | `server/model/*.kt`, `live/Payloads.kt` | `OpenCodeClient+Payloads.swift` | `OpenCodeServer/Models/*.swift` | partial — session, project, shell, job, prompt body, model ref, permission/form request models, family, shell output, transcript items/tools/files/images/compaction/notices/errors and envelopes modelled; remaining routes listed in `PROTOCOL_COVERAGE.md` |
 | Client boundary | `server/OpenCodeClient.kt` | `OpenCodeClient.swift` | `OpenCodeServer/Client/{OpenCodeClient,SessionOperations,TranscriptOperations}.swift` | done for the shell, Home, P7 and P8: health, pairing redeem, projects, session page (first/search/after), get session, active IDs, attention IDs, view receipt, delete, events with awaited phase callbacks, interrupt, family, pending requests/replies, inbox delivery, shells/output/stop, jobs/cancel, transcript window/history/message; remaining call sites belong to their feature phases |
 | Alternate-origin routing | `server/ServerLink.kt` | `OpenCodeClient+Family.swift` | `OpenCodeServer/Address/ServerLink.swift` | done — every candidate probed once, preferred head start, first answer wins, 401 preferred on failure |
-| Network path | `server/retry/NetworkPath.kt` | `NetworkPath.swift` | `OpenCodeCore/Network/NetworkPathClient.swift` | done for observation, offline/wait and reroute-driven reconnect; live monitor hardware path unverified |
+| Network path | `server/retry/NetworkPath.kt` | `NetworkPath.swift` | `OpenCodeCore/Network/NetworkPathClient.swift` | done for observation, offline/wait and reroute-driven reconnect; foreground/background plus real socket-loss recovery verified on device, radio-path change not separately exercised |
 | SSE decode and batching | `server/live/LiveEvents.kt`, `EventBatcher.kt` | `OpenCodeClient+Events.swift` | `OpenCodeServer/Events/*.swift` | done — framing, decoding, coalescing, ordering and bounds; P8 adopts the off-screen policy as batched coalescing plus on-demand Markdown parsing, never dropping deltas (D-61) |
 | Reconnect and watchdog | `server/live/LiveEvents.kt`, `retry/NetworkRetry.kt` | not recoverable | `EventStreamRunner`, `EventStream` | done — reconnect schedule, 401 stop, 45 s idle watchdog, connect deadline covering headers, bounded overflow recovery with a REST resync callback tested (D-27) |
 | Pairing decode and redeem | `server/OpenCodePairingLink.kt`, `live/LiveConnection.kt` | `OpenCodePairingLink.swift` | `OpenCodeServer/Pairing/PairingLink.swift`, `OpenCodeClient.redeemPairing` | done — every form, validation reasons, loopback filtering, non-fetching draw link, one unauthenticated GET per candidate tested |
@@ -161,7 +161,7 @@ cancellation identities → error states. The full extraction is in `docs/ios-mi
 
 | Behaviour | Android source (`dev = 7358160e`) | Recovered iOS evidence | New path | Status |
 | --- | --- | --- | --- | --- |
-| Text, selection, IME and hardware Return | `ComposerTextInput.kt` (`ImagePasteTextView`, `syncText`, `finishCompositionIfNeeded`, `ComposerSavedSelection`, keyboard preview handling) | `ComposerTextInput.swift` (description only) | `ios/OpenCode/Composer/ComposerTextInput.swift` | done for the bridge — `UITextView` preserves marked text against external sync, clamps selection, grows to 168 pt, sends on Return and inserts a newline on Shift+Return; marked text/hardware keyboard device checks remain |
+| Text, selection, IME and hardware Return | `ComposerTextInput.kt` (`ImagePasteTextView`, `syncText`, `finishCompositionIfNeeded`, `ComposerSavedSelection`, keyboard preview handling) | `ComposerTextInput.swift` (description only) | `ios/OpenCode/Composer/ComposerTextInput.swift` | done for the bridge — `UITextView` preserves marked text against external sync, clamps selection, grows to 168 pt, sends on Return when Return Sends is enabled and inserts a newline on Shift+Return; Japanese marked text and chip editing verified on device; hardware Shift+Return blocked (no keyboard) |
 | Draft scope, debounce, flush, outbound ownership and bounds | `ComposerPersistence*.kt` (`composer-state.json`, 500 ms, server+session keys, New Session project, 30-day staleness) | `ComposerPersistence.swift` (description only) | `OpenCodeComposer/ComposerDraftStore.swift`, `ComposerFeature` | done — server+session / server+project keys; 500 ms reducer debounce; explicit Done/background flush; 128 KiB text, 64 KiB quotes, 200 quotes; failed sends and the in-flight outbound record are persisted; unresolved outbound restores as an unverified failed send with its original ID; failure and too-large are typed, no truncation |
 | Send eligibility, durable outbound, first-send creation, duplicate protection | `SessionFeatureSend.kt` (`sendComposer`, `submit`, `SendTapped`), `HomeFeatureDrawer.kt` (`NewSessionTapped`) | `SessionFeature.swift` (description only) | `ComposerFeature`, `SessionFeature.startComposerSend`, Home `newSessionTapped` | done — the outbound record is written before dispatch; a save failure does not send; one in-flight send; `POST /api/session` with a client id before the prompt; created session retained on prompt failure |
 | Message IDs, failure recovery, retry, restart reconciliation | `SessionFeatureDelivery.kt` (`serverHas`, send backoff), `LivePrompts.kt` (idempotent prompt ID) | `SessionFeature.swift` (description only) | `ComposerFeature.failedSends`, `SessionFeature.composerSendResult`, `reconcileMessage` | done with the recorded P9 gate — definite rejection can retry under a new ID that is durably recorded before dispatch; ambiguous read-back settles or reports unverified; a retry mints a new ID only after a successful read-back confirms the old ID absent, then persists it before the prompt; an outbound record left by termination reopens as unverified and preserves its actual ID/target; results never fall back to another outbound record |
@@ -273,12 +273,12 @@ Recorded here so they are not mistaken for missing work.
 | Server editing and custom headers | `AppFeature.kt`, `OpenCodeServer.kt` | manual server form (description only) | `SettingsFeature`, `ServerEditForm`, `OpenCodeServer.Header` | done — name/value/forbidden-header validation, Keychain write only after success, prior config retained on failure, headers origin-bound and cache-scope-aware |
 | Diagnostics and copied report | `ProblemReport.kt`, `DiagnosticsJournal.kt` | copy report (description only) | `DiagnosticFacts`, `DiagnosticReport` | done — allow-listed typed facts, user-initiated, fixed order; adversarial privacy test |
 | Onboarding/help | `WelcomeFeature.kt`, `WelcomeView.kt` | welcome captures (secondary) | `SettingsView.onboardingPage/helpPage` | done — three-step guide and help without credentials or hardware |
-| QR pairing presentation | `PairingScanner.kt`, `ServerCameraClient.kt`, `QRCameraPreview.kt` | scanner description only | `PairingScannerClient`, `QRCameraScanner`, `PairingCaptureView` | done in simulator through the same boundary; physical camera and permissions are P12 |
+| QR pairing presentation | `PairingScanner.kt`, `ServerCameraClient.kt`, `QRCameraPreview.kt` | scanner description only | `PairingScannerClient`, `QRCameraScanner`, `PairingCaptureView` | done — physical camera capture, confirmation before redemption, exactly-once redemption, expired-code copy and denial state verified on device; restricted/unavailable unverified |
 | Shipped What's New catalogue | `whatsnew/entries/*.kt` (182 files), `WhatsNewEntries.kt` | row/page capture only | `WhatsNewCatalogue.swift`, `WhatsNewView` | done — IDs/days/copy reconstructed; seen state retained; Try It works or is explicitly unavailable |
 | Model catalogue and reasoning variants | `LiveCatalog.kt`, `Models.kt`, `ModelPicker*` | `ModelPicker` description only | `ModelCatalog.swift`, `CatalogOperations.swift`, picker sheet | done in fixtures — `/api/model`, optional `/api/model/default`, `/api/agent`, variant ordering and short names |
 | Agent/mode selection | `AgentPicker.kt`, `LiveCatalog.kt` | description only | `ServerAgent`, agent picker | done — choosable primary/all, server-default choice |
 | Apply selection before send | `ComposerFeature.send`, `SessionFeatureDelivery.kt` | not recoverable | `SessionFeature.startComposerSend` | done — agent then model once before the prompt; queued sends do not switch; refusal fails the send; configuration snapshotted in the outbound record |
-| File/agent/skill/command autocomplete | `AutocompleteFeature.kt`, `AutocompleteModels.kt` | description only | `ComposerAutocomplete.swift`, `ComposerViews.swift` | done — UTF-16 triggers, bounded rows, generation fences, IME composition guard |
+| File/agent/skill/command autocomplete | `AutocompleteFeature.kt`, `AutocompleteModels.kt` | description only | `ComposerAutocomplete.swift`, `ComposerViews.swift` | done — UTF-16 triggers, bounded rows, generation fences, IME composition guard; Japanese marked text and real LAN suggestion insertion verified on device |
 | Mentions and prompt encoding | `ComposerAutocomplete*.kt`, `OpenCodeAutocompleteMentions` | not recoverable | `ComposerMentionBuilder`, `PromptBody` mention fields | done for agents/skills/files; session mentions deferred |
 | Remote folder browser | `FolderBrowserFeature.kt`, `DraftProjects.kt`, `LiveFiles.kt` | description only | `FolderBrowserFeature.swift`, `FolderBrowserView.swift` | done — on-demand `fs/list`, remote-only paths, loading/retry/empty/error, back/cancel and draft-preserving selection |
 
@@ -300,3 +300,29 @@ Recorded here so they are not mistaken for missing work.
 | Custom-header transport | `OpenCodeServerTests/ServerHeaderTransportTests.swift` | done — edited headers reach the wire, removed/forbidden/malformed ones do not, and credentials remain usable |
 | What's New catalogue | `OpenCodeDrawerTests/WhatsNewCatalogueTests.swift` | done — 182 entries, unique IDs, newest-first, copy present, honest destinations |
 | P11 UI | `OpenCodeUITests/{SettingsUITests,ComposerContextUITests,SettingsScreenshotUITests}.swift` | done — 9 journeys and 12 light/dark screenshots |
+
+## Physical-device validation (P12)
+
+The deferred P3–P11 device checks ran on the connected iPhone Air (iOS 27.3, 24C5049f; requested
+27.2 unavailable) with Xcode 27.2/Swift 6.4.2 and the existing development signing. Full evidence is
+in [DEVICE_VALIDATION.md](DEVICE_VALIDATION.md) and per-row results in
+[P12_DEVICE_CHECKLIST.md](P12_DEVICE_CHECKLIST.md).
+
+- Real LAN: connect, custom-header persistence/relaunch, Local Network denial/allow,
+  foreground/background plus socket-loss recovery, one SSE stream per reconnect, and a refused
+  cross-origin redirect with zero observer requests.
+- Camera/QR: physical capture, confirmation before redemption, exactly-once redemption, expired
+  code, and the camera-denied UI after the scanner-cover fix (D-107).
+- Keychain: add/read/update/delete in the signed app and saved-server/header restoration across
+  termination/relaunch.
+- Input/accessibility: eleven haptics felt, VoiceOver walk by the owner, Japanese marked text
+  suppressing suggestions until commit, real LAN suggestion insertion, selection/quote/copy,
+  Dynamic Type and Reduce Motion settings.
+- Share sheet: presented with synthetic file text; the system share-sheet process is outside the
+  app's XCTest tree, so the evidence is manual.
+- Not verified: camera restriction, photo/file provider permissions and eviction, playback
+  interruption, hardware Shift+Return, real memory pressure, denied-Keychain write injection, and a
+  compatible live-server read-only pass.
+- Performance: Home 83–84.6 fps with 0 hitches; long transcript p95 25–26 ms and max 33–39 ms;
+  streaming/media p95 16.7 ms; peak memory about 18.2–18.5 MB. These are device measurements, not
+  the simulator numbers recorded earlier.
