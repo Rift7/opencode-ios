@@ -27,6 +27,9 @@ public struct SettingsFeature: Sendable {
     public var onboardingStep: Int
     public var isScanning: Bool
     public var scanProblem: PairingScanProblem?
+    /// The scanner cover remains presented while a typed problem is shown, so a denial is visible
+    /// instead of dismissing the cover with the scan.
+    public var isScanPresented: Bool { isScanning || scanProblem != nil }
     public var handledScans: Set<String>
     public var notice: SettingsNotice?
 
@@ -496,8 +499,9 @@ public struct SettingsFeature: Sendable {
         return .merge(.cancel(id: CancelID.scan), stopScanner())
 
       case .scanCancelled:
-        guard state.isScanning else { return .none }
+        guard state.isScanning || state.scanProblem != nil else { return .none }
         state.isScanning = false
+        state.scanProblem = nil
         state.scanGeneration += 1
         return .merge(.cancel(id: CancelID.scan), stopScanner())
 

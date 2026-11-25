@@ -32,7 +32,7 @@ struct SettingsView: View {
     }
     .fullScreenCover(
       isPresented: Binding(
-        get: { store.isScanning },
+        get: { store.isScanPresented },
         set: { if !$0 { store.send(.scanCancelled) } }
       )
     ) {
