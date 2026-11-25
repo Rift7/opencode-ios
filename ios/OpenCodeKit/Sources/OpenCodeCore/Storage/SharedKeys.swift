@@ -94,6 +94,29 @@ public struct SharedStore: Sendable {
     storage(for: key).delete(key.name)
   }
 
+  /// Raw access for an explicit recovery transaction that must preserve bytes it cannot decode.
+  /// Ordinary feature code should use the typed API above.
+  public func readRaw(name: String, storage kind: SharedStorage) -> StorageRead {
+    storage(kind).read(name)
+  }
+
+  /// Writes exact bytes, or deletes when nil. Explicit recovery transactions use this only for
+  /// rollback of records they could not decode.
+  @discardableResult
+  public func writeRaw(_ data: Data?, name: String, storage kind: SharedStorage) -> StorageWrite {
+    if let data {
+      return storage(kind).write(data, for: name)
+    }
+    return storage(kind).delete(name)
+  }
+
+  private func storage(_ kind: SharedStorage) -> any KeyValueStorage {
+    switch kind {
+    case .userDefaults: defaults
+    case .keychain: keychain
+    }
+  }
+
   private func storage<Value>(for key: SharedKey<Value>) -> any KeyValueStorage {
     switch key.storage {
     case .userDefaults: defaults

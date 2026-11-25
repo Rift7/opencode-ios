@@ -270,7 +270,7 @@ public enum AppRestoreResult: Equatable, Sendable {
     switch ServerWriteTransaction.read(store: store) {
     case .failure(.storage(let failure)):
       return .storageUnavailable(failure)
-    case .failure(.corrupt):
+    case .failure(.corrupt), .failure(.unfinishedIntent):
       return .corrupt
     case .success(let value):
       records = value
@@ -1076,7 +1076,7 @@ public struct AppFeature {
         return .run { send in
           await send(
             .savedServersForgotten(
-              ServerWriteTransaction.remove(server: nil, servers: [], store: store)
+              ServerWriteTransaction.forgetRecoveringCorrupt(store: store)
             )
           )
         }
@@ -1118,7 +1118,11 @@ public struct AppFeature {
         return .run { send in
           await send(
             .replaceSavedDataFinished(
-              ServerWriteTransaction.save(server: server, servers: servers, store: store)
+              ServerWriteTransaction.replaceRecoveringCorrupt(
+                server: server,
+                servers: servers,
+                store: store
+              )
             )
           )
         }
@@ -1803,7 +1807,7 @@ public struct AppFeature {
   private func storageFailure(_ failure: ServerWriteTransaction.Failure) -> StorageFailure {
     switch failure {
     case .storage(let storage): storage
-    case .corrupt: .encoding
+    case .corrupt, .unfinishedIntent: .encoding
     }
   }
 

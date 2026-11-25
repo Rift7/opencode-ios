@@ -23,19 +23,30 @@ public struct ServerWriteIntent: Codable, Sendable, Equatable {
   public var beforeServers: [OpenCodeServer]
   public var afterServer: OpenCodeServer?
   public var afterServers: [OpenCodeServer]
+  /// An explicit recovery operation preserves the exact bytes it is replacing, including records
+  /// that no longer decode. Ordinary operations leave these nil and use the typed fields.
+  public var preserveRawBefore: Bool?
+  public var beforeRawServer: Data?
+  public var beforeRawServers: Data?
 
   public init(
     id: UUID,
     beforeServer: OpenCodeServer?,
     beforeServers: [OpenCodeServer],
     afterServer: OpenCodeServer?,
-    afterServers: [OpenCodeServer]
+    afterServers: [OpenCodeServer],
+    preserveRawBefore: Bool? = nil,
+    beforeRawServer: Data? = nil,
+    beforeRawServers: Data? = nil
   ) {
     self.id = id
     self.beforeServer = beforeServer
     self.beforeServers = beforeServers
     self.afterServer = afterServer
     self.afterServers = afterServers
+    self.preserveRawBefore = preserveRawBefore
+    self.beforeRawServer = beforeRawServer
+    self.beforeRawServers = beforeRawServers
   }
 }
 

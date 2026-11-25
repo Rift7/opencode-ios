@@ -30,6 +30,7 @@
 | P11 branch | `ios-settings`, created from `origin/ios` after `git fetch origin` |
 | P11 review-correction head | `f553cbd7` (preference consumers, mention occurrences, catalogue ownership, server transaction and cancellation checks) |
 | P11 storage-correction head | `c9cb1602` (serialized server-record ownership, collision/rollback tests) |
+| P11 saved-data-recovery head | recorded on the branch and draft PR after this evidence commit |
 | Worktree | a separate worktree; the Android checkout and unrelated branches are untouched |
 
 `git fetch origin` moved `origin/ios` to `e42cb455`; PR #8 (`ios: add the native composer, drafts, sends, queue,
@@ -600,13 +601,14 @@ The 421 package tests are the sum of the six target runs the package runner prin
 
 | Check | Result |
 | --- | --- |
-| `swift test --package-path ios/OpenCodeKit` | 618 tests pass (settings 15, composer 60, session 79, server 209, app 89, core 67, drawer 41, transcript 26, media 32) |
+| `swift test --package-path ios/OpenCodeKit` | 626 tests pass (settings 15, composer 60, session 79, server 209, app 97, core 67, drawer 41, transcript 26, media 32) |
 | `xcodebuild ... build` | app target builds for iPhone 18 Pro Max, iOS 27.2 |
 | `SettingsUITests` | 5/5 pass (preference relaunch, diagnostics collect/copy, onboarding, header edit/save, injected QR confirmation) |
 | `PreferenceBehaviorUITests` | 3/3 pass — Return before/after relaunch, Return answering a request without chat, Wrap Lines live toggle and before/after relaunch |
+| Saved-data recovery | `SavedDataRecoveryTests` 7/7: corrupt list/selected/both, manual connection + confirmed replace, Forget All, failed replacement/removal retries; `ServerWriteTransactionTests` 8/8 including collision, raw rollback, corrupt intent and unresolved-intent ownership |
 | `ComposerContextUITests` | 2/2 pass (model/agent/mention selection, folder select/cancel with draft) |
 | `SettingsScreenshotUITests` | 12 light/dark captures |
-| `xcodebuild … test` (P11 storage correction) | 81 UI tests ran; 80 passed in the grouped inventory and `TranscriptUITests.testFollowingSurvivesTailGrowthAndBrowsingHoldsItsAnchor` hit the known P8 anchor hittability flake. The complete nine-test `TranscriptUITests` suite then passed 9/9 on the final code. This records the flake; it is not claimed fixed. |
+| `xcodebuild … test` (P11 saved-data recovery) | **81/81 UI tests pass in one grouped run** on the final code. The earlier storage correction had hit the known P8 anchor-hittability flake; that flake remains recorded, and the final run was clean. |
 | Autocomplete trace (implementation probe) | `connected-composer-long`, 900 fixture transcript entries; focused UI-test elapsed from typing `@rev` through the first skill suggestion **about 2.0 s**, including XCTest input and expectation polling; simulator only. The probe was not retained in the final grouped inventory to avoid an XCUITest input flake; autocomplete itself is covered by `testModelAgentAndMentionSelection`. |
 | Existing regressions | full package suite passes; P8/P9/P10 suites unchanged apart from additive fields with decoding defaults. The P10 media UI/perf harnesses now scroll rows clear of the taller P11 composer inset and wait for viewer dismissal; product behaviour is unchanged. `MediaUITests` passes 8/8 and `MediaPerformanceUITests` 3/3 with that adjustment; the large-image loop measured 5.12 s including UI-test waits. |
 | Screenshots | `docs/ios-migration/screens/p11-{settings,diagnostics,onboarding,model-picker,autocomplete,folder-browser}-{light,dark}.png`, captured from `SettingsScreenshotUITests` on the iPhone 18 Pro Max simulator with the synthetic `Fixture` server and `/work/opencode` paths |

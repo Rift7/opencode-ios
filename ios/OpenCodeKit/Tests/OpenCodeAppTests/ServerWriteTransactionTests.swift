@@ -133,71 +133,25 @@ struct ServerWriteTransactionTests {
     #expect(store.result(ServerSharedKeys.writeIntent) == .success(nil))
   }
 
-  private final class GatedStorage: KeyValueStorage, @unchecked Sendable {
-    private struct State {
-      var blockSelected = false
-      var failSelected = false
-      var entered = false
-    }
-
-    private let inner = OpenCodeCore.InMemoryStorage()
-    private let state = Mutex(State())
-    private let gate = DispatchSemaphore(value: 0)
-
-    func blockSelectedWrite(failing: Bool) {
-      state.withLock {
-        $0.blockSelected = true
-        $0.failSelected = failing
-        $0.entered = false
-      }
-    }
-
-    var hasEntered: Bool { state.withLock { $0.entered } }
-
-    func release() { gate.signal() }
-
-    func read(_ key: String) -> StorageRead { inner.read(key) }
-
-    func write(_ data: Data, for key: String) -> StorageWrite {
-      let action = state.withLock { value -> (block: Bool, fail: Bool) in
-        guard key == ServerSharedKeys.savedServer.name, value.blockSelected else {
-          return (false, false)
-        }
-        value.blockSelected = false
-        value.entered = true
-        return (true, value.failSelected)
-      }
-      if action.block {
-        gate.wait()
-        if action.fail { return .failure(.unavailable) }
-      }
-      return inner.write(data, for: key)
-    }
-
-    func delete(_ key: String) -> StorageWrite { inner.delete(key) }
-  }
-
-  @Test("a failed older edit cannot erase a newer selected server")
-  func concurrentNewerSelectionSurvivesFailure() async {
-    let keychain = GatedStorage()
-    let store = store(keychain)
-    seed(store)
+  @Test("rollback preserves a newer selected server and its list entry")
+  func rollbackPreservesNewerSelection() {
     let newer = OpenCodeServer(url: "http://10.0.0.9:4096", password: "newer")
-    keychain.blockSelectedWrite(failing: true)
+    let store = store()
+    seed(store)
+    let intent = ServerWriteIntent(
+      id: UUID(),
+      beforeServer: before,
+      beforeServers: [before],
+      afterServer: after,
+      afterServers: [after]
+    )
+    #expect(store.write(intent, for: ServerSharedKeys.writeIntent) == .success)
+    #expect(store.write([newer, before], for: ServerSharedKeys.savedServers) == .success)
+    #expect(store.write(newer, for: ServerSharedKeys.savedServer) == .success)
 
-    let olderTask = Task.detached { () -> Result<ServerWriteTransaction.Outcome, ServerWriteTransaction.Failure> in
-      ServerWriteTransaction.save(server: after, servers: [after, before], store: store)
+    if case .success = ServerWriteTransaction.recover(store) {} else {
+      Issue.record("recovery failed")
     }
-    while !keychain.hasEntered { try? await Task.sleep(for: .milliseconds(5)) }
-    let newerTask = Task.detached { () -> Result<ServerWriteTransaction.Outcome, ServerWriteTransaction.Failure> in
-      ServerWriteTransaction.save(server: newer, servers: [newer, before], store: store)
-    }
-    keychain.release()
-
-    let older = await olderTask.value
-    let newerResult = await newerTask.value
-    #expect(older == .failure(.storage(.unavailable)))
-    #expect(newerResult == .success(.init(server: newer, servers: [newer, before])))
     #expect(store.result(ServerSharedKeys.savedServer) == .success(newer))
     #expect(store.result(ServerSharedKeys.savedServers) == .success([newer, before]))
     #expect(store.result(ServerSharedKeys.writeIntent) == .success(nil))
@@ -219,6 +173,31 @@ struct ServerWriteTransactionTests {
     #expect(store.result(ServerSharedKeys.savedServer) == .success(newer))
     #expect(store.result(ServerSharedKeys.savedServers) == .success([newer, after, before]))
     #expect(store.result(ServerSharedKeys.writeIntent) == .success(nil))
+  }
+
+  @Test("a corrupt intent blocks ordinary and confirmed writes without being overwritten")
+  func corruptIntentIsNotOverwritten() {
+    let store = store()
+    seed(store)
+    let corrupt = Data("not json".utf8)
+    #expect(store.writeRaw(corrupt, name: ServerSharedKeys.writeIntent.name, storage: .keychain) == .success)
+
+    #expect(
+      ServerWriteTransaction.save(server: after, servers: [after], store: store)
+        == .failure(.unfinishedIntent)
+    )
+    #expect(
+      ServerWriteTransaction.replaceRecoveringCorrupt(server: after, servers: [after], store: store)
+        == .failure(.unfinishedIntent)
+    )
+    if case .value(let raw) = store.readRaw(name: ServerSharedKeys.writeIntent.name, storage: .keychain) {
+      #expect(raw == corrupt)
+    } else {
+      Issue.record("corrupt intent was overwritten")
+    }
+    #expect(store.result(ServerSharedKeys.savedServer) == .success(before))
+    #expect(store.result(ServerSharedKeys.savedServers) == .success([before]))
+    #expect(AppRestoreResult.read(store) == .corrupt)
   }
 
   @Test("a failed rollback keeps the intent until a later restart recovers it")

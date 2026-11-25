@@ -1272,10 +1272,16 @@ outcomes re-read and return the actual committed pair.
 - Intent values carry credentials, so they live in the Keychain, never in logs or UserDefaults.
 - Preserves partial-corruption facts through `ServerWriteTransaction.read` so the existing
   explicit saved-data recovery UI remains available.
+- Explicit recovery operations (`replaceRecoveringCorrupt`, `forgetRecoveringCorrupt`) are the only
+  paths allowed to overwrite records that do not decode. They snapshot the exact raw bytes in the
+  intent so a partial failure restores the corrupt records rather than silently treating them as
+  empty. Ordinary saves/removals still refuse corrupt records and a corrupt/unfinished intent.
 - Gate: `ServerWriteTransactionTests` (failure at every step, newer-selection collision, actual
-  success outcome, failed rollback/restart, unresolved-intent overwrite prevention) and
-  `ServerEditIntegrationTests` (second-write failure, active/non-active edits, removal, late
-  completion, duplicate submission and connection persistence through the boundary).
+  success outcome, failed rollback/restart, unresolved-intent overwrite prevention, corrupt-intent
+  blocking), `SavedDataRecoveryTests` (corrupt list/selected/both, manual connection then replace,
+  Forget All, failed replacement/removal retries) and `ServerEditIntegrationTests` (second-write
+  failure, active/non-active edits, removal, late completion, duplicate submission and connection
+  persistence through the boundary).
 
 ### D-104 Server edit/removal operations are identity-fenced and draft-safe
 Settings attaches an edit-operation UUID to each submission and refuses a second submission while

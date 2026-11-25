@@ -14,6 +14,9 @@ public enum ServerWriteTransaction {
   public enum Failure: Error, Equatable, Sendable {
     case storage(StorageFailure)
     case corrupt
+    /// An unfinished or undecodable intent must be resolved first; an ordinary write will not
+    /// overwrite its recovery information.
+    case unfinishedIntent
   }
 
   public struct Outcome: Equatable, Sendable {
@@ -114,6 +117,21 @@ public enum ServerWriteTransaction {
     apply(server: server, servers: servers, store: store)
   }
 
+  /// The explicitly confirmed Replace Saved Servers path. Corrupt records may be present; their
+  /// exact raw bytes are held in the intent so a partial write can restore them.
+  public static func replaceRecoveringCorrupt(
+    server: OpenCodeServer?,
+    servers: [OpenCodeServer],
+    store: SharedStore
+  ) -> Result<Outcome, Failure> {
+    recoverCorrupt(server: server, servers: servers, store: store)
+  }
+
+  /// The explicitly confirmed Forget All path, including corrupt records.
+  public static func forgetRecoveringCorrupt(store: SharedStore) -> Result<Outcome, Failure> {
+    recoverCorrupt(server: nil, servers: [], store: store)
+  }
+
   /// Startup/feature recovery. A leftover intent always means its operation did not finish; it is
   /// rolled back before anything trusts either record. Failure leaves the intent in place.
   public static func recover(_ store: SharedStore) -> Result<Void, Failure> {
@@ -127,8 +145,10 @@ public enum ServerWriteTransaction {
   ) -> Result<Outcome, Failure> {
     boundary.withLock { _ in
       // An unfinished intent must be resolved before another transaction may write.
-      if case .failure(let failure) = recoverLocked(store: store) {
-        return .failure(failure)
+      switch recoverLocked(store: store) {
+      case .success: break
+      case .failure(.corrupt): return .failure(.unfinishedIntent)
+      case .failure(let failure): return .failure(failure)
       }
 
       let before: Outcome
@@ -184,6 +204,67 @@ public enum ServerWriteTransaction {
     }
   }
 
+  private static func recoverCorrupt(
+    server: OpenCodeServer?,
+    servers: [OpenCodeServer],
+    store: SharedStore
+  ) -> Result<Outcome, Failure> {
+    boundary.withLock { _ in
+      switch recoverLocked(store: store) {
+      case .success: break
+      case .failure(.corrupt): return .failure(.unfinishedIntent)
+      case .failure(let failure): return .failure(failure)
+      }
+
+      let rawServer: Data?
+      switch store.readRaw(name: ServerSharedKeys.savedServer.name, storage: .keychain) {
+      case .value(let data): rawServer = data
+      case .missing: rawServer = nil
+      case .failure(let failure): return .failure(.storage(failure))
+      }
+      let rawServers: Data?
+      switch store.readRaw(name: ServerSharedKeys.savedServers.name, storage: .keychain) {
+      case .value(let data): rawServers = data
+      case .missing: rawServers = nil
+      case .failure(let failure): return .failure(.storage(failure))
+      }
+
+      let intent = ServerWriteIntent(
+        id: UUID(),
+        beforeServer: nil,
+        beforeServers: [],
+        afterServer: server,
+        afterServers: servers,
+        preserveRawBefore: true,
+        beforeRawServer: rawServer,
+        beforeRawServers: rawServers
+      )
+      if case .failure(let failure) = store.write(intent, for: ServerSharedKeys.writeIntent) {
+        return .failure(.storage(failure))
+      }
+      let listWrite: StorageWrite =
+        servers.isEmpty
+        ? store.delete(ServerSharedKeys.savedServers)
+        : store.write(servers, for: ServerSharedKeys.savedServers)
+      if case .failure(let failure) = listWrite {
+        return rollbackFailure(intent, store: store, original: failure)
+      }
+      let selectedWrite: StorageWrite
+      if let server {
+        selectedWrite = store.write(server, for: ServerSharedKeys.savedServer)
+      } else {
+        selectedWrite = store.delete(ServerSharedKeys.savedServer)
+      }
+      if case .failure(let failure) = selectedWrite {
+        return rollbackFailure(intent, store: store, original: failure)
+      }
+      if case .failure(let failure) = store.delete(ServerSharedKeys.writeIntent) {
+        return rollbackFailure(intent, store: store, original: failure)
+      }
+      return readOutcomeLocked(store: store)
+    }
+  }
+
   /// On an operation failure, attempt a complete rollback. If rollback also fails, the original
   /// intent remains and the failure is reported; a later recovery retries from the same before/after
   /// records.
@@ -205,6 +286,27 @@ public enum ServerWriteTransaction {
     _ intent: ServerWriteIntent,
     store: SharedStore
   ) -> Result<Void, Failure> {
+    if intent.preserveRawBefore == true {
+      if case .failure(let failure) = store.writeRaw(
+        intent.beforeRawServers,
+        name: ServerSharedKeys.savedServers.name,
+        storage: .keychain
+      ) {
+        return .failure(.storage(failure))
+      }
+      if case .failure(let failure) = store.writeRaw(
+        intent.beforeRawServer,
+        name: ServerSharedKeys.savedServer.name,
+        storage: .keychain
+      ) {
+        return .failure(.storage(failure))
+      }
+      if case .failure(let failure) = store.delete(ServerSharedKeys.writeIntent) {
+        return .failure(.storage(failure))
+      }
+      return .success(())
+    }
+
     let current: Outcome
     switch readOutcomeLocked(store: store) {
     case .success(let value): current = value
@@ -227,7 +329,8 @@ public enum ServerWriteTransaction {
       current.server != intent.beforeServer && current.server != intent.afterServer
       ? current.server : nil
     let selected = newerSelection ?? intent.beforeServer
-    if let selected, !restoredServers.contains(selected) {
+    if let selected {
+      restoredServers.removeAll { $0 == selected }
       restoredServers.insert(selected, at: 0)
     }
 
@@ -261,7 +364,7 @@ public enum ServerWriteTransaction {
   private static func storageFailure(_ failure: Failure) -> StorageFailure {
     switch failure {
     case .storage(let storage): storage
-    case .corrupt: .encoding
+    case .corrupt, .unfinishedIntent: .encoding
     }
   }
 
