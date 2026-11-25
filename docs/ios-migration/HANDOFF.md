@@ -39,7 +39,10 @@ The Android tree is not modified by this work.
   `origin/ios` `e42cb455`; merged as `0ec10ba4` (PR #9), tree `02dad71e` equals reviewed `9880eeb9`.
 - `ios-settings` — Phase 11: settings, experiments, diagnostics, onboarding, QR pairing, catalogue,
   custom headers, models/agents, autocomplete and the folder browser. Branched from `origin/ios`
-  `0ec10ba4`; pushed to the fork with a draft PR into `ios`.
+  `0ec10ba4`; merged as `6681feed` (PR #10), tree `b49d0917` equals corrected `d0fcee29`.
+- `ios-device-validation` — Phase 12 physical-device checklist. Branched from updated `origin/ios`
+  `6681feed`; carries the sanitized device record, the camera-denial scanner fix and its regression
+  tests. Draft PR into `ios`; nothing merged.
 - Later task branches from `ios` are pushed to the fork and opened as **draft** PRs into `ios`. Nothing is
   merged, released or distributed from here.
 
@@ -48,6 +51,10 @@ The Android tree is not modified by this work.
 - Xcode 27.2 with the iOS 27.2 SDK and simulator runtime.
 - XcodeGen 2.48 (generates `ios/OpenCode.xcodeproj` from `ios/project.yml`; the generated project is not committed).
 - No credentials, signing identity, App Group or push configuration is needed for simulator builds and tests.
+- A physical-device run additionally needs the owner's development signing and a connected iPhone.
+  The P12 run used the existing Apple Development identity/profile for the unchanged bundle id; no
+  production identifier, App Group or push entitlement was added. See
+  [DEVICE_VALIDATION.md](DEVICE_VALIDATION.md).
 
 ## Build and test
 
@@ -351,11 +358,12 @@ Media surfaces: `ios/OpenCode/Media/*`, `ios/OpenCode/Composer/{ComposerViews,Ca
 
 ## Where the work stands
 
-`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P10 are merged into `ios`
-(P10 as `0ec10ba4`). P11 is implemented on `ios-settings` (draft PR into `ios`). The transcript's state
+`PHASES.md` maps this repository onto the audit plan's P2–P14 numbering. P1–P11 are merged into `ios`
+(P10 as `0ec10ba4`, P11 as `6681feed`). The transcript's state
 boundaries are P7's refresh identity plus P8's per-session `TranscriptState`; the composer sits above both and
 borrows the same settlement read; media viewers and the browser are `@Presents` children of the session;
-Settings is a full-screen child of the app shell.
+Settings is a full-screen child of the app shell. The P12 device validation lives on
+`ios-device-validation` (draft PR into `ios`).
 
 What P6 added, in one paragraph: `HomeFeature` replaces the project-only connected destination with the
 authenticated Home — projects, the drawer's pinned/recent session lists, 50-session paging, local and
@@ -470,12 +478,12 @@ Useful entry points:
 
 | Item | Phase | Acceptance check |
 | --- | --- | --- |
-| Camera QR pairing | **P11 simulator done; P12 device** | Injected payloads reach confirmation once; physical scan and denied camera are in [P12_DEVICE_CHECKLIST.md](P12_DEVICE_CHECKLIST.md). |
-| Custom headers | **P11 done for logic; P12 Keychain** | Token/newline/forbidden validation; headers stay on their origins; a failed save keeps the old server. |
+| Camera QR pairing | **P11/P12 done** | Injected payloads reach confirmation once; physical capture, confirmation before redemption, exactly-once redemption, expired code and denied camera verified in [DEVICE_VALIDATION.md](DEVICE_VALIDATION.md). |
+| Custom headers | **P11 done; P12 device** | Token/newline/forbidden validation; headers stay on their origins; persisted across relaunch and sent only to the LAN origin; a failed save keeps the old server (denied-write injection unverified). |
 | Copied error report | **P11 done** | Typed facts only; the privacy test rejects synthetic credentials, headers, addresses, pairing codes and content markers. |
-| Haptics feel | P12 | Eleven haptics felt and distinguished on hardware; simulator unverified; see the device checklist. |
-| Local-network prompt / real socket | P12 | Denied prompt → no fixture request and unreachable copy; allowed → fixture request; real background/foreground socket reconnect; see the device checklist. |
-| Production identifiers (bundle/team/App Group/Keychain) | P12/P14 | Owner-supplied identity builds and signs; credentials persist across relaunch; no historical values copied. |
+| Haptics feel | **P12 done** | Eleven haptics felt and distinguished on hardware; `tap` lighter than warning/error. |
+| Local-network prompt / real socket | **P12 done** | Denied prompt → zero fixture requests and unreachable copy + hint; allowed → fixture request; real foreground/background socket reconnect with one stream. |
+| Production identifiers (bundle/team/App Group/Keychain) | **P12 development pass; P14 release** | Owner-supplied identity builds and signs; credentials persist across relaunch; no historical values copied. Production/App Group/push configuration remains a release decision. |
 | Push notifications | P12 | Relay + credentials exist and the feature defaults off; without them, blocked/unverified. |
 | Composer and quote intent | P9 | P8 renders transcript rows and quote cards; P9 consumes selection as a quote and owns drafts/sends. |
 

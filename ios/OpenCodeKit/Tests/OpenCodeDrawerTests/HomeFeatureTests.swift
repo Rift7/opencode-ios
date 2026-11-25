@@ -421,6 +421,20 @@ struct HomeFeatureTests {
     #expect(rejected == .failure(.encoding))
   }
 
+  @Test("opening an already read session sends no view receipt")
+  func alreadyReadSessionSkipsReceipt() async {
+    let store = makeStore(
+      HomeFeature.State(
+        server: server,
+        sessions: [session("a", idle: 2_000, viewed: 2_000)],
+        hasLoaded: true
+      )
+    )
+    await store.send(.sessionTapped("a"))
+    #expect(store.state.receiptID(for: "a") == nil)
+    #expect(store.state.notice == nil)
+  }
+
   @Test("a failed read receipt puts the previous read state back")
   func receiptFailure() async {
     let failing = OpenCodeClient(

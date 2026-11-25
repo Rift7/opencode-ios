@@ -31,6 +31,7 @@ final class LaunchSmokeTests: XCTestCase {
     )
     XCTAssertTrue(app.staticTexts["OpenCode"].exists)
     XCTAssertTrue(app.buttons["Enter a Server Manually"].exists)
+    XCTAssertTrue(app.buttons["Scan QR Code"].exists)
     XCTAssertTrue(app.buttons["Paste Pairing Link"].exists)
   }
 
@@ -170,6 +171,26 @@ final class LaunchSmokeTests: XCTestCase {
       app.descendants(matching: .any)["root-phase-corrupt"].waitForExistence(timeout: 10)
     )
     XCTAssertTrue(app.buttons["Forget Saved Servers"].exists)
+  }
+
+  func testSetupScanShowsConfirmationWithoutRedeeming() {
+    let payload = "opencode-ios://pair?code=Pair-123_xyz&url=https%3A%2F%2Fstudio.invalid"
+    let app = launch(
+      scenario: "disconnected",
+      extraArguments: ["-uiTestPairingPayload", payload],
+      environment: ["OPENCODE_UI_TEST_FIXTURE": "disconnected"]
+    )
+    XCTAssertTrue(app.buttons["connection-scan-qr"].waitForExistence(timeout: 10))
+    app.buttons["connection-scan-qr"].tap()
+
+    let alert = app.alerts.firstMatch
+    XCTAssertTrue(alert.waitForExistence(timeout: 15))
+    XCTAssertTrue(alert.staticTexts["Pair with studio.invalid?"].exists)
+    XCTAssertFalse(app.descendants(matching: .any)["root-phase-pairing"].exists)
+    alert.buttons["Cancel"].tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["root-phase-disconnected"].waitForExistence(timeout: 10)
+    )
   }
 
   func testDeepLinkShowsPairingConfirmationWithoutRedeeming() {

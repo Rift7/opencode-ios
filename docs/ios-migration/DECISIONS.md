@@ -1311,3 +1311,59 @@ Model/agent/autocomplete loads use separate cancellation identities (`modelCatal
 catalogue call. A repeated load cancels its previous request set; results are fenced by server and
 directory. The gated reducer tests hold every real client operation open and prove both model and
 autocomplete results arrive, repeated loads replace earlier ones and navigation discards late work.
+
+### D-107 The scanner cover stays up for a typed camera problem
+`SettingsFeature.State.isScanPresented` is true while scanning **or** while `scanProblem` is non-nil.
+`SettingsView` binds the full-screen cover to that value, so a denied/restricted/unavailable camera
+keeps the typed explanation and Done/Cancel visible instead of dismissing the cover with the failed
+scan. `scanCancelled` clears both the scan and the problem, so the Cancel button and an interactive
+dismissal close it. A subsequent scan starts from a clean problem state.
+
+- Replaces the P11 binding to `isScanning` alone, which hid every camera problem on a physical phone.
+- Gate: `SettingsFeatureTests.cameraDenied` (cover stays presented; problem dismissal closes it) and
+  `cameraProblemCancelDismisses`; device retest with Camera disabled.
+- Verified on the iPhone Air under P12; see `DEVICE_VALIDATION.md`.
+
+### D-108 Device evidence stays in its own category
+The P12 run records host package tests, automated device tests, device probes, manual observations,
+real LAN fixture behaviour and simulator-only evidence separately. A probe running in the app process
+does not prove the camera, Keychain entitlement or socket boundary; those checks use the physical
+camera, the signed app's Keychain and real LAN sockets. Simulator screenshots and traces are not
+promoted to device passes. The connected iPhone runs iOS 27.3 although the checklist named 27.2; the
+mismatch is recorded rather than hidden, and no OS substitution, beta install or phone upgrade was
+performed. Synthetic resources only; raw logs, QR images and personal screenshots stay outside the
+repository.
+
+- The LAN fixture must answer the client's real envelopes (`{data: …}` for catalogues and session
+  creation, not bare arrays). A fixture that returns the wrong payload is recorded as tooling, not as
+  a product failure.
+- See `DEVICE_VALIDATION.md` and `P12_DEVICE_CHECKLIST.md` for the per-row results and the remaining
+  blocked checks (photo/file providers, playback interruption, hardware Shift+Return, real memory
+  pressure, denied-Keychain injection, compatible live server, push).
+
+### D-109 Initial setup can start the pairing scanner
+The disconnected screen exposes **Scan QR Code** next to manual entry and paste. The action opens
+the existing Settings surface with a one-shot `scanOnOpen` flag; `SettingsView` sends `.scanTapped`
+when it first appears, so the scanner starts after presentation instead of racing the cover. The
+existing scanner boundary, typed camera problems and confirmation-before-redemption flow are reused;
+no second scanner or confirmation path is added. The QR payload still reaches confirmation before
+any `/auth/connect` request.
+
+- Gate: `LaunchSmokeTests.testFirstLaunchShowsDisconnectedState` (button present),
+  `testSetupScanShowsConfirmationWithoutRedeeming` (injected scan → confirmation, no redemption) and
+  `SettingsFeatureTests.setupScanStartsOnOpen`; the UI test passed on the physical iPhone.
+- Follow-up to the owner-reported setup gap in `DEVICE_VALIDATION.md`.
+
+### D-110 Composer selection loads eagerly and read receipts skip already-viewed sessions
+The composer starts its model/agent/skill/command catalogue load on its first task instead of waiting
+for a picker, and the first session snapshot adopts that session's model/agent when present. The chip
+therefore has a real label and the picker has rows before it is opened. The session snapshot wins over
+a catalogue default; a later user choice still wins because adoption happens only on the initial
+root. Separately, `HomeFeature.markRead` still updates local read state but sends no `POST /view` when
+the session's `viewed` watermark already covers its `idle` watermark, so an already-read row cannot
+surface a late receipt failure.
+
+- Gate: `ComposerCatalogTests.taskLoadsAgentsBeforePicker`,
+  `HomeFeatureTests.alreadyReadSessionSkipsReceipt`; real-server device checks showed the Build chip
+  before opening the picker and no read error on leaving an already-read session.
+- See `DEVICE_VALIDATION.md` owner follow-ups.

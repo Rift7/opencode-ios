@@ -883,6 +883,7 @@ public struct AppFeature {
     case formSubmitted
     case savedServerTapped(OpenCodeServer)
     case pastePairingTapped
+    case scanSetupTapped
     case openURL(String)
     case pairingConfirmed(UUID)
     case pairingCancelled
@@ -1233,6 +1234,15 @@ public struct AppFeature {
           return .none
         }
         return handlePairingText(text, requiresConfirmation: false, state: &state)
+
+      case .scanSetupTapped:
+        state.settings = SettingsFeature.State(
+          isPresented: true,
+          server: state.savedServer,
+          diagnosticsFacts: diagnosticFacts(state),
+          scanOnOpen: true
+        )
+        return .send(.settings(.task))
 
       case .openURL(let text):
         return handlePairingText(text, requiresConfirmation: true, state: &state)

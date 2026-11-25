@@ -11,7 +11,7 @@ rows run only on hardware or a live V2 server.
 | Contract | Evidence | Status / limit |
 | --- | --- | --- |
 | Photo import through `PhotosPicker` | `ios/OpenCode/Composer/ComposerViews.swift`; `MediaUITests.testComposerPastePreviewAndRemove` covers the picker-adjacent chip path | done for images; picker videos not requested |
-| Camera import, permission on invocation, denied/unavailable | `CameraCaptureSheet.swift`; `NSCameraUsageDescription` | done through the system capture UI; physical camera unverified |
+| Camera import, permission on invocation, denied/unavailable | `CameraCaptureSheet.swift`; `NSCameraUsageDescription` | done through the system capture UI; composer camera capture and its permission prompt remain unverified on device (the QR camera path is separately device-verified under P12) |
 | Document import with security-scoped copy and cleanup | `ComposerViews.swift` `.fileImporter`; `MediaFileStore.copyFile` opens and always closes the scope | done; provider latency/eviction unverified |
 | Paste images/files/long text; ordinary typing untouched | `ComposerTextInput.paste`, `ComposerFeature.pasteTapped`, `MediaLimits.isLongPaste` | done — only an explicit paste or a >1,000-character / >12-line paste becomes an attachment |
 | Staged copy before a picker grant expires | `MediaImportClient`, `MediaFileStore`; no picker URL is persisted; writes stage under `.staging` and move into place | done |

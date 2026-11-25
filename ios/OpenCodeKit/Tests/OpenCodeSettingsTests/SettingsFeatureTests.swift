@@ -236,6 +236,32 @@ struct SettingsFeatureTests {
     await store.send(.scanEvent(.denied, generation: 1))
     #expect(store.state.scanProblem == .cameraDenied)
     #expect(!store.state.isScanning)
+    #expect(store.state.isScanPresented)
+
+    await store.send(.scanProblemDismissed)
+    #expect(store.state.scanProblem == nil)
+    #expect(!store.state.isScanPresented)
+  }
+
+  @Test("cancelling a camera problem closes the scanner cover")
+  func cameraProblemCancelDismisses() async {
+    let store = store(state: SettingsFeature.State(isScanning: true, scanGeneration: 1))
+    await store.send(.scanEvent(.denied, generation: 1))
+    #expect(store.state.isScanPresented)
+
+    await store.send(.scanCancelled)
+    #expect(store.state.scanProblem == nil)
+    #expect(!store.state.isScanning)
+    #expect(!store.state.isScanPresented)
+  }
+
+  @Test("a setup scan starts the scanner and clears its one-shot flag")
+  func setupScanStartsOnOpen() async {
+    let store = store(state: SettingsFeature.State(scanOnOpen: true))
+    await store.send(.task)
+    await store.send(.scanTapped)
+    #expect(store.state.isScanning)
+    #expect(!store.state.scanOnOpen)
   }
 
   @Test("the injected deep link is a valid pairing payload")

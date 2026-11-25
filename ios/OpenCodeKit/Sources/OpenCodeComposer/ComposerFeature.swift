@@ -356,7 +356,9 @@ public struct ComposerFeature: Sendable {
       switch action {
       case .task:
         guard !state.isRestoring else { return .none }
-        return loadDraft(state: &state)
+        let draft = loadDraft(state: &state)
+        guard state.server != nil else { return draft }
+        return .merge(draft, loadCatalog(state: &state))
 
       case .restoreRetried:
         return loadDraft(state: &state)

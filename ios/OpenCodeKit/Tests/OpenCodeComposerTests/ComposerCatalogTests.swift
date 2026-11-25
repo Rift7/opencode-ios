@@ -126,6 +126,27 @@ struct ComposerCatalogTests {
     #expect(store.state.selectedModel?.id == "model")
   }
 
+  @Test("opening a composer loads the agent catalogue before the picker")
+  func taskLoadsAgentsBeforePicker() async {
+    let gate = Gate()
+    let store = makeStore(gate)
+    await store.send(.task)
+    #expect(
+      await waitUntil {
+        let started = await gate.started
+        return started.model == 1 && started.autocomplete == 1 && started.agent == 1
+      }
+    )
+    await gate.release()
+    for _ in 0..<20 {
+      await store.skipReceivedActions(strict: false)
+      if !store.state.autocomplete.agents.isEmpty { break }
+      try? await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(store.state.autocomplete.agents.map(\.id) == ["build"])
+    #expect(store.state.selectedAgent == "build")
+  }
+
   @Test("a repeated load cancels the first request set and only the latest results apply")
   func repeatedLoadIsFenced() async {
     let gate = Gate()
