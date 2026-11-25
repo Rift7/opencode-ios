@@ -656,7 +656,7 @@ development signing. Full setup, evidence categories and measurements are in
 
 | Check | Result |
 | --- | --- |
-| Host package suite | 626/626 on a clean full run; two pre-existing timing-sensitive tests failed in other runs and are recorded, not relabelled |
+| Host package suite | 628/628 on a clean full run of the follow-up code (626 at the initial device run); two pre-existing timing-sensitive tests failed in other runs and are recorded, not relabelled |
 | Device core/probes | 20/20 — Keychain round trip, saved-server restore, launch states, preferences |
 | Device feature journeys | 46/49 pass in the grouped run; the three failures passed 2/2 each in isolation and remain recorded as unresolved device-timing failures |
 | Device real LAN | connect, header persistence/relaunch, foreground/background recovery, Local Network denial/allow, expired QR and unreachable hint passed; one SSE stream per reconnect |

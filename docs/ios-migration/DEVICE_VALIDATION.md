@@ -56,7 +56,7 @@ the OS mismatch is recorded rather than hidden.
 | Device share-sheet presentation | 1 | sheet presented; the automated query could not see the system share-sheet process |
 | Device performance traces | 6 | 6 passed |
 | Device final affected suite after the fix | 12 | 12 passed |
-| Host package suite | 626 | 626 passed on a clean full run |
+| Host package suite | 628 | 628 passed on a clean full run of the follow-up code (626 at the initial device run; two new setup-scan tests) |
 
 The three grouped-run failures were reproduced in isolation with two iterations each and passed
 6/6:
